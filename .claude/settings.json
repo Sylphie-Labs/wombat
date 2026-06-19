@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(cd *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(rm *)",
+      "Bash(uv *)",
+      "Bash(uvx *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(docker compose *)",
+      "Bash(codebase-pkg *)"
+    ],
+    "deny": []
+  }
+}

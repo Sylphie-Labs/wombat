@@ -1,0 +1,60 @@
+[project]
+name = "wombat"
+version = "0.1.0"
+description = "wombat — a personal assistant agent built on the cog-worx cognitive-architecture framework."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Jim Tisdale" }]
+keywords = ["agent", "assistant", "cog-worx", "cognitive-architecture", "llm"]
+dependencies = [
+    "cog-worx",
+]
+
+[project.optional-dependencies]
+# Model providers ride behind cog-worx's S4 `Model` seam — never a hard dep of the app.
+providers = ["anthropic>=0.40.0", "openai>=1.55.0"]
+
+[project.scripts]
+wombat = "wombat:main"
+
+# --- Local development: import cog-worx straight from the sibling checkout ---
+# Editable directory source so changes in ../cog_worx/cog-worx are picked up live.
+# Swap for a version/git pin when cog-worx is published.
+[tool.uv.sources]
+cog-worx = { path = "../cog_worx/cog-worx", editable = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.16,<0.16",
+    "mypy>=1.13.0,<2",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=1.4.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"

@@ -1,0 +1,40 @@
+{
+  "version": "0.3.0",
+  "installedAt": "2026-06-19T19:31:51.275Z",
+  "lastUpgradedAt": "2026-06-19T19:31:51.275Z",
+  "installMode": "global",
+  "cliPathAtInstall": "C:\\Users\\Jim\\AppData\\Local\\nvm\\v24.11.1\\node_modules\\@sylphie-labs\\codebase-pkg\\dist\\cli\\codebase-pkg.js",
+  "managedFiles": [
+    {
+      "path": ".claude/skills/classify-pkg-domains/SKILL.md",
+      "installedHash": "d75116d7bac6ee78fa1cfb8b00d216107505af3e2e086d582e0202853d721aef"
+    },
+    {
+      "path": ".claude/skills/infer-pkg-connections/SKILL.md",
+      "installedHash": "1db454aef18e693218a1e4e35d81e064afec4223446126d19c7e55308a3ea95d"
+    },
+    {
+      "path": ".claude/skills/sync-pkg/SKILL.md",
+      "installedHash": "879b09b8d13d34d92b837c27b8538eef26c66472a35d91f0f75d22063c3c638b"
+    },
+    {
+      "path": ".mcp.json",
+      "installedHash": "38eb2f842cd3332bfe75e6d49a6ed6b7f27d31ccc01963f622587f9b12b1673e"
+    },
+    {
+      "path": "constraints.json",
+      "installedHash": "e6d73be9dd001431b1d6c7670662823b63471e7b4613766e67ffa8ee263b2e08"
+    },
+    {
+      "path": "docker-compose.codebase-pkg.yml",
+      "installedHash": "8cae52a4fbf9c481b5a67675439d36d0508d5e7e1f40c597d1e24944e7e113c4"
+    }
+  ],
+  "neo4j": {
+    "uri": "bolt://localhost:7712",
+    "containerName": "codebase-pkg-neo4j-wombat-a02d",
+    "httpPort": 7742,
+    "boltPort": 7712,
+    "slug": "wombat-a02d"
+  }
+}
