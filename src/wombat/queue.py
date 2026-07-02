@@ -14,6 +14,10 @@ single-process). Rows already leased by our OWN epoch (already returned by an ea
 ``WombatQueue`` — a new epoch — so drain() reclaims and redelivers whatever the prior process
 had leased but not yet acked. No lease timeouts, no clock reads, no cross-process locks.
 
+``drain(limit=N)`` (Q-47/TK-5) leases only the oldest N eligible rows via a SQL ``LIMIT`` on the
+lease itself — never in-memory slicing after a drain-all, which would lease (and thus orphan
+until restart) rows never handed downstream. ``limit=None`` is the original drain-all behavior.
+
 The queue owns exactly ONE lazy psycopg (v3) connection, opened on first use; ``close()``
 releases it. No pooling (single-host, DEC-6). ``dsn`` is an injected constructor arg — there is
 no module-level DSN literal; sourcing it is the composition root's concern.
@@ -126,32 +130,63 @@ class WombatQueue:
         conn.commit()
         return EnqueueResult.QUEUED if inserted else EnqueueResult.ALREADY_QUEUED
 
-    def drain(self) -> list[QueueItem]:
+    def drain(self, limit: int | None = None) -> list[QueueItem]:
         """Lease and return ready rows, FIFO, in one atomic lease-and-fetch.
 
-        Leases (``leased_by = this epoch``) every row NOT already leased by this epoch —
-        claiming unleased rows and reclaiming rows orphaned by a different (dead, single-host
-        v1) epoch — and returns exactly the rows just (re)leased, oldest first. Rows already
-        leased by our own epoch from an earlier ``drain()`` this run are left untouched and
-        not re-returned. An empty/fully-leased-by-us queue returns ``[]`` immediately.
+        Leases (``leased_by = this epoch``) rows NOT already leased by this epoch — claiming
+        unleased rows and reclaiming rows orphaned by a different (dead, single-host v1) epoch —
+        and returns exactly the rows just (re)leased, oldest first. Rows already leased by our
+        own epoch from an earlier ``drain()`` this run are left untouched and not re-returned.
+        An empty/fully-leased-by-us queue returns ``[]`` immediately.
+
+        ``limit`` bounds how many rows are leased: ``None`` (the default) leases every eligible
+        row, unchanged from the original all-or-nothing behavior. An int leases FIFO-ordered,
+        via a SQL ``LIMIT`` on the candidate rows BEFORE the lease UPDATE — so exactly those N
+        rows are claimed and the rest are left untouched (still unleased, still drainable by a
+        later ``drain()`` call, including on this same instance/epoch). In-memory slicing after a
+        drain-all is deliberately not used: it would still lease every row, orphaning the
+        un-handed-off remainder as leased-but-undelivered until a restart reclaimed them.
         """
         conn = self._connection()
         epoch_str = str(self.epoch)
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                WITH leased AS (
-                    UPDATE wombat_queue
-                    SET leased_by = %s
-                    WHERE leased_by IS DISTINCT FROM %s
-                    RETURNING id, idempotency_key, payload, created_at
+            if limit is None:
+                cur.execute(
+                    """
+                    WITH leased AS (
+                        UPDATE wombat_queue
+                        SET leased_by = %s
+                        WHERE leased_by IS DISTINCT FROM %s
+                        RETURNING id, idempotency_key, payload, created_at
+                    )
+                    SELECT id, idempotency_key, payload
+                    FROM leased
+                    ORDER BY created_at, id
+                    """,
+                    (epoch_str, epoch_str),
                 )
-                SELECT id, idempotency_key, payload
-                FROM leased
-                ORDER BY created_at, id
-                """,
-                (epoch_str, epoch_str),
-            )
+            else:
+                cur.execute(
+                    """
+                    WITH candidates AS (
+                        SELECT id
+                        FROM wombat_queue
+                        WHERE leased_by IS DISTINCT FROM %s
+                        ORDER BY created_at, id
+                        LIMIT %s
+                    ),
+                    leased AS (
+                        UPDATE wombat_queue
+                        SET leased_by = %s
+                        WHERE id IN (SELECT id FROM candidates)
+                        RETURNING id, idempotency_key, payload, created_at
+                    )
+                    SELECT id, idempotency_key, payload
+                    FROM leased
+                    ORDER BY created_at, id
+                    """,
+                    (epoch_str, limit, epoch_str),
+                )
             rows = cur.fetchall()
         conn.commit()
         return [

@@ -156,3 +156,35 @@ def test_ac4_empty_queue_drain_returns_empty_list_immediately(clean_table: None)
         assert queue.drain() == []
     finally:
         queue.close()
+
+
+def test_drain_limit_leases_only_n_rows_fifo_leaving_the_rest_unleased(
+    clean_table: None,
+) -> None:
+    """drain(limit=2) of 3 enqueued items leases+returns exactly the oldest 2 (FIFO); the 3rd
+    stays UNLEASED and is returned by a later drain() on the SAME instance/epoch (Q-47/TK-5)."""
+    assert _DSN is not None
+    queue = WombatQueue(_DSN, max_size=10)
+    try:
+        for i in range(3):
+            queue.enqueue(QueueItem(idempotency_key=f"limit-{i}", payload={"i": i}))
+
+        first = queue.drain(limit=2)
+        assert [item.idempotency_key for item in first] == ["limit-0", "limit-1"]
+
+        # The 3rd row is still unleased in the DB — proves limit leased ONLY those N rows, not
+        # drain-all followed by in-memory slicing (which would have leased all 3).
+        with psycopg.connect(_DSN) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT leased_by FROM wombat_queue WHERE idempotency_key = %s",
+                ("limit-2",),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] is None
+
+        # A subsequent drain() on the SAME instance/epoch picks up the still-unleased 3rd row.
+        second = queue.drain()
+        assert [item.idempotency_key for item in second] == ["limit-2"]
+    finally:
+        queue.close()
