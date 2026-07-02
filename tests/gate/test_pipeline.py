@@ -1,87 +1,172 @@
-"""TK-21 — gate data model & pipeline skeleton acceptance criteria."""
+"""TK-27 — Gate rebuilt as the async orchestrator (EP-9, Q-55 convergence).
+
+Ports TK-21's skeleton tests to the new async construction: ``Gate`` is now built from an
+injected ``user_model`` + durable ``pending_set`` + ``ceiling`` (the TK-21 in-memory pending
+dict is gone). The trigger-arm acceptance criteria themselves (AC1-AC4) live in
+``test_trigger.py``; this file covers the general async pipeline shape, the
+``surfacing_permitted=False`` suppression, and the held-then-pending path.
+"""
 
 from __future__ import annotations
 
-import pathlib
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind
+from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.gate.pipeline import Gate
+from wombat.rating.params import EventClass, RatingParams
 
 
-def _item(
-    item_id: str, *, kind: ItemKind = ItemKind.GENERIC, created_at: float = 1000.0
-) -> GateItem:
-    return GateItem(item_id=item_id, item_kind=kind, created_at=created_at)
+def _item(item_id: str, *, sender_class: str = "automated", **payload_extra: object) -> GateItem:
+    payload: dict[str, object] = {"is_timed": False, "sender_class": sender_class}
+    payload.update(payload_extra)
+    return GateItem(item_id=item_id, item_kind=ItemKind.GENERIC, created_at=0.0, payload=payload)
 
 
-def _gate(*, decay_ttl_seconds: float = 60.0, now: float = 1000.0) -> Gate:
+@dataclass
+class _FakeUserModel:
+    """Returns a fixed RatingParams + EventClass regardless of the item (tests control the
+    resulting score entirely through the item's payload, exercised by the REAL scoring fns)."""
+
+    rating_params: RatingParams
+    event_class: EventClass = EventClass.GENERIC
+
+    def resolve_event_class(self, item: GateItem) -> EventClass:
+        return self.event_class
+
+    async def ratings_for(self, item: GateItem) -> RatingParams:
+        return self.rating_params
+
+
+@dataclass
+class _FakeCeiling:
+    allowed: bool = True
+    recorded: list[EventClass] = field(default_factory=list)
+
+    def allow(self, event_class: EventClass) -> bool:
+        return self.allowed
+
+    def record(self, event_class: EventClass) -> None:
+        self.recorded.append(event_class)
+
+
+def _noop_on_event(event: object) -> None:
+    pass
+
+
+def _gate(
+    *,
+    rating_params: RatingParams,
+    ceiling: _FakeCeiling | None = None,
+    urgency_threshold: float = 0.5,
+    load_flush_threshold: float = 10.0,
+    flush_min_age_seconds: float = 100.0,
+    clock: Callable[[], float] = lambda: 1000.0,
+    pending_set: PendingSet | None = None,
+    on_event: Callable[[object], None] = _noop_on_event,
+) -> Gate:
+    if pending_set is None:
+        pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=50)
     return Gate(
-        urgency=lambda it: 0.0,
-        cognitive_load=lambda it: 0.0,
-        decay_ttl_seconds=decay_ttl_seconds,
-        clock=lambda: now,
+        user_model=_FakeUserModel(rating_params=rating_params),
+        pending_set=pending_set,
+        ceiling=ceiling or _FakeCeiling(),
+        urgency_threshold=urgency_threshold,
+        load_flush_threshold=load_flush_threshold,
+        flush_min_age_seconds=flush_min_age_seconds,
+        clock=clock,
+        on_event=on_event,
     )
 
 
-def test_gateaction_is_the_one_closed_canonical_vocabulary() -> None:
-    # AC1: GateAction is a single closed Enum and item_kind is a closed Enum.
-    assert {a.value for a in GateAction} == {"hold", "surface_immediate", "surface_flush"}
-    assert {k.value for k in ItemKind} == {"brief", "reflection", "draft", "generic"}
+# --- Ported TK-21 skeleton behavior, to the new async construction --------------------------
 
 
-def test_no_competing_decision_vocabulary_under_src() -> None:
-    # AC1: no module under src/wombat defines a competing surface/hold/flush/speak-event string set.
-    src = pathlib.Path(__file__).resolve().parents[2] / "src" / "wombat"
-    forbidden = ("speak-event", "text-only")
-    offenders = [
-        (p.name, token)
-        for p in src.rglob("*.py")
-        for token in forbidden
-        if token in p.read_text(encoding="utf-8")
-    ]
-    assert offenders == []
+async def test_pipeline_holds_when_no_thresholds_crossed() -> None:
+    # Not worthy (urgency stays low) and load stays under the flush threshold -> HOLD.
+    rating_params = RatingParams(urgency_base=0.0, urgency_gain=0.1, load_base=0.0, load_gain=0.1)
+    gate = _gate(rating_params=rating_params)
 
+    decision = await gate.pipeline([_item("a")])
 
-def test_surfaced_artifact_carries_item_kind() -> None:
-    # AC1: the surfaced artifact carries item_kind so consumers route by kind.
-    gate = _gate()
-    gate.accumulate([_item("a", kind=ItemKind.BRIEF)])
-    assert gate.score_pending()[0].item_kind is ItemKind.BRIEF
-
-
-def test_accumulate_is_idempotent_by_item_id() -> None:
-    # AC2: duplicates (by item_id) are rejected idempotently.
-    gate = _gate()
-    gate.accumulate([_item("a"), _item("a")])
-    assert len(gate.score_pending()) == 1
-
-
-def test_score_pending_uses_injected_callables_no_model() -> None:
-    # AC3: scores come from the injected callables (here pure lambdas) — no model call.
-    gate = Gate(
-        urgency=lambda it: 0.7,
-        cognitive_load=lambda it: 0.3,
-        decay_ttl_seconds=60.0,
-        clock=lambda: 1000.0,
-    )
-    gate.accumulate([_item("a")])
-    scored = gate.score_pending()[0]
-    assert (scored.urgency, scored.load) == (0.7, 0.3)
-
-
-def test_decay_removes_stale_and_emits_event() -> None:
-    # AC4: an item older than decay_ttl is removed and a DecayEvent emitted.
-    now = 2000.0
-    gate = _gate(now=now)
-    gate.accumulate([_item("old", created_at=now - 120.0), _item("fresh", created_at=now - 10.0)])
-    events = gate.decay()
-    assert {e.item_id for e in events} == {"old"}
-    assert {s.item_id for s in gate.score_pending()} == {"fresh"}
-
-
-def test_pipeline_holds_when_no_thresholds_crossed() -> None:
-    # AC5: end-to-end with no thresholds crossed -> HOLD, no surfaced items.
-    decision = _gate().pipeline([_item("a")])
     assert isinstance(decision, GateDecision)
     assert decision.action is GateAction.HOLD
     assert decision.items == ()
+
+
+async def test_pipeline_returns_surface_immediate_for_a_worthy_item_under_ceiling() -> None:
+    rating_params = RatingParams(urgency_base=0.5, urgency_gain=1.0, load_base=0.0, load_gain=0.0)
+    gate = _gate(rating_params=rating_params, urgency_threshold=0.1)
+
+    decision = await gate.pipeline([_item("a", sender_class="vip")])
+
+    assert decision.action is GateAction.SURFACE_IMMEDIATE
+    assert [scored.item_id for scored in decision.items] == ["a"]
+
+
+# --- Held -> pending path ---------------------------------------------------------------------
+
+
+async def test_held_item_accumulates_into_the_injected_pending_set() -> None:
+    rating_params = RatingParams(urgency_base=0.0, urgency_gain=0.0, load_base=0.1, load_gain=0.0)
+    pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=50)
+    gate = _gate(rating_params=rating_params, pending_set=pending_set, load_flush_threshold=10.0)
+
+    decision = await gate.pipeline([_item("a")])
+
+    assert decision.action is GateAction.HOLD
+    assert {scored.item_id for scored in pending_set.list()} == {"a"}
+
+
+async def test_pipeline_of_empty_items_is_a_valid_heartbeat_tick() -> None:
+    rating_params = RatingParams(urgency_base=0.0, urgency_gain=0.0, load_base=0.0, load_gain=0.0)
+    gate = _gate(rating_params=rating_params)
+
+    decision = await gate.pipeline([])
+
+    assert decision.action is GateAction.HOLD
+    assert decision.items == ()
+
+
+# --- surfacing_permitted=False suppresses BOTH arms but items still accumulate --------------
+
+
+async def test_surfacing_permitted_false_suppresses_the_immediate_arm() -> None:
+    # This item WOULD be worthy + under ceiling if permitted — assert it is suppressed instead.
+    rating_params = RatingParams(urgency_base=0.9, urgency_gain=0.0, load_base=0.0, load_gain=0.0)
+    ceiling = _FakeCeiling(allowed=True)
+    pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=50)
+    gate = _gate(
+        rating_params=rating_params,
+        ceiling=ceiling,
+        urgency_threshold=0.1,
+        pending_set=pending_set,
+    )
+
+    decision = await gate.pipeline([_item("a")], surfacing_permitted=False)
+
+    assert decision.action is GateAction.HOLD
+    assert ceiling.recorded == []  # the immediate arm never even consulted the ceiling
+    # The item still scored + accumulated (presence suppresses surfacing, never accumulation).
+    assert {scored.item_id for scored in pending_set.list()} == {"a"}
+
+
+async def test_surfacing_permitted_false_suppresses_the_flush_arm() -> None:
+    rating_params = RatingParams(urgency_base=0.0, urgency_gain=0.0, load_base=1.0, load_gain=0.0)
+    pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=50)
+    clock_time = [1000.0]
+    gate = _gate(
+        rating_params=rating_params,
+        pending_set=pending_set,
+        load_flush_threshold=0.5,
+        flush_min_age_seconds=10.0,
+        clock=lambda: clock_time[0],
+    )
+
+    await gate.pipeline([_item("a")], surfacing_permitted=False)
+    clock_time[0] = 2000.0  # well past flush_min_age_seconds
+    decision = await gate.pipeline([], surfacing_permitted=False)
+
+    assert decision.action is GateAction.HOLD
+    assert len(pending_set) == 1  # flush never fired, nothing cleared

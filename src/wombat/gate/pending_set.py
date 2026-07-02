@@ -41,12 +41,22 @@ from wombat.gate.models import ItemKind, ScoredItem
 @dataclass(frozen=True, slots=True)
 class PendingSetAdd:
     """Write-ahead record for an add. Carries the FULL ScoredItem so replay restores
-    ``cumulative_load()`` exactly, not just set membership."""
+    ``cumulative_load()`` exactly, not just set membership.
+
+    ``added_at`` is a SANCTIONED rider (TK-27, Q-55) on this journal record only — the
+    canonical ``ScoredItem`` stays untouched. It carries the epoch-seconds instant the item
+    entered the pending set, so the flush arm's min-age guard can read "how long has the
+    oldest pending item been waiting" without the gate needing its own side-table. Defaults to
+    ``0.0`` so a legacy record reconstructed without it (no persisted prod data exists yet;
+    TK-29's pg adapter is unbuilt so the wire shape inherits this field for free) replays as
+    the oldest possible item rather than raising.
+    """
 
     item_id: str
     item_kind: ItemKind
     urgency: float
     load: float
+    added_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,9 +119,15 @@ class PendingSet:
         self._journal = journal
         self._max_pending = max_pending
         self._items: dict[str, ScoredItem] = {}
+        self._added_at: dict[str, float] = {}
 
-    def add(self, item: ScoredItem) -> CapacityEviction | None:
-        """Write-ahead the add; if at capacity, journal the eviction Remove FIRST (Q-45)."""
+    def add(self, item: ScoredItem, *, added_at: float) -> CapacityEviction | None:
+        """Write-ahead the add; if at capacity, journal the eviction Remove FIRST (Q-45).
+
+        ``added_at`` (epoch seconds, TK-27 rider) is journaled on the ``PendingSetAdd`` record
+        alongside the canonical ``ScoredItem`` fields, and tracked in memory so
+        ``oldest_added_at()`` can answer the flush arm's min-age guard.
+        """
         if len(self._items) < self._max_pending:
             self._journal.append(
                 PendingSetAdd(
@@ -119,9 +135,11 @@ class PendingSet:
                     item_kind=item.item_kind,
                     urgency=item.urgency,
                     load=item.load,
+                    added_at=added_at,
                 )
             )
             self._items[item.item_id] = item
+            self._added_at[item.item_id] = added_at
             return None
 
         # At capacity: evict the lowest-urgency item FIRST (Remove-before-Add, Q-45). This
@@ -138,22 +156,27 @@ class PendingSet:
                 item_kind=item.item_kind,
                 urgency=item.urgency,
                 load=item.load,
+                added_at=added_at,
             )
         )
         del self._items[evicted.item_id]
+        self._added_at.pop(evicted.item_id, None)
         self._items[item.item_id] = item
+        self._added_at[item.item_id] = added_at
         return CapacityEviction(item_id=evicted.item_id, urgency=evicted.urgency)
 
     def remove(self, item_id: str) -> None:
         """Write-ahead the removal, then discard from memory (tolerant of a missing id)."""
         self._journal.append(PendingSetRemove(item_id=item_id))
         self._items.pop(item_id, None)
+        self._added_at.pop(item_id, None)
 
     def clear(self) -> tuple[ScoredItem, ...]:
         """Journaled atomic bulk drain-all; returns the drained items (TK-27's flush arm)."""
         self._journal.append(PendingSetClear())
         drained = tuple(self._items.values())
         self._items.clear()
+        self._added_at.clear()
         return drained
 
     def cumulative_load(self) -> float:
@@ -166,6 +189,16 @@ class PendingSet:
     def snapshot(self) -> tuple[ScoredItem, ...]:
         return tuple(self._items.values())
 
+    def oldest_added_at(self) -> float | None:
+        """The smallest ``added_at`` among current pending items, or ``None`` if empty.
+
+        The flush arm (TK-27) reads this to compute the oldest pending item's age against
+        ``flush_min_age_seconds``.
+        """
+        if not self._added_at:
+            return None
+        return min(self._added_at.values())
+
     def __len__(self) -> int:
         return len(self._items)
 
@@ -174,6 +207,7 @@ class PendingSet:
         """Replay the durable log into a fresh set — the exactly-once recovery path."""
         rebuilt = cls(journal=journal, max_pending=max_pending)
         items: dict[str, ScoredItem] = {}
+        added_at: dict[str, float] = {}
         for record in journal.replay():
             if isinstance(record, PendingSetAdd):
                 items[record.item_id] = ScoredItem(
@@ -182,9 +216,15 @@ class PendingSet:
                     urgency=record.urgency,
                     load=record.load,
                 )
+                # A legacy record with no persisted added_at replays at the field's own
+                # default (0.0) — never a KeyError, never a raise (see PendingSetAdd docstring).
+                added_at[record.item_id] = record.added_at
             elif isinstance(record, PendingSetRemove):
                 items.pop(record.item_id, None)
+                added_at.pop(record.item_id, None)
             else:
                 items.clear()
+                added_at.clear()
         rebuilt._items = items
+        rebuilt._added_at = added_at
         return rebuilt

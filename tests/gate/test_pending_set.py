@@ -7,6 +7,10 @@ PendingSet instance holding it is discarded and a fresh one is rebuilt via
 ``rebuild_from_journal``. ``_KillSwitchJournal`` additionally lets a test inject a kill at (or
 just after) a specific append, to prove the write-ahead ordering itself rather than just the
 end-to-end replay.
+
+TK-27 adds the ``added_at`` rider on ``PendingSetAdd`` (NOT on the canonical ``ScoredItem``):
+every ``add()`` call below now passes ``added_at=`` explicitly, and a dedicated section near
+the bottom covers the ``oldest_added_at()`` accessor and the legacy-record replay default.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from wombat.gate.pending_set import (
     JournalRecord,
     PendingJournal,
     PendingSet,
+    PendingSetAdd,
 )
 
 
@@ -66,7 +71,7 @@ def test_ac1_cumulative_load_ten_items_exact_sum() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=20)
     for i in range(10):
-        pending.add(_item(f"i{i}", urgency=0.5, load=0.15))
+        pending.add(_item(f"i{i}", urgency=0.5, load=0.15), added_at=0.0)
     assert pending.cumulative_load() == 1.5
 
 
@@ -78,7 +83,7 @@ def test_ac2_clear_kill_after_append_rebuilds_empty() -> None:
     killer = _KillSwitchJournal(inner=journal, raise_after=6)  # 6th append = the clear's
     pending = PendingSet(journal=killer, max_pending=20)
     for i in range(5):
-        pending.add(_item(f"i{i}"))
+        pending.add(_item(f"i{i}"), added_at=0.0)
     with pytest.raises(RuntimeError):
         pending.clear()
     rebuilt = PendingSet.rebuild_from_journal(journal, max_pending=20)
@@ -90,7 +95,7 @@ def test_ac2_clear_kill_before_append_leaves_set_intact() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=20)
     for i in range(5):
-        pending.add(_item(f"i{i}"))
+        pending.add(_item(f"i{i}"), added_at=0.0)
     killer = _KillSwitchJournal(inner=journal, raise_before_append=True)
     doomed = PendingSet(journal=killer, max_pending=20)
     with pytest.raises(RuntimeError):
@@ -102,8 +107,8 @@ def test_ac2_clear_kill_before_append_leaves_set_intact() -> None:
 def test_ac2_clear_returns_drained_items() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=20)
-    pending.add(_item("a"))
-    pending.add(_item("b"))
+    pending.add(_item("a"), added_at=0.0)
+    pending.add(_item("b"), added_at=0.0)
     drained = pending.clear()
     assert {item.item_id for item in drained} == {"a", "b"}
     assert len(pending) == 0
@@ -115,12 +120,12 @@ def test_ac2_clear_returns_drained_items() -> None:
 def test_ac3_capacity_eviction_evicts_lowest_urgency() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=3)
-    pending.add(_item("a", urgency=0.9))
-    pending.add(_item("b", urgency=0.2))
-    pending.add(_item("c", urgency=0.5))
+    pending.add(_item("a", urgency=0.9), added_at=0.0)
+    pending.add(_item("b", urgency=0.2), added_at=0.0)
+    pending.add(_item("c", urgency=0.5), added_at=0.0)
     assert len(pending) == 3
 
-    eviction = pending.add(_item("d", urgency=0.7))
+    eviction = pending.add(_item("d", urgency=0.7), added_at=0.0)
 
     assert isinstance(eviction, CapacityEviction)
     assert eviction.item_id == "b"
@@ -131,15 +136,15 @@ def test_ac3_capacity_eviction_evicts_lowest_urgency() -> None:
 def test_ac3_add_below_capacity_returns_none() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=5)
-    assert pending.add(_item("a")) is None
+    assert pending.add(_item("a"), added_at=0.0) is None
 
 
 def _at_capacity_set(seed: InMemoryPendingJournal) -> PendingSet:
     """A max_pending=3 set holding a,b,c with 'b' the lowest-urgency eviction target."""
     setup = PendingSet(journal=seed, max_pending=3)
-    setup.add(_item("a", urgency=0.9))
-    setup.add(_item("b", urgency=0.2))  # lowest urgency -> the eviction target
-    setup.add(_item("c", urgency=0.5))
+    setup.add(_item("a", urgency=0.9), added_at=0.0)
+    setup.add(_item("b", urgency=0.2), added_at=0.0)  # lowest urgency -> the eviction target
+    setup.add(_item("c", urgency=0.5), added_at=0.0)
     return setup
 
 
@@ -159,7 +164,7 @@ def test_ac3_kill_between_evicting_appends_never_exceeds_capacity() -> None:
     pending = PendingSet.rebuild_from_journal(seed, max_pending=3)
     pending._journal = killer  # swap in the kill-switch wrapper
     with pytest.raises(RuntimeError):
-        pending.add(_item("d", urgency=0.7))
+        pending.add(_item("d", urgency=0.7), added_at=0.0)
 
     rebuilt = PendingSet.rebuild_from_journal(seed, max_pending=3)
     rebuilt_ids = {item.item_id for item in rebuilt.list()}
@@ -178,7 +183,7 @@ def test_ac3_kill_before_remove_append_leaves_set_intact() -> None:
     pending = PendingSet.rebuild_from_journal(seed, max_pending=3)
     pending._journal = killer  # swap in the kill-switch wrapper
     with pytest.raises(RuntimeError):
-        pending.add(_item("d", urgency=0.7))
+        pending.add(_item("d", urgency=0.7), added_at=0.0)
 
     rebuilt = PendingSet.rebuild_from_journal(seed, max_pending=3)
     assert {item.item_id for item in rebuilt.list()} == {"a", "b", "c"}
@@ -194,7 +199,7 @@ def test_ac3_kill_after_both_evicting_appends_commits_swap() -> None:
     seed = InMemoryPendingJournal()
     pending = _at_capacity_set(seed)
 
-    eviction = pending.add(_item("d", urgency=0.7))  # both appends land; add() commits & returns
+    eviction = pending.add(_item("d", urgency=0.7), added_at=0.0)  # both appends land; commits
     assert isinstance(eviction, CapacityEviction)
     assert eviction.item_id == "b"
 
@@ -211,7 +216,7 @@ def test_ac4_kill_after_two_removes_leaves_exactly_three() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=10)
     for i in range(5):
-        pending.add(_item(f"i{i}", urgency=0.5, load=0.1))
+        pending.add(_item(f"i{i}", urgency=0.5, load=0.1), added_at=0.0)
     pending.remove("i0")
     pending.remove("i1")
     rebuilt = PendingSet.rebuild_from_journal(journal, max_pending=10)
@@ -226,7 +231,7 @@ def test_ac4_ten_seeded_kills_never_lose_or_duplicate() -> None:
         journal = InMemoryPendingJournal()
         pending = PendingSet(journal=journal, max_pending=10)
         for item_id in sorted(all_ids):
-            pending.add(_item(item_id, urgency=0.5, load=0.1))
+            pending.add(_item(item_id, urgency=0.5, load=0.1), added_at=0.0)
         order = sorted(all_ids, key=lambda _: rng.random())
         kill_at = rng.randint(0, len(order))
         surfaced: set[str] = set()
@@ -249,7 +254,7 @@ def test_ac4_rebuild_matches_pre_kill_checkpoint() -> None:
     journal = InMemoryPendingJournal()
     pending = PendingSet(journal=journal, max_pending=10)
     for i in range(5):
-        pending.add(_item(f"i{i}", urgency=0.5, load=0.1))
+        pending.add(_item(f"i{i}", urgency=0.5, load=0.1), added_at=0.0)
     pending.remove("i0")
     checkpoint_len = len(pending)  # 4
     checkpoint_load = pending.cumulative_load()
@@ -273,3 +278,86 @@ def test_ac5_list_and_cumulative_load_on_empty_set() -> None:
 
 def test_in_memory_journal_satisfies_pending_journal_protocol() -> None:
     assert isinstance(InMemoryPendingJournal(), PendingJournal)
+
+
+# --- TK-27: the added_at rider ------------------------------------------------------------------
+
+
+def test_added_at_is_journaled_on_the_add_record() -> None:
+    """``add(item, added_at=...)`` journals the rider on ``PendingSetAdd`` (not on ScoredItem)."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=5)
+
+    pending.add(_item("a"), added_at=123.5)
+
+    records = journal.replay()
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, PendingSetAdd)
+    assert record.added_at == 123.5
+    # ScoredItem itself is untouched — no added_at field on the canonical model.
+    assert not hasattr(pending.list()[0], "added_at")
+
+
+def test_oldest_added_at_returns_the_smallest_added_at_among_current_items() -> None:
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=5)
+
+    pending.add(_item("a"), added_at=200.0)
+    pending.add(_item("b"), added_at=50.0)
+    pending.add(_item("c"), added_at=300.0)
+
+    assert pending.oldest_added_at() == 50.0
+
+
+def test_oldest_added_at_updates_after_the_oldest_item_is_removed() -> None:
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=5)
+
+    pending.add(_item("a"), added_at=200.0)
+    pending.add(_item("b"), added_at=50.0)
+    pending.remove("b")
+
+    assert pending.oldest_added_at() == 200.0
+
+
+def test_oldest_added_at_is_none_on_empty_set() -> None:
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=5)
+    assert pending.oldest_added_at() is None
+
+
+def test_oldest_added_at_is_none_after_clear() -> None:
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=5)
+    pending.add(_item("a"), added_at=10.0)
+    pending.clear()
+    assert pending.oldest_added_at() is None
+
+
+def test_rebuild_from_journal_replays_added_at_rider() -> None:
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=5)
+    pending.add(_item("a"), added_at=42.0)
+    pending.add(_item("b"), added_at=7.0)
+
+    rebuilt = PendingSet.rebuild_from_journal(journal, max_pending=5)
+
+    assert rebuilt.oldest_added_at() == 7.0
+
+
+def test_rebuild_from_journal_defaults_added_at_to_zero_for_a_legacy_record() -> None:
+    """A ``PendingSetAdd`` constructed without ``added_at`` (a legacy/pre-rider record) replays
+    at the field's own default of 0.0 rather than raising (no persisted prod data exists yet;
+    TK-29's pg adapter inherits the new shape free)."""
+    journal = InMemoryPendingJournal()
+    legacy_record = PendingSetAdd(
+        item_id="legacy", item_kind=ItemKind.GENERIC, urgency=0.5, load=0.1
+    )
+    journal.append(legacy_record)
+
+    rebuilt = PendingSet.rebuild_from_journal(journal, max_pending=5)
+
+    assert legacy_record.added_at == 0.0
+    assert rebuilt.oldest_added_at() == 0.0
+    assert len(rebuilt) == 1

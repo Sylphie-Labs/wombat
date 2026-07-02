@@ -192,6 +192,8 @@ def test_no_second_definition_of_the_brief_time_elsewhere() -> None:
 _PRODUCTION_CONSUMER_PATHS = (
     _SRC_ROOT / "gate" / "scoring.py",
     _SRC_ROOT / "gate" / "pipeline.py",
+    _SRC_ROOT / "gate" / "trigger.py",  # TK-27
+    _SRC_ROOT / "gate" / "ceiling.py",  # TK-27
     _SRC_ROOT / "ledger" / "spend_ledger.py",  # TK-9, not yet built
     _SRC_ROOT / "rating" / "rating_tuner.py",  # TK-49, not yet built
 )
