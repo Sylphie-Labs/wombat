@@ -1,0 +1,63 @@
+# wombat operating parameters — the SINGLE versioned source-of-truth (TK-13, EP-9).
+#
+# This file holds the GLOBAL, STATIC production operating constants the de-risk spikes
+# (TK-22/26/48/73) recommend but no other ticket persists. It is loaded once at startup
+# by `wombat.params.load_operating_params` into a frozen `OperatingParams` (see params.py).
+#
+# RULES OF THE ROAD
+#   * Human-edited only. This is NOT written by the nightly RatingTuner (TK-49 writes the
+#     ADAPTIVE per-event-class RatingParams into the cog-worx user scope — a separate path).
+#   * Change a value -> BUMP `version`. The change is then auditable in git history.
+#   * Every field below is REQUIRED. A missing or mistyped field fails LOUD at load time
+#     (pydantic validation, extra="forbid") — there is no silent default in code.
+#
+# PROVENANCE LEGEND
+#   LOCKED      — empirically derived, a retired risk backs it; do not change casually.
+#   PROVISIONAL — fixture-confirmed only, pending Jim's confirmatory label pass; safe to revise.
+#   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
+
+# Bump this whenever any value below changes (AC5 — auditability).
+version: 1
+
+# --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
+# PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
+# revise these; they were never "locked". The gate (TK-27/28) reads them from here.
+urgency_threshold: 0.75      # immediate-voice fires when item urgency >= this
+load_flush_threshold: 1.0    # the load-triggered consolidated flush fires once/day at >= this
+per_class_daily_ceiling: 3   # max immediate-voice surfacings per sender class per day
+
+# --- Pending-set / flush mechanics -----------------------------------------------------
+# flush_min_age_seconds: CHOSEN-HERE — the TK-27 flush-arm min-age guard (audit gap). An
+#   item must be at least this old before the load-flush may sweep it, so a just-arrived
+#   item is never flushed in the same instant it lands. 300s = 5 minutes.
+flush_min_age_seconds: 300.0
+# decay_ttl_seconds: CHOSEN-HERE — the gate pipeline decays (drops) a pending item older
+#   than this. 86400s = 24h, so an un-surfaced item ages out by the next morning brief.
+decay_ttl_seconds: 86400.0
+# max_pending: CHOSEN-HERE — the MAX_PENDING cap on the pending-set size (back-pressure).
+max_pending: 100
+
+# --- Spend ledger (TK-9) ---------------------------------------------------------------
+# daily_token_ceiling: CHOSEN-HERE — the daily model-token budget the spend ledger enforces
+#   against the DeepSeek egress. A provisional operating budget; revise from real usage.
+daily_token_ceiling: 100000
+
+# --- Morning brief (TK-97) -------------------------------------------------------------
+# morning_brief_time: CHOSEN-HERE — TK-97 FORBIDS runtime configurability but never stated
+#   the value; TK-13 fixes the single value here. 07:00 local. Changing it is a human edit
+#   to THIS file (a version bump), never a runtime knob (TK-97 non_goal upheld).
+morning_brief_time: "07:00:00"
+
+# --- RatingTuner bounded-update block (TK-48 spike, RISK-4 RETIRED) ---------------------
+# LOCKED. These FIVE values are ONE coherent block and MUST move together. The TK-48
+# ablation proved the floor/ceiling clamps ALONE do NOT bound the daily surfacing RATE —
+# the clamp band must be chosen JOINTLY with the surfacing sensitivity. At this band+gain
+# the worst-case clamped surfacing rate lands EXACTLY at surfacing_ceiling_per_day. So
+# changing the band WITHOUT re-deriving the ceiling breaks the bound. The tuner (TK-49)
+# clamps its nightly updates against floor/ceiling and delta_bound; it does not own them.
+rating_tuner:
+  clamp_floor: 0.35              # per-param floor (applies to urgency AND load)
+  clamp_ceiling: 0.65           # per-param ceiling (applies to urgency AND load)
+  delta_bound: 0.05             # max per-night change to any one parameter
+  gain: 0.20                    # tuner learning gain
+  surfacing_ceiling_per_day: 12.0  # hard daily surfacing ceiling the band is chosen to respect

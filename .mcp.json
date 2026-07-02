@@ -10,13 +10,9 @@
       ],
       "env": {}
     },
-    "mempalace": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mempalace",
-        "mcp"
-      ],
+    "wombat-memory": {
+      "command": "node",
+      "args": ["memory/mcp.mjs"],
       "env": {}
     }
   }

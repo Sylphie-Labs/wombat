@@ -23,5 +23,4 @@ pin once cog-worx is published.
 
 - **codebase-pkg** — queryable Neo4j knowledge graph of this repo, exposed to Claude Code over MCP.
   Bring up the graph with `docker compose -f docker-compose.codebase-pkg.yml up -d` then `codebase-pkg seed`.
-- **mempalace** — cryptographically-signed visual memory / session handoff (MCP). User-level tool; auth
-  with `mempalace auth gk_xxxx` and set a Gemini key via `mempalace init --gemini-key <key>`.
+- **memory** — TBD. Selecting a free, model-free long-term memory MCP server (no LLM/embedding calls).

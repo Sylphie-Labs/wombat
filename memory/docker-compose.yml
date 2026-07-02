@@ -1,0 +1,22 @@
+services:
+  wombat-memory-db:
+    image: pgvector/pgvector:pg17
+    container_name: wombat-memory-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wombat
+      POSTGRES_PASSWORD: wombat-memory-local   # local-only dev default; DB binds to localhost
+      POSTGRES_DB: wombat_memory
+    ports:
+      - "5544:5432"                            # non-default host port to avoid collisions
+    volumes:
+      - wombat_memory_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro   # auto-applied on first init
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wombat -d wombat_memory"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  wombat_memory_data:

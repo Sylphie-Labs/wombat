@@ -23,5 +23,41 @@
       "Bash(codebase-pkg *)"
     ],
     "deny": []
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-capture.cjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Grep|Glob|Read|Bash|WebFetch|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-recall.cjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "planning-worx-local": {
+      "source": {
+        "source": "directory",
+        "path": "./.claude/planning-worx-plugin"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "planning-worx@planning-worx-local": true
   }
 }

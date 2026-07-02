@@ -1,0 +1,8 @@
+{
+  "name": "planning-worx",
+  "version": "0.1.2",
+  "description": "Spec-driven planning: turn a product vision into an atomic, traceable ticket list, with one YAML contract as the single source of truth. Resume an in-flight plan by reconciling it against the actual repo. Bundles planning commands, skills, an adversarial red-team agent, and contract-validation hooks.",
+  "author": { "name": "planning-worx" },
+  "license": "MIT",
+  "keywords": ["planning", "spec-driven", "tickets", "contract", "agents"]
+}

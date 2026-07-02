@@ -19,3 +19,16 @@ wheels/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Node (memory pipeline)
+node_modules/
+
+# Agent-memory local state (per-session byte cursors)
+.claude/memory/
+planning/.state.json
+
+# Throwaway real-data spike fixtures (DEC-24): real Gmail/Calendar pulled
+# locally via MCP for RISK-1/2/6 spikes (TK-22/26/73). Local-only, never
+# committed — NG-7 storage-residency enforcement (local read, no egress).
+**/fixtures/*.real.*
+tests/**/fixtures/*.real.*

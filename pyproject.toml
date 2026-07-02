@@ -9,6 +9,7 @@ authors = [{ name = "Jim Tisdale" }]
 keywords = ["agent", "assistant", "cog-worx", "cognitive-architecture", "llm"]
 dependencies = [
     "cog-worx",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,7 @@ dev = [
     "mypy>=1.13.0,<2",
     "pytest>=8.3.0",
     "pytest-asyncio>=1.4.0",
+    "types-PyYAML>=6.0",
 ]
 
 [build-system]

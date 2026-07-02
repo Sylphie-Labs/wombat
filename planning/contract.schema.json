@@ -1,0 +1,243 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://planning-worx.dev/contract.schema.json",
+  "title": "planning-worx master contract",
+  "description": "Single source of truth for a project plan: vision -> features -> epics -> tickets -> tasks, plus a governance log. One self-similar node shape at every level (kind discriminator). Stored flat with parent links.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "meta", "vision", "nodes"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "kind": { "type": "string", "const": "contract" },
+
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "title", "status", "created_at", "updated_at"],
+      "properties": {
+        "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "title": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["planning", "building", "shipped", "paused"] },
+        "stage": { "type": "string", "enum": ["constitution", "vision", "clarify", "design", "tickets", "analyze", "implement"], "description": "Furthest pipeline stage completed." },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      }
+    },
+
+    "constitution": {
+      "type": "array",
+      "description": "Durable project-wide principles, including what NOT to build. Kept short.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "rule", "kind"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^CON-[0-9]+$" },
+          "rule": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["must", "never", "prefer"] }
+        }
+      }
+    },
+
+    "vision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["problem", "outcome"],
+      "properties": {
+        "problem": { "type": "string" },
+        "outcome": { "type": "string" },
+        "measurable_goals": { "type": "array", "items": { "type": "string" } },
+        "target_users": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "non_goals": {
+      "type": "array",
+      "description": "Project-level negative space (explicit 'never, this scope'). The over-engineering guard.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "statement"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^NG-[0-9]+$" },
+          "statement": { "type": "string" },
+          "rationale": { "type": "string" }
+        }
+      }
+    },
+
+    "constraints": {
+      "type": "array",
+      "description": "Hard technical/business limits.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "statement"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^CST-[0-9]+$" },
+          "statement": { "type": "string" }
+        }
+      }
+    },
+
+    "tech_stack": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^TECH-[0-9]+$" },
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "rationale": { "type": "string" },
+          "decision_ref": { "type": "string" }
+        }
+      }
+    },
+
+    "nodes": {
+      "type": "array",
+      "description": "Flat list of self-similar work nodes. Tree is reconstructed from parent links. Same shape at every level; kind sets the level.",
+      "items": { "$ref": "#/$defs/node" }
+    },
+
+    "governance": {
+      "type": "array",
+      "description": "Open questions, assumptions, risks, issues, dependencies, decisions, deferrals, non-goals that arise during planning. Decisions are append-only.",
+      "items": { "$ref": "#/$defs/governance_item" }
+    },
+
+    "changelog": {
+      "type": "array",
+      "description": "Append-only audit trail.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "change"],
+        "properties": {
+          "date": { "type": "string" },
+          "version": { "type": "string" },
+          "change": { "type": "string" },
+          "by": { "type": "string" }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "title", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^(FEAT|EP|TK|TASK)-[0-9]+$" },
+        "kind": { "type": "string", "enum": ["feature", "epic", "ticket", "task"] },
+        "parent": { "type": ["string", "null"], "description": "Parent node id, or null for top-level features." },
+        "title": { "type": "string", "minLength": 1 },
+        "intent": { "type": "string", "description": "The why / value. WHO gets WHAT and why." },
+        "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "done", "canceled"] },
+        "priority": { "type": "string", "enum": ["P1", "P2", "P3"] },
+        "estimate": { "type": "string", "enum": ["S", "M", "L", "XL"] },
+        "engineering_level": { "type": "string", "enum": ["prototype", "mvp", "production", "regulated"] },
+        "complexity_budget": { "type": "string", "description": "e.g. '<=150 LOC; stop and ask after 3 failed attempts'." },
+        "acceptance_criteria": {
+          "type": "array",
+          "description": "Testable Given/When/Then. Doubles as the definition of done.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["then"],
+            "properties": {
+              "given": { "type": "string" },
+              "when": { "type": "string" },
+              "then": { "type": "string" }
+            }
+          }
+        },
+        "non_goals": { "type": "array", "items": { "type": "string" }, "description": "Per-node negative space." },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "blocks": { "type": "array", "items": { "type": "string" } },
+        "files_in_scope": { "type": "array", "items": { "type": "string" } },
+        "design_refs": { "type": "array", "items": { "type": "string" } },
+        "code_refs": { "type": "array", "items": { "type": "string" } },
+        "test_refs": { "type": "array", "items": { "type": "string" } },
+        "poc": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Present when this node is a proof-of-concept: what it de-risks.",
+          "required": ["question", "status"],
+          "properties": {
+            "question": { "type": "string" },
+            "hypothesis": { "type": "string" },
+            "status": { "type": "string", "enum": ["open", "proven", "disproven"] },
+            "result": { "type": ["string", "null"] },
+            "decision_ref": { "type": ["string", "null"] }
+          }
+        },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "ticket" } } },
+          "then": {
+            "required": ["acceptance_criteria", "engineering_level", "priority"],
+            "properties": { "acceptance_criteria": { "minItems": 1 } }
+          }
+        }
+      ]
+    },
+
+    "governance_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "title", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^(Q|ASMP|RISK|ISS|DEP|DEC|DEF|NG)-[0-9]+$" },
+        "type": { "type": "string", "enum": ["open_question", "assumption", "risk", "issue", "dependency", "decision", "deferral", "non_goal"] },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "owner": { "type": "string" },
+        "scope": { "type": "string", "description": "Node id this attaches to, or 'project'." },
+        "date_raised": { "type": "string" },
+        "date_updated": { "type": "string" },
+        "links": { "type": "array", "items": { "type": "string" } },
+        "converted_from": { "type": ["string", "null"] },
+        "resolution": { "type": ["string", "null"] },
+        "context": { "type": "string" },
+        "decision": { "type": "string" },
+        "consequences": { "type": "string" },
+        "alternatives": { "type": "array", "items": { "type": "string" } },
+        "supersedes": { "type": ["string", "null"] },
+        "superseded_by": { "type": ["string", "null"] },
+        "probability": { "type": "string", "enum": ["low", "medium", "high"] },
+        "impact": { "type": "string", "enum": ["low", "medium", "high"] },
+        "mitigation": { "type": "string" },
+        "trigger": { "type": "string" },
+        "validation_method": { "type": "string" },
+        "revisit_trigger": { "type": "string" },
+        "rationale": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "decision" } } },
+          "then": { "required": ["context", "decision", "consequences"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "deferral" } } },
+          "then": { "required": ["revisit_trigger"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "risk" } } },
+          "then": { "required": ["probability", "impact", "mitigation"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "assumption" } } },
+          "then": { "required": ["validation_method"] }
+        }
+      ]
+    }
+  }
+}

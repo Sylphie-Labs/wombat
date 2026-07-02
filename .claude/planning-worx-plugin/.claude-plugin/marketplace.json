@@ -1,0 +1,12 @@
+{
+  "name": "planning-worx-local",
+  "owner": { "name": "planning-worx" },
+  "plugins": [
+    {
+      "name": "planning-worx",
+      "description": "Spec-driven planning framework: vision -> features -> epics -> tickets -> tasks, with a master contract, validation hooks, and an adversarial red-team agent. Reconcile an in-flight plan against the actual repo to resume and finish it.",
+      "version": "0.1.2",
+      "source": "./planning-worx"
+    }
+  ]
+}

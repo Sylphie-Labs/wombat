@@ -1,0 +1,106 @@
+# Hand-authored conflict scenarios for the RISK-6 slot-quality spike (TK-73).
+#
+# Times are local "HH:MM" on a single notional working day. Working hours are
+# shared across all scenarios. Each scenario contains a set of events; at least
+# two of them overlap, producing a conflict whose later event is "movable".
+#
+# These are deliberately representative of real morning-brief situations:
+# double-bookings, a packed morning, a lunch-spanning clash, etc. Jim rates the
+# slots the algorithm proposes for each (see the finding stub).
+
+working_hours:
+  start: "09:00"
+  end: "18:00"
+
+scenarios:
+  - name: "simple double-booking"
+    note: "Two 1h meetings booked at the same 10:00 slot; rest of day is open."
+    events:
+      - id: "ev-1a"
+        title: "Design review"
+        start: "10:00"
+        end: "11:00"
+      - id: "ev-1b"
+        title: "1:1 with Sam"
+        start: "10:00"
+        end: "11:00"
+
+  - name: "packed morning, open afternoon"
+    note: "Movable 30m clashes into a busy morning; afternoon is wide open."
+    events:
+      - id: "ev-2a"
+        title: "Standup"
+        start: "09:00"
+        end: "09:30"
+      - id: "ev-2b"
+        title: "Roadmap sync"
+        start: "09:30"
+        end: "10:30"
+      - id: "ev-2c"
+        title: "Vendor call"
+        start: "10:00"
+        end: "10:30"
+
+  - name: "lunch-spanning clash"
+    note: "A 45m item overlaps a held lunch block; gaps exist before and after."
+    events:
+      - id: "ev-3a"
+        title: "Lunch (held)"
+        start: "12:00"
+        end: "13:00"
+      - id: "ev-3b"
+        title: "Recruiting debrief"
+        start: "12:30"
+        end: "13:15"
+      - id: "ev-3c"
+        title: "Morning focus block"
+        start: "09:00"
+        end: "10:00"
+
+  - name: "back-to-back wall with one gap"
+    note: "Dense afternoon wall; movable clashes mid-wall, gaps in the morning."
+    events:
+      - id: "ev-4a"
+        title: "Block A"
+        start: "13:00"
+        end: "14:00"
+      - id: "ev-4b"
+        title: "Block B"
+        start: "14:00"
+        end: "15:00"
+      - id: "ev-4c"
+        title: "Overlapping ask"
+        start: "13:30"
+        end: "14:30"
+
+  - name: "three-way overlap"
+    note: "Three short events all collide at 11:00; plenty of free time elsewhere."
+    events:
+      - id: "ev-5a"
+        title: "Quick sync A"
+        start: "11:00"
+        end: "11:30"
+      - id: "ev-5b"
+        title: "Quick sync B"
+        start: "11:15"
+        end: "11:45"
+      - id: "ev-5c"
+        title: "Quick sync C"
+        start: "11:20"
+        end: "11:50"
+
+  - name: "long meeting bumped by short"
+    note: "A 90m strategy block is clipped by a 30m urgent call; needs a big gap."
+    events:
+      - id: "ev-6a"
+        title: "Strategy block"
+        start: "15:00"
+        end: "16:30"
+      - id: "ev-6b"
+        title: "Urgent escalation"
+        start: "15:00"
+        end: "15:30"
+      - id: "ev-6c"
+        title: "Afternoon hold"
+        start: "16:30"
+        end: "17:00"

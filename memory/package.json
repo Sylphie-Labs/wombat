@@ -1,0 +1,11 @@
+{
+  "name": "wombat-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local agent-memory pipeline for wombat: capture -> chunk -> embed -> recall.",
+  "main": "capture.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "pg": "^8.13.0"
+  }
+}
