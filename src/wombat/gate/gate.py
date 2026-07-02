@@ -18,8 +18,9 @@ here, never redefined.
 from __future__ import annotations
 
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind, ScoredItem
-from wombat.presence.probe import PresenceSnapshot, presence_hold
+from wombat.gate.presence_hold import presence_hold
 from wombat.queue import QueueItem
+from wombat.sources.presence import PresenceSnapshot
 
 # stub_urgency payload value -> score (Q-48). Any other/missing value defaults to "low" (quiet
 # default) at the lookup site below, matching the vision-wide quiet-by-default bias.
@@ -57,27 +58,38 @@ def stub_evaluate(
     presence: PresenceSnapshot | None,
     *,
     urgency_threshold: float,
+    staleness_ceiling_s: float,
+    confidence_floor: float,
 ) -> GateDecision:
     """The TK-6 stub evaluator: presence-first, then a deterministic stub score (Q-48).
 
     Presence is applied BEFORE scoring and is never itself a scoring input (Q-12): if
     ``presence`` is ``None`` or ``presence_hold(presence, ...)`` is ``True`` (unknown / stale /
-    low-confidence / idle / away — the conservative fail-safe from the TK-4 spike), this returns
-    ``GateAction.HOLD`` immediately without touching the stub urgency value at all. The
-    snapshot's own ``taken_at`` is passed as ``now`` — the snapshot is treated as fresh at
-    evaluation time; this never reads a wall clock (NG-4 / determinism).
+    low-confidence / idle / away — the conservative fail-safe hardened to production in TK-11),
+    this returns ``GateAction.HOLD`` immediately without touching the stub urgency value at all.
+    The snapshot's own ``taken_at`` is passed as ``now`` — the snapshot is treated as fresh at
+    evaluation time (the provider already applied the staleness ceiling at provision per Q-49,
+    so this call site's own staleness check is inert BY DESIGN; the predicate's Layer-2 check
+    still runs and would catch a provider bug); this never reads a wall clock (NG-4 /
+    determinism).
 
     Otherwise the stub score is read straight out of the payload:
     ``payload["stub_urgency"]`` of ``"high"`` -> 0.9, ``"low"`` (or anything else / missing) ->
     0.1 (the quiet default). ``urgency >= urgency_threshold`` surfaces immediately; otherwise
-    it holds. ``urgency_threshold`` is an injected arg — composition binds the real
-    ``OperatingParams.urgency_threshold``; no inline literal lives in this module.
+    it holds. ``urgency_threshold``, ``staleness_ceiling_s``, and ``confidence_floor`` are all
+    injected args — composition binds the real ``OperatingParams`` values; no inline literal
+    lives in this module.
 
     Exactly one ``ScoredItem`` is returned per call either way (a HOLD from a presence fail-safe
     still identifies which item held, with a zero score since it was never actually scored) — no
     model call anywhere.
     """
-    if presence is None or presence_hold(presence, presence.taken_at):
+    if presence is None or presence_hold(
+        presence,
+        presence.taken_at,
+        staleness_ceiling_s=staleness_ceiling_s,
+        confidence_floor=confidence_floor,
+    ):
         return GateDecision(
             action=GateAction.HOLD,
             items=(

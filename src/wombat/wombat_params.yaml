@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 1
+version: 2
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -61,3 +61,19 @@ rating_tuner:
   delta_bound: 0.05             # max per-night change to any one parameter
   gain: 0.20                    # tuner learning gain
   surfacing_ceiling_per_day: 12.0  # hard daily surfacing ceiling the band is chosen to respect
+
+# --- Presence hold (TK-11) --------------------------------------------------------------
+# CHOSEN-HERE, ported from the TK-4 spike's proven values. The production presence_hold
+# predicate (wombat/gate/presence_hold.py) and the presence provider
+# (wombat/sources/presence.py) receive these as INJECTED args — no inline literal lives in
+# either module.
+# presence_staleness_ceiling_seconds: a snapshot older than this (relative to the gate's
+#   `now`) can no longer be trusted and forces a HOLD. 300s = 5 minutes.
+presence_staleness_ceiling_seconds: 300.0
+# presence_confidence_floor: a snapshot's confidence must be at least this to permit a
+#   surface; anything below forces a HOLD.
+presence_confidence_floor: 0.5
+# presence_idle_threshold_seconds: idle time below this classifies ACTIVE; at or above,
+#   IDLE (or AWAY once idle exceeds the descriptive-only AWAY_THRESHOLD_S in
+#   sources/presence.py). 60s, matching the TK-4 hypothesis.
+presence_idle_threshold_seconds: 60.0

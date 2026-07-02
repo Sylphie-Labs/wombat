@@ -25,7 +25,7 @@ from cogworx.loop.stage import StageContext
 
 from wombat.gate.gate import gate_item_from_queue_item
 from wombat.gate.models import GateDecision, GateItem
-from wombat.presence.probe import PresenceSnapshot
+from wombat.sources.presence import PresenceSnapshot
 from wombat.stages.artifacts import (
     GATE_DECISIONS,
     GateDecisionEntry,

@@ -15,8 +15,8 @@ from cogworx.loop.result import Transition
 from support.stage_context_fake import StageContextFake
 from wombat.gate.gate import gate_item_from_queue_item, stub_evaluate
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind, ScoredItem
-from wombat.presence.probe import PresenceSnapshot, PresenceState
 from wombat.queue import QueueItem
+from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.stages.artifacts import (
     DRAINED_BATCH,
     GATE_DECISIONS,
@@ -37,13 +37,22 @@ _UNKNOWN = PresenceSnapshot(
 )
 
 _URGENCY_THRESHOLD = 0.75
+_STALENESS_CEILING_S = 300.0
+_CONFIDENCE_FLOOR = 0.5
 
 
 def _evaluate(gate_item: GateItem, presence: PresenceSnapshot | None) -> GateDecision:
     """The evaluate callable GateStage is composed with — a partial-shaped wrapper over
-    ``stub_evaluate`` binding ``urgency_threshold`` (mirrors the real ``functools.partial``
-    composition wiring; a plain function is equivalent and simpler for tests)."""
-    return stub_evaluate(gate_item, presence, urgency_threshold=_URGENCY_THRESHOLD)
+    ``stub_evaluate`` binding ``urgency_threshold``/``staleness_ceiling_s``/``confidence_floor``
+    (mirrors the real ``functools.partial`` composition wiring; a plain function is equivalent
+    and simpler for tests)."""
+    return stub_evaluate(
+        gate_item,
+        presence,
+        urgency_threshold=_URGENCY_THRESHOLD,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+    )
 
 
 def _drained_batch_artifact(items: list[QueueItem]) -> Artifact:
@@ -92,7 +101,13 @@ def test_ac1_high_urgency_and_active_presence_surfaces_immediately() -> None:
         payload={"stub_urgency": "high"},
     )
 
-    decision = stub_evaluate(gate_item, _ACTIVE, urgency_threshold=_URGENCY_THRESHOLD)
+    decision = stub_evaluate(
+        gate_item,
+        _ACTIVE,
+        urgency_threshold=_URGENCY_THRESHOLD,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+    )
 
     assert decision.action is GateAction.SURFACE_IMMEDIATE
     assert decision.items == (
@@ -108,7 +123,13 @@ def test_ac2_low_urgency_holds() -> None:
         payload={"stub_urgency": "low"},
     )
 
-    decision = stub_evaluate(gate_item, _ACTIVE, urgency_threshold=_URGENCY_THRESHOLD)
+    decision = stub_evaluate(
+        gate_item,
+        _ACTIVE,
+        urgency_threshold=_URGENCY_THRESHOLD,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+    )
 
     assert decision.action is GateAction.HOLD
 
@@ -121,7 +142,13 @@ def test_ac3_unknown_presence_holds_regardless_of_high_urgency() -> None:
         payload={"stub_urgency": "high"},
     )
 
-    decision = stub_evaluate(gate_item, _UNKNOWN, urgency_threshold=_URGENCY_THRESHOLD)
+    decision = stub_evaluate(
+        gate_item,
+        _UNKNOWN,
+        urgency_threshold=_URGENCY_THRESHOLD,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+    )
 
     assert decision.action is GateAction.HOLD
 
@@ -134,7 +161,13 @@ def test_none_presence_holds_without_scoring() -> None:
         payload={"stub_urgency": "high"},
     )
 
-    decision = stub_evaluate(gate_item, None, urgency_threshold=_URGENCY_THRESHOLD)
+    decision = stub_evaluate(
+        gate_item,
+        None,
+        urgency_threshold=_URGENCY_THRESHOLD,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+    )
 
     assert decision.action is GateAction.HOLD
 
@@ -142,7 +175,13 @@ def test_none_presence_holds_without_scoring() -> None:
 def test_missing_stub_urgency_defaults_to_low_quiet_default() -> None:
     gate_item = GateItem(item_id="i-5", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
 
-    decision = stub_evaluate(gate_item, _ACTIVE, urgency_threshold=_URGENCY_THRESHOLD)
+    decision = stub_evaluate(
+        gate_item,
+        _ACTIVE,
+        urgency_threshold=_URGENCY_THRESHOLD,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+    )
 
     assert decision.action is GateAction.HOLD
     assert decision.items[0].urgency == 0.1
@@ -161,7 +200,7 @@ async def test_ac4_ten_items_in_sequence_all_decide_with_no_exceptions() -> None
         last_output_map={"drain_queue": _drained_batch_artifact(items)},
     )
     # `evaluate`/`presence_provider` never construct or touch a Model; GateStage's only imports
-    # are gate.gate + presence.probe + stages.artifacts — none reach cogworx.model at all, so
+    # are gate.gate + sources.presence + stages.artifacts — none reach cogworx.model at all, so
     # there is structurally no seam through which a model call could happen (NG-4).
     stage = GateStage(evaluate=_evaluate, presence_provider=lambda: _ACTIVE)
 

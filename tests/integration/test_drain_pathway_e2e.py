@@ -47,8 +47,8 @@ from wombat.config import WombatConfig
 from wombat.gate.gate import stub_evaluate
 from wombat.gate.models import ItemKind
 from wombat.pathways.drain_pathway import build_drain_pathway
-from wombat.presence.probe import PresenceSnapshot, PresenceState
 from wombat.queue import QueueItem, WombatQueue, ensure_schema
+from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     HOLD_REPORT,
@@ -75,6 +75,8 @@ if not _DSN:
 _FIXED_NOW = datetime(2026, 7, 2, 12, 0, 0, tzinfo=UTC)
 _PATHWAY_ID = "drain"
 _URGENCY_THRESHOLD = 0.5
+_STALENESS_CEILING_S = 300.0
+_CONFIDENCE_FLOOR = 0.5
 
 _ACTIVE_PRESENCE = PresenceSnapshot(
     state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=0.0
@@ -105,7 +107,12 @@ def _build_stack(*, model_factory: object) -> tuple[Engine, WombatQueue]:
 
     drain_queue_stage = DrainQueueStage(queue, batch_size=1, poll_interval_seconds=5.0)
     gate_stage = GateStage(
-        evaluate=functools.partial(stub_evaluate, urgency_threshold=_URGENCY_THRESHOLD),
+        evaluate=functools.partial(
+            stub_evaluate,
+            urgency_threshold=_URGENCY_THRESHOLD,
+            staleness_ceiling_s=_STALENESS_CEILING_S,
+            confidence_floor=_CONFIDENCE_FLOOR,
+        ),
         presence_provider=lambda: _ACTIVE_PRESENCE,
     )
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)

@@ -32,7 +32,7 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "wombat"
 def _valid_mapping() -> dict[str, object]:
     """A complete, well-typed parameter mapping (mirrors the shipped wombat_params.yaml)."""
     return {
-        "version": 1,
+        "version": 2,
         "urgency_threshold": 0.75,
         "load_flush_threshold": 1.0,
         "per_class_daily_ceiling": 3,
@@ -48,6 +48,9 @@ def _valid_mapping() -> dict[str, object]:
             "gain": 0.20,
             "surfacing_ceiling_per_day": 12.0,
         },
+        "presence_staleness_ceiling_seconds": 300.0,
+        "presence_confidence_floor": 0.5,
+        "presence_idle_threshold_seconds": 60.0,
     }
 
 
@@ -76,6 +79,9 @@ def test_shipped_params_load_with_every_field_typed() -> None:
     assert isinstance(params.daily_token_ceiling, int)
     assert isinstance(params.morning_brief_time, time)
     assert isinstance(params.rating_tuner, RatingTunerBounds)
+    assert isinstance(params.presence_staleness_ceiling_seconds, float)
+    assert isinstance(params.presence_confidence_floor, float)
+    assert isinstance(params.presence_idle_threshold_seconds, float)
 
 
 def test_file_carries_a_version_field() -> None:
@@ -134,6 +140,23 @@ def test_tuner_block_present_typed_and_equals_locked_defaults() -> None:
         actual = getattr(tuner, name)
         assert isinstance(actual, float), f"{name} must be typed float"
         assert actual == expected, f"{name}: documented default {actual} != locked {expected}"
+
+
+# --- Presence hold (TK-11) — the 3 injected bounds load, are floats, equal the shipped values ---
+
+
+def test_presence_hold_fields_load_are_float_and_equal_shipped_values() -> None:
+    """The TK-11 presence config fields load as floats and match the documented YAML values."""
+    params = load_operating_params()
+
+    assert isinstance(params.presence_staleness_ceiling_seconds, float)
+    assert params.presence_staleness_ceiling_seconds == 300.0
+
+    assert isinstance(params.presence_confidence_floor, float)
+    assert params.presence_confidence_floor == 0.5
+
+    assert isinstance(params.presence_idle_threshold_seconds, float)
+    assert params.presence_idle_threshold_seconds == 60.0
 
 
 # --- AC3 — the morning-brief time is owned here and nowhere else ------------------------

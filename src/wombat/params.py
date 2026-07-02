@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Bump in lock-step with wombat_params.yaml's ``version`` whenever a field is added, removed,
 # or renamed, so a persisted file can be reconciled against the code's expectation.
-OPERATING_PARAMS_VERSION = 1
+OPERATING_PARAMS_VERSION = 2
 
 _PARAMS_FILENAME = "wombat_params.yaml"
 
@@ -91,6 +91,11 @@ class OperatingParams(BaseModel):
 
     # --- RatingTuner bounded-update block (TK-48, LOCKED) ---
     rating_tuner: RatingTunerBounds
+
+    # --- Presence hold (TK-11) ---
+    presence_staleness_ceiling_seconds: float
+    presence_confidence_floor: float
+    presence_idle_threshold_seconds: float
 
 
 def _default_params_path() -> Path:
