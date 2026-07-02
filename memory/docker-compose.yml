@@ -5,7 +5,9 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: wombat
-      POSTGRES_PASSWORD: wombat-memory-local   # local-only dev default; DB binds to localhost
+      # Secret sourced from env/.env — never hardcoded. Fails loud if unset. Run compose from the
+      # repo root (or `docker compose --env-file ../.env ...`) so the repo-root .env is read.
+      POSTGRES_PASSWORD: ${WOMBAT_MEMORY_PG_PASSWORD:?set WOMBAT_MEMORY_PG_PASSWORD (see .env.example)}
       POSTGRES_DB: wombat_memory
     ports:
       - "5544:5432"                            # non-default host port to avoid collisions

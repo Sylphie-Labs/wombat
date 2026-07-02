@@ -23,7 +23,11 @@ REQUIRED_ENV: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
 class WombatConfig(BaseSettings):
     """Typed view of wombat's required environment (the DeepSeek egress, ASMP-1)."""
 
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+    # Keys come from the environment; a repo-root .env is loaded if present (real values live
+    # there, never in source — see .env.example). Explicit env vars still take precedence.
+    model_config = SettingsConfigDict(
+        populate_by_name=True, extra="ignore", env_file=".env", env_file_encoding="utf-8"
+    )
 
     deepseek_api_key: SecretStr
     deepseek_base_url: str
