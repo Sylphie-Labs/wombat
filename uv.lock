@@ -954,6 +954,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cog-worx" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pyyaml" },
 ]
 
@@ -977,6 +978,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'providers'", specifier = ">=0.40.0" },
     { name = "cog-worx", editable = "../cog_worx/cog-worx" },
     { name = "openai", marker = "extra == 'providers'", specifier = ">=1.55.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["providers"]

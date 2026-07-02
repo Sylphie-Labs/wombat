@@ -10,6 +10,7 @@ keywords = ["agent", "assistant", "cog-worx", "cognitive-architecture", "llm"]
 dependencies = [
     "cog-worx",
     "pyyaml>=6.0",
+    "psycopg[binary]>=3.2",
 ]
 
 [project.optional-dependencies]
