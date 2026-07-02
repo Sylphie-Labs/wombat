@@ -17,10 +17,8 @@ WombatQueue redelivers the un-acked 3rd item) through the stage, not by re-simul
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -28,10 +26,8 @@ from cogworx.loop.graph import StageGraph
 from cogworx.loop.result import StageResult, Transition, Wait
 from cogworx.loop.stage import StageContext
 
-# tests/support is a sibling of tests/unit (not a subpackage of it) — this repo has no
-# tests/conftest.py or pyproject pythonpath entry, so make the reusable double importable by
-# inserting the tests/ dir onto sys.path (self-contained; later spine tickets can copy this).
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# tests/support is a sibling of tests/unit (not a subpackage of it); `pythonpath = ["tests"]` in
+# pyproject.toml's [tool.pytest.ini_options] makes it importable with no sys.path hack (TK-6).
 from support.stage_context_fake import StageContextFake
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.queue import QueueItem, WombatQueue, ensure_schema
