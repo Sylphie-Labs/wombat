@@ -66,7 +66,7 @@ class ComposeStage:
         # AC3: fail at CONSTRUCTION, not first call. load_config() already fails loud on an
         # ABSENT env var; this check also catches a blank-string value pydantic-settings would
         # otherwise accept, making the mouth's dependency explicit at wiring time.
-        if not config.deepseek_api_key.get_secret_value():
+        if not config.deepseek_api_key.get_secret_value().strip():
             msg = "ComposeStage: DEEPSEEK_API_KEY is missing/blank; the mouth cannot be wired"
             raise ConfigurationError(msg)
         self._template_composer = template_composer

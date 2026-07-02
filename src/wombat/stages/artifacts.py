@@ -21,6 +21,14 @@ queue internals may cross it. This is a structural enforcement of the "the model
 see user-facing content" non_goal, not just prompt-construction discipline.
 ``composed_output_to_artifact_data`` / ``composed_output_from_artifact_data`` are the same
 convention applied to ``ComposeStage``'s own terminal output.
+
+``surfaced_item_to_artifact_data`` / ``surfaced_item_from_artifact_data`` (TK-10, Q-51) define the
+NEW single-item ``wombat.surfaced_item`` wire — ``review_or_speak`` (TK-7) single-izes a mixed
+hold/surface ``wombat.gate_decisions`` batch down to ONE forwarded ``{action, scored_item,
+queue_item}`` entry (the same shape as one ``GateDecisionEntry`` element, plus its action) and
+will produce this wire later through these same helpers (the TK-8/TK-10 pre-definition pattern);
+``ComposeDispatchRouter`` (TK-10) is the first consumer, reading it via
+``ctx.last_output("review_or_speak")``. JSON-native + ``json.dumps`` round-trip per Q-49.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ DRAIN_HEARTBEAT = "wombat.drain_heartbeat"
 GATE_DECISIONS = "wombat.gate_decisions"
 COMPOSE_REQUEST = "wombat.compose_request"
 COMPOSED_OUTPUT = "wombat.composed_output"
+SURFACED_ITEM = "wombat.surfaced_item"
 
 # One gate decision paired with the original queue item it was derived from (TK-7 acks holds off
 # the carried queue_item dict, so the pairing travels together through the wire helpers).
@@ -134,12 +143,47 @@ def composed_output_from_artifact_data(data: dict[str, Any]) -> tuple[str, str, 
     return data["text"], data["item_id"], ItemKind(data["item_kind"]), data["degraded"]
 
 
+def surfaced_item_to_artifact_data(
+    action: GateAction, scored_item: ScoredItem, queue_item: QueueItem
+) -> dict[str, Any]:
+    """Serialize ONE surfaced gate entry into an Artifact ``data`` payload (TK-10, Q-51).
+
+    ``{"action": <GateAction .value>, "scored_item": <ScoredItem asdict, item_kind as .value>,
+    "queue_item": <QueueItem asdict>}`` — the single-item wire ``review_or_speak`` (TK-7) produces
+    once it single-izes a gate-decisions batch; ``ComposeDispatchRouter`` (TK-10) is the first
+    consumer. Mirrors the ``gate_decisions_to_artifact_data`` per-entry shape exactly.
+    """
+    scored_dict = asdict(scored_item)
+    scored_dict["item_kind"] = scored_item.item_kind.value
+    return {
+        "action": action.value,
+        "scored_item": scored_dict,
+        "queue_item": asdict(queue_item),
+    }
+
+
+def surfaced_item_from_artifact_data(
+    data: dict[str, Any],
+) -> tuple[GateAction, ScoredItem, QueueItem]:
+    """The inverse of ``surfaced_item_to_artifact_data`` — the ONLY path back (TK-10, Q-51)."""
+    scored_raw = data["scored_item"]
+    scored_item = ScoredItem(
+        item_id=scored_raw["item_id"],
+        item_kind=ItemKind(scored_raw["item_kind"]),
+        urgency=scored_raw["urgency"],
+        load=scored_raw["load"],
+    )
+    queue_item = QueueItem(**data["queue_item"])
+    return GateAction(data["action"]), scored_item, queue_item
+
+
 __all__ = [
     "COMPOSED_OUTPUT",
     "COMPOSE_REQUEST",
     "DRAINED_BATCH",
     "DRAIN_HEARTBEAT",
     "GATE_DECISIONS",
+    "SURFACED_ITEM",
     "GateDecisionEntry",
     "compose_request_from_artifact_data",
     "compose_request_to_artifact_data",
@@ -149,4 +193,6 @@ __all__ = [
     "gate_decisions_to_artifact_data",
     "queue_items_from_artifact_data",
     "queue_items_to_artifact_data",
+    "surfaced_item_from_artifact_data",
+    "surfaced_item_to_artifact_data",
 ]

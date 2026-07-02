@@ -182,6 +182,16 @@ def test_ac3_blank_deepseek_api_key_raises_configuration_error_at_construction()
         ComposeStage(config=blank_config, template_composer=TemplateComposer())
 
 
+# --- TK-10 whitespace RIDER (Q-51/v0.47): a whitespace-only key must ALSO raise at construction ---
+
+
+def test_whitespace_only_deepseek_api_key_raises_configuration_error_at_construction() -> None:
+    whitespace_config = _config(api_key="   ")
+
+    with pytest.raises(ConfigurationError):
+        ComposeStage(config=whitespace_config, template_composer=TemplateComposer())
+
+
 # --- ComposeStage touches no ctx member beyond model/last_output/clock ---------------------------
 
 
