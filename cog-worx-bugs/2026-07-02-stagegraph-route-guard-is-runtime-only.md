@@ -39,6 +39,12 @@ cogworx.loop.graph.StageGraphError: stage 'drain_queue' returned a result routin
 ## Workaround in place? (optional)
 Yes. wombat now (1) declares every stage's `transitions` to include its Wait-to-self edge, and (2) adopted a convention that any stage with a Wait/self-park branch MUST have at least one real-Engine/StageGraph route-check test (stage-level fakes are insufficient). This caught and fixed the bug, but the convention is a wombat-side guard against a framework sharp edge.
 
+## Proposed change (wombat's suggestion — apply/adapt as you see fit)
+`Transition.to`/`Wait.to` are runtime-constructed, so full static verification isn't possible — but the class of bug (a stage returns a destination not in its declared edges) can be surfaced far earlier than "first time that branch runs under a real Engine." Two low-cost, additive options:
+1. **A `cogworx.testing` route-exhaustion helper** — e.g. `assert_routes_declared(stage_graph)` / a pytest fixture that, for each stage, checks any obvious self-park pattern and (where feasible) drives result branches through the guard so stage-level unit suites catch undeclared edges without hand-wiring a real Engine. This is the most direct fix for the "191 green tests missed it" gap.
+2. **A docstring hardening on `Stage.transitions`** stating explicitly: *"MUST include every destination `run()` can return, including a Wait-to-self re-park edge"* — cheap, and would have prevented this outright.
+(A build-time `StageGraph.validate()` can't fully catch runtime-constructed `.to`, so #1 — exercising the branches in tests — is the higher-value one.)
+
 ---
 --- cog-worx fills below ---
 

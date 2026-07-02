@@ -33,6 +33,34 @@ Not a bug — a missing testing-ergonomics capability. `FakeModel` already exist
 ## Workaround in place? (optional)
 Yes — `tests/support/stage_context_fake.py` in the wombat repo, reused across all stage tests. No urgency; purely ergonomic. If cog-worx ships an official one with a compatible shape, wombat would adopt it and delete the local fake.
 
+## Proposed change (wombat's suggestion — apply/adapt as you see fit)
+Add a `FakeStageContext` to `cogworx/testing/doubles.py` (or a new `cogworx/testing/stage_context.py`) shaped like the fake wombat had to write. The key ergonomics: raise `NotImplementedError` on every member by default (so a stage touching an unexpected ctx member fails loud in tests), with the common ones injectable. Sketch:
+```python
+# cogworx/testing/stage_context.py
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from cogworx.claims.provenance import Artifact
+
+class FakeStageContext:  # duck-satisfies loop.stage.StageContext
+    def __init__(self, *, clock: Callable[[], datetime],
+                 last_output: Mapping[str, Artifact] | None = None,
+                 model=None, run_id="test-run", session_id="test-session"):
+        self.run_id, self.session_id = run_id, session_id
+        self._clock, self._last = clock, dict(last_output or {})
+        self._model = model
+    @property
+    def clock(self): return self._clock
+    @property
+    def model(self):
+        if self._model is None: raise NotImplementedError("model not configured on FakeStageContext")
+        return self._model
+    async def last_output(self, stage_name):  # PULL accessor
+        return self._last.get(stage_name)
+    # budget/journal/graph/latent/emit/dispatch/read_human_input/recall/
+    # assemble_context/bind_context_policy -> raise NotImplementedError by default
+```
+Pairs naturally with the existing `cogworx.testing.fake_model.FakeModel` for the `model` slot. A one-line note in a `cogworx/testing` index of available doubles would also fix the discoverability gap mentioned above.
+
 ---
 --- cog-worx fills below ---
 
