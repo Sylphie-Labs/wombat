@@ -40,7 +40,10 @@ class DrainQueueStage:
     """Pulls up to ``batch_size`` items off the injected queue each cycle."""
 
     name: str = "drain_queue"
-    transitions: tuple[str, ...] = ("gate",)
+    # Both real edges MUST be declared so a real-Engine route guard accepts BOTH results this
+    # stage returns: Transition(to="gate") on a non-empty drain AND Wait(to="drain_queue") (self)
+    # on an empty queue (the idle heartbeat re-parks the stage on itself, DEC-8). Q-53 rider.
+    transitions: tuple[str, ...] = ("gate", "drain_queue")
 
     def __init__(
         self,

@@ -161,7 +161,7 @@ def test_build_drain_pathway_wires_drain_queue_stage_to_its_declared_transition(
 
     assert isinstance(graph, StageGraph)
     assert graph.entry == "drain_queue"
-    assert graph.transitions_from("drain_queue") == ("gate",)
+    assert graph.transitions_from("drain_queue") == ("gate", "drain_queue")
     assert graph.is_terminal("gate")
 
 

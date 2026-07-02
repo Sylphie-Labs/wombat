@@ -29,6 +29,13 @@ queue_item}`` entry (the same shape as one ``GateDecisionEntry`` element, plus i
 will produce this wire later through these same helpers (the TK-8/TK-10 pre-definition pattern);
 ``ComposeDispatchRouter`` (TK-10) is the first consumer, reading it via
 ``ctx.last_output("review_or_speak")``. JSON-native + ``json.dumps`` round-trip per Q-49.
+
+``hold_report_to_artifact_data`` / ``hold_report_from_artifact_data`` (TK-7, Q-52) define
+``ReviewOrSpeakStage``'s OTHER terminal wire, ``wombat.hold_report`` — ``{"holds": [{"item_id",
+"item_kind", "reason", "urgency", "load"}, ...]}``. Each hold dict is already plain-JSON-native
+(the stage builds it directly from a ``ScoredItem`` + its stub reason string), so the helpers are a
+thin, lossless identity-shaped pair — kept for the same reason every other wire has one: a single
+named seam future callers can mock/round-trip against instead of hand-parsing ``Artifact.data``.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ GATE_DECISIONS = "wombat.gate_decisions"
 COMPOSE_REQUEST = "wombat.compose_request"
 COMPOSED_OUTPUT = "wombat.composed_output"
 SURFACED_ITEM = "wombat.surfaced_item"
+HOLD_REPORT = "wombat.hold_report"
 
 # One gate decision paired with the original queue item it was derived from (TK-7 acks holds off
 # the carried queue_item dict, so the pairing travels together through the wire helpers).
@@ -177,12 +185,29 @@ def surfaced_item_from_artifact_data(
     return GateAction(data["action"]), scored_item, queue_item
 
 
+def hold_report_to_artifact_data(holds: list[dict[str, Any]]) -> dict[str, Any]:
+    """Serialize a batch of hold records into an Artifact ``data`` payload (TK-7, Q-52).
+
+    ``{"holds": [{"item_id", "item_kind", "reason", "urgency", "load"}, ...]}`` — each dict is
+    ALREADY plain-JSON-native (built directly by ``ReviewOrSpeakStage`` from a ``ScoredItem`` +
+    its stub reason string), so this is a thin identity wrapper kept for wire-helper symmetry
+    with every other stage boundary (Q-47 principle: never hand-parse ``Artifact.data``).
+    """
+    return {"holds": holds}
+
+
+def hold_report_from_artifact_data(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """The inverse of ``hold_report_to_artifact_data`` — the ONLY path back (TK-7, Q-52)."""
+    return list(data["holds"])
+
+
 __all__ = [
     "COMPOSED_OUTPUT",
     "COMPOSE_REQUEST",
     "DRAINED_BATCH",
     "DRAIN_HEARTBEAT",
     "GATE_DECISIONS",
+    "HOLD_REPORT",
     "SURFACED_ITEM",
     "GateDecisionEntry",
     "compose_request_from_artifact_data",
@@ -191,6 +216,8 @@ __all__ = [
     "composed_output_to_artifact_data",
     "gate_decisions_from_artifact_data",
     "gate_decisions_to_artifact_data",
+    "hold_report_from_artifact_data",
+    "hold_report_to_artifact_data",
     "queue_items_from_artifact_data",
     "queue_items_to_artifact_data",
     "surfaced_item_from_artifact_data",
