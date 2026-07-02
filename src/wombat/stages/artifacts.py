@@ -12,6 +12,15 @@ helper, never a hand-rolled dict-unpack, so read and write cannot drift (Q-41 wi
 principle). ``gate_decisions_to_artifact_data`` / ``gate_decisions_from_artifact_data`` are the
 same convention applied to the gate's own output (Q-48): each entry carries the ORIGINAL Q-47
 queue-item dict alongside the decision so TK-7 can ack holds without a second lookup.
+
+``compose_request_to_artifact_data`` / ``compose_request_from_artifact_data`` (TK-8, Q-50) define
+the ``ComposeStage`` input wire NOW so TK-10 (the not-yet-built ``compose_dispatch`` stage) can
+produce it later with zero rework. The wire is deliberately narrow: ``item_id``, ``item_kind``
+(as its ``.value``), and the user-facing ``payload`` dict ONLY — no scores, no ``GateAction``, no
+queue internals may cross it. This is a structural enforcement of the "the model may only ever
+see user-facing content" non_goal, not just prompt-construction discipline.
+``composed_output_to_artifact_data`` / ``composed_output_from_artifact_data`` are the same
+convention applied to ``ComposeStage``'s own terminal output.
 """
 
 from __future__ import annotations
@@ -25,6 +34,8 @@ from wombat.queue import QueueItem
 DRAINED_BATCH = "wombat.drained_batch"
 DRAIN_HEARTBEAT = "wombat.drain_heartbeat"
 GATE_DECISIONS = "wombat.gate_decisions"
+COMPOSE_REQUEST = "wombat.compose_request"
+COMPOSED_OUTPUT = "wombat.composed_output"
 
 # One gate decision paired with the original queue item it was derived from (TK-7 acks holds off
 # the carried queue_item dict, so the pairing travels together through the wire helpers).
@@ -84,11 +95,56 @@ def gate_decisions_from_artifact_data(data: dict[str, Any]) -> list[GateDecision
     return entries
 
 
+def compose_request_to_artifact_data(
+    item_id: str, item_kind: ItemKind, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Serialize a single compose request into an Artifact ``data`` payload (TK-8, Q-50).
+
+    ``{"item_id", "item_kind": <ItemKind .value string>, "payload"}`` — ONE surfaced item per
+    compose invocation. NO scores, NO ``GateAction``, NO queue internals: the model may only ever
+    see the fields that cross this wire.
+    """
+    return {"item_id": item_id, "item_kind": item_kind.value, "payload": payload}
+
+
+def compose_request_from_artifact_data(
+    data: dict[str, Any],
+) -> tuple[str, ItemKind, dict[str, Any]]:
+    """The inverse of ``compose_request_to_artifact_data`` — the ONLY path back (TK-8, Q-50)."""
+    return data["item_id"], ItemKind(data["item_kind"]), data["payload"]
+
+
+def composed_output_to_artifact_data(
+    text: str, item_id: str, item_kind: ItemKind, degraded: bool
+) -> dict[str, Any]:
+    """Serialize ``ComposeStage``'s terminal output into an Artifact ``data`` payload (TK-8, Q-50).
+
+    ``{"text", "item_id", "item_kind": <ItemKind .value string>, "degraded"}``.
+    """
+    return {
+        "text": text,
+        "item_id": item_id,
+        "item_kind": item_kind.value,
+        "degraded": degraded,
+    }
+
+
+def composed_output_from_artifact_data(data: dict[str, Any]) -> tuple[str, str, ItemKind, bool]:
+    """The inverse of ``composed_output_to_artifact_data`` — the ONLY path back (TK-8, Q-50)."""
+    return data["text"], data["item_id"], ItemKind(data["item_kind"]), data["degraded"]
+
+
 __all__ = [
+    "COMPOSED_OUTPUT",
+    "COMPOSE_REQUEST",
     "DRAINED_BATCH",
     "DRAIN_HEARTBEAT",
     "GATE_DECISIONS",
     "GateDecisionEntry",
+    "compose_request_from_artifact_data",
+    "compose_request_to_artifact_data",
+    "composed_output_from_artifact_data",
+    "composed_output_to_artifact_data",
     "gate_decisions_from_artifact_data",
     "gate_decisions_to_artifact_data",
     "queue_items_from_artifact_data",
