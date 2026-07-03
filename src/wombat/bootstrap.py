@@ -60,6 +60,7 @@ from .queue import WombatQueue
 from .sources.bootstrap import build_source_registry
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
+from .stages.brief_compose_stage import BriefComposeStage
 from .stages.compose import ComposeStage
 from .stages.compose_dispatch_router import ComposeDispatchRouter
 from .stages.drain_queue import DrainQueueStage
@@ -174,6 +175,30 @@ def build_compose_stage(
     return ComposeStage(
         config=config,
         template_composer=TemplateComposer(),
+        spend_ledger=spend_ledger,
+        daily_token_ceiling=op.mouth_daily_token_ceiling,
+    )
+
+
+def build_brief_compose_stage(
+    *,
+    config: WombatConfig,
+    dsn: str,
+    params: OperatingParams | None = None,
+    tz: ZoneInfo = _UTC_ZONE,
+) -> BriefComposeStage:
+    """Assemble the morning brief's ``BriefComposeStage`` wired with the SAME TK-9 layer 2 budget
+    plumbing as ``build_compose_stage``: a real ``DailySpendLedger`` over a ``DailyLedger`` on the
+    SAME ``dsn``/``tz`` and the SAME ``"spend:tokens"`` ledger row, plus the
+    ``mouth_daily_token_ceiling`` tunable from OperatingParams — so drain and brief share ONE
+    daily token cap rather than each hand-rolling its own (the Q-69-lesson wiring, TK-53).
+    """
+    op = params if params is not None else load_operating_params()
+    daily_ledger = DailyLedger(dsn, tz=tz)
+    spend_ledger = DailySpendLedger(daily_ledger)
+    return BriefComposeStage(
+        config=config,
+        tz=tz,
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
     )

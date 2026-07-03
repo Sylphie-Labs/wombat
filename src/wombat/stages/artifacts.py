@@ -71,6 +71,8 @@ HOLD_REPORT = "wombat.hold_report"
 BRIEF_PAYLOAD = "wombat.brief_payload"
 # TK-99: BriefForceFlushStage's terminal wire kind (Q-75) — a sealed BriefDecisionArtifact.
 BRIEF_DECISION = "wombat.brief_decision"
+# TK-100: BriefComposeStage's terminal wire kind (Q-77) — the rendered BriefText.
+BRIEF_TEXT = "wombat.brief_text"
 
 # One gate decision paired with the original queue item it was derived from (TK-7 acks holds off
 # the carried queue_item dict, so the pairing travels together through the wire helpers).
@@ -246,9 +248,27 @@ def hold_report_from_artifact_data(data: dict[str, Any]) -> list[dict[str, Any]]
     return list(data["holds"])
 
 
+def brief_text_to_artifact_data(text: str, degraded: bool, tokens_spent: int) -> dict[str, Any]:
+    """Serialize ``BriefComposeStage``'s terminal output into an Artifact ``data`` payload
+    (TK-100, Q-77).
+
+    ``{"text", "degraded", "tokens_spent"}`` — ``tokens_spent`` is always an ``int`` (unlike
+    ``ComposeStage``'s optional field): ``0`` on any degrade path (a fallback-without-a-call, or
+    a call whose spend was never accounted), the real prompt+completion token count on a
+    successful, non-degraded call.
+    """
+    return {"text": text, "degraded": degraded, "tokens_spent": tokens_spent}
+
+
+def brief_text_from_artifact_data(data: dict[str, Any]) -> tuple[str, bool, int]:
+    """The inverse of ``brief_text_to_artifact_data`` — the ONLY path back (TK-100, Q-77)."""
+    return data["text"], data["degraded"], data["tokens_spent"]
+
+
 __all__ = [
     "BRIEF_DECISION",
     "BRIEF_PAYLOAD",
+    "BRIEF_TEXT",
     "COMPOSED_OUTPUT",
     "COMPOSE_REQUEST",
     "DRAINED_BATCH",
@@ -257,6 +277,8 @@ __all__ = [
     "HOLD_REPORT",
     "SURFACED_ITEM",
     "GateDecisionEntry",
+    "brief_text_from_artifact_data",
+    "brief_text_to_artifact_data",
     "compose_request_from_artifact_data",
     "compose_request_to_artifact_data",
     "composed_output_from_artifact_data",

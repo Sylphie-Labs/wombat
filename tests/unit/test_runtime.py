@@ -243,6 +243,19 @@ def test_ac3_build_compose_stage_carries_a_non_none_spend_ledger() -> None:
     assert compose_stage._spend_ledger is not None
 
 
+# --- TK-100: build_brief_compose_stage mirrors build_compose_stage's budget-live wiring ---------
+
+
+def test_build_brief_compose_stage_carries_a_non_none_spend_ledger_and_same_ceiling() -> None:
+    op = load_operating_params()
+    brief_compose_stage = bootstrap.build_brief_compose_stage(
+        config=_config(), dsn=_FAKE_DSN, params=op
+    )
+
+    assert brief_compose_stage._spend_ledger is not None
+    assert brief_compose_stage._daily_token_ceiling == op.mouth_daily_token_ceiling
+
+
 # --- AC4: assemble_runtime registers the pathway + wires the real PG PendingJournal ------------
 
 
