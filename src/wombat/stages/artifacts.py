@@ -73,6 +73,9 @@ BRIEF_PAYLOAD = "wombat.brief_payload"
 BRIEF_DECISION = "wombat.brief_decision"
 # TK-100: BriefComposeStage's terminal wire kind (Q-77) — the rendered BriefText.
 BRIEF_TEXT = "wombat.brief_text"
+# TK-101: BriefDeliverStage's terminal wire kind (Q-78) — delivery record, the FINAL stage of the
+# morning-brief cluster.
+BRIEF_DELIVERED = "wombat.brief_delivered"
 
 # One gate decision paired with the original queue item it was derived from (TK-7 acks holds off
 # the carried queue_item dict, so the pairing travels together through the wire helpers).
@@ -265,8 +268,29 @@ def brief_text_from_artifact_data(data: dict[str, Any]) -> tuple[str, bool, int]
     return data["text"], data["degraded"], data["tokens_spent"]
 
 
+def brief_delivered_to_artifact_data(
+    delivered_at: str, voice_spoken: bool, replay: bool
+) -> dict[str, Any]:
+    """Serialize ``BriefDeliverStage``'s terminal output into an Artifact ``data`` payload
+    (TK-101, Q-78).
+
+    ``{"delivered_at", "voice_spoken", "replay"}`` — ``delivered_at`` is the tz-local (DEC-21
+    canonical tz) ISO timestamp string embedded in the appended sink header; ``voice_spoken`` is
+    ``True`` only when ``speak()`` was actually called and succeeded THIS run; ``replay`` is
+    ``True`` when the run-id marker was already present in the sink (intra-run crash-replay,
+    AC4) — the append/echo/speak were all skipped.
+    """
+    return {"delivered_at": delivered_at, "voice_spoken": voice_spoken, "replay": replay}
+
+
+def brief_delivered_from_artifact_data(data: dict[str, Any]) -> tuple[str, bool, bool]:
+    """The inverse of ``brief_delivered_to_artifact_data`` — the ONLY path back (TK-101, Q-78)."""
+    return data["delivered_at"], data["voice_spoken"], data["replay"]
+
+
 __all__ = [
     "BRIEF_DECISION",
+    "BRIEF_DELIVERED",
     "BRIEF_PAYLOAD",
     "BRIEF_TEXT",
     "COMPOSED_OUTPUT",
@@ -277,6 +301,8 @@ __all__ = [
     "HOLD_REPORT",
     "SURFACED_ITEM",
     "GateDecisionEntry",
+    "brief_delivered_from_artifact_data",
+    "brief_delivered_to_artifact_data",
     "brief_text_from_artifact_data",
     "brief_text_to_artifact_data",
     "compose_request_from_artifact_data",

@@ -77,3 +77,16 @@ def test_deepseek_profile_registered_as_spec_no_model_built() -> None:
 
 def test_module_exposes_build_engine() -> None:
     assert callable(bootstrap.build_engine)
+
+
+# --- TK-101: WOMBAT_BRIEF_PATH / WOMBAT_VOICE_ENABLED are OPTIONAL -------------------------------
+
+
+def test_wombat_config_boots_without_brief_path_or_voice_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WOMBAT_BRIEF_PATH", raising=False)
+    monkeypatch.delenv("WOMBAT_VOICE_ENABLED", raising=False)
+    config = _config()  # must not raise -- neither is in REQUIRED_ENV
+    assert config.wombat_brief_path is None
+    assert config.wombat_voice_enabled is False

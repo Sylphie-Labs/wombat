@@ -27,8 +27,10 @@ registers nothing (the ticket's own non_goal).
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from cogworx.capability.registry import Registry
@@ -45,7 +47,7 @@ from cogworx.substrate.journal import Journal
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .compose.templates import TemplateComposer
-from .config import WombatConfig, load_config
+from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
 from .domain.daily_ledger import DailyLedger
 from .gate.ceiling import CeilingLedger
@@ -61,6 +63,7 @@ from .sources.bootstrap import build_source_registry
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
 from .stages.brief_compose_stage import BriefComposeStage
+from .stages.brief_deliver_stage import BriefDeliverStage
 from .stages.compose import ComposeStage
 from .stages.compose_dispatch_router import ComposeDispatchRouter
 from .stages.drain_queue import DrainQueueStage
@@ -201,6 +204,35 @@ def build_brief_compose_stage(
         tz=tz,
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
+    )
+
+
+def build_brief_deliver_stage(
+    *,
+    config: WombatConfig,
+    tz: ZoneInfo = _UTC_ZONE,
+    speak: Callable[[str], None] | None = None,
+) -> BriefDeliverStage:
+    """Assemble the morning brief's terminal ``BriefDeliverStage`` (TK-101, Q-78).
+
+    Resolves the append-only text-sink path from ``config.wombat_brief_path``; a blank/absent
+    path fails LOUD at construction (``ConfigurationError`` naming it) rather than wiring a
+    stage that would raise on its first delivery. ``config.wombat_voice_enabled`` gates voice;
+    ``speak`` is the injected voice sink (EP-30 narrowed) — passed through untouched, ``None`` by
+    default so callers that never wire a voice provider get text-only delivery.
+    """
+    raw_path = config.wombat_brief_path
+    if raw_path is None or not raw_path.strip():
+        msg = (
+            "build_brief_deliver_stage: WOMBAT_BRIEF_PATH is missing/blank; "
+            "the sink cannot be wired"
+        )
+        raise ConfigurationError(msg)
+    return BriefDeliverStage(
+        sink_path=Path(raw_path),
+        tz=tz,
+        voice_enabled=config.wombat_voice_enabled,
+        speak=speak,
     )
 
 

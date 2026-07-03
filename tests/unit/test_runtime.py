@@ -23,6 +23,7 @@ import asyncio
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -42,7 +43,7 @@ from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap, runtime
 from wombat.bootstrap import RuntimeBundle
 from wombat.compose.templates import TemplateComposer
-from wombat.config import WombatConfig
+from wombat.config import ConfigurationError, WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
 from wombat.gate.models import ItemKind
 from wombat.gate.pending_journal_pg import PgPendingJournal
@@ -254,6 +255,41 @@ def test_build_brief_compose_stage_carries_a_non_none_spend_ledger_and_same_ceil
 
     assert brief_compose_stage._spend_ledger is not None
     assert brief_compose_stage._daily_token_ceiling == op.mouth_daily_token_ceiling
+
+
+# --- TK-101: build_brief_deliver_stage wiring ----------------------------------------------------
+
+
+def _config_with_brief_path(path: str) -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_brief_path=path,
+    )
+
+
+def test_build_brief_deliver_stage_with_configured_path_returns_a_stage(tmp_path: Path) -> None:
+    sink = tmp_path / "brief.txt"
+    config = _config_with_brief_path(str(sink))
+
+    stage = bootstrap.build_brief_deliver_stage(config=config)
+
+    assert stage.name == "brief_deliver"
+    assert stage.transitions == ()
+
+
+def test_build_brief_deliver_stage_blank_path_raises_configuration_error() -> None:
+    config = _config_with_brief_path("")
+
+    with pytest.raises(ConfigurationError):
+        bootstrap.build_brief_deliver_stage(config=config)
+
+
+def test_build_brief_deliver_stage_none_path_raises_configuration_error() -> None:
+    config = _config()  # wombat_brief_path defaults to None
+
+    with pytest.raises(ConfigurationError):
+        bootstrap.build_brief_deliver_stage(config=config)
 
 
 # --- AC4: assemble_runtime registers the pathway + wires the real PG PendingJournal ------------

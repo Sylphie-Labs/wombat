@@ -46,6 +46,14 @@ class WombatConfig(BaseSettings):
     # it and fails loud (``ConfigurationError`` naming it) before starting.
     wombat_pg_dsn: str | None = None
 
+    # OPTIONAL (TK-101, Q-78): the morning brief's text-sink append-only file path and whether
+    # voice delivery is enabled. Deliberately NOT in REQUIRED_ENV — the drain spine/demo/tests
+    # must keep booting without them; ``bootstrap.build_brief_deliver_stage`` requires a
+    # non-blank ``wombat_brief_path`` and fails loud (``ConfigurationError`` naming it) at
+    # construction.
+    wombat_brief_path: str | None = None
+    wombat_voice_enabled: bool = False
+
 
 def load_config() -> WombatConfig:
     """Load + validate config from the environment, or raise ConfigurationError loudly."""
