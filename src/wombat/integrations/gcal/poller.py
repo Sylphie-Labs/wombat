@@ -134,25 +134,39 @@ class CalendarPoller:
         """No lifecycle teardown needed."""
         return None
 
+    def fetch_window(self, *, lookahead_hours: float | None = None) -> list[CalendarEvent]:
+        """Fetch events in ``[now, now + lookahead_hours)`` — the RAISING read seam (TK-98).
+
+        ``lookahead_hours`` defaults to the ctor's ``lookahead_hours`` when omitted (``None``).
+        Unlike ``poll()``, this method does NOT catch anything: a network error, an HTTP
+        401/403/5xx, or a malformed response body all propagate to the caller as-is. This lets
+        a caller (e.g. ``BriefGatherStage``, TK-98) distinguish "source unavailable" from "zero
+        events" — something a swallowed-to-``[]`` result cannot. ``poll()`` below is the
+        transient-error-tolerant wrapper around this method (ruling 4 unchanged).
+        """
+        hours = self._lookahead_hours if lookahead_hours is None else lookahead_hours
+        now = self._clock()
+        params = {
+            "timeMin": _rfc3339(now),
+            "timeMax": _rfc3339(now + timedelta(hours=hours)),
+            "singleEvents": "true",
+            "orderBy": "startTime",
+        }
+        response = self._session.get(_EVENTS_URL, params=params, timeout=_REQUEST_TIMEOUT_S)
+        response.raise_for_status()
+        items = response.json()["items"]
+        return [_parse_event(raw, tz=self._tz) for raw in items]
+
     async def poll(self) -> list[SourceEvent]:
         """Fetch events in ``[now, now + lookahead_hours)`` and yield them as ``SourceEvent``s.
 
         NEVER raises (ruling 4): a network error, an HTTP 401/403/5xx, or a malformed response
         body are all logged as a WARNING naming this source's id and degrade to ``[]`` — the
         registry keeps polling this source on the next cycle instead of marking it degraded.
+        A thin wrapper around the RAISING ``fetch_window`` (TK-98) — behavior-preserving.
         """
-        now = self._clock()
-        params = {
-            "timeMin": _rfc3339(now),
-            "timeMax": _rfc3339(now + timedelta(hours=self._lookahead_hours)),
-            "singleEvents": "true",
-            "orderBy": "startTime",
-        }
         try:
-            response = self._session.get(_EVENTS_URL, params=params, timeout=_REQUEST_TIMEOUT_S)
-            response.raise_for_status()
-            items = response.json()["items"]
-            events = [_parse_event(raw, tz=self._tz) for raw in items]
+            events = self.fetch_window()
         except requests.exceptions.RequestException:
             logger.warning(
                 "gcal source %r: Calendar API request failed (network/auth/server error) — "

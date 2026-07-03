@@ -289,3 +289,57 @@ async def test_ac3_same_event_two_polls_identical_key_single_admission_via_regis
 
     assert len(enqueuer.admitted) == 1
     assert enqueuer.admitted[0].idempotency_key == derive_key("gcal", "evt-dup")
+
+
+# ------------------------------------------------------------------------------------- TK-98
+#
+# ``fetch_window`` is the RAISING read seam ``poll()`` wraps (TK-98, Q-74): every transient/
+# malformed condition ``poll()`` degrades to ``[]`` on must actually PROPAGATE out of
+# ``fetch_window`` uncaught, so a caller (``BriefGatherStage``) can distinguish "source
+# unavailable" from "zero events". ``poll()`` itself must still degrade to ``[]`` unchanged
+# (the existing AC2 test above already proves this at the ``poll()`` level; the second test
+# below re-proves it directly against the now-extracted ``fetch_window`` seam).
+
+
+@pytest.mark.parametrize(
+    ("make_session", "expected_exception"),
+    [
+        (_connection_error_session, requests.exceptions.ConnectionError),
+        (lambda: _http_error_session(401), requests.exceptions.HTTPError),
+        (lambda: _http_error_session(403), requests.exceptions.HTTPError),
+        (lambda: _http_error_session(500), requests.exceptions.HTTPError),
+        (lambda: _http_error_session(503), requests.exceptions.HTTPError),
+        (_malformed_missing_items_session, KeyError),
+        (_malformed_bad_interval_session, ValueError),
+    ],
+    ids=[
+        "connection_error",
+        "http_401",
+        "http_403",
+        "http_500",
+        "http_503",
+        "malformed_missing_items_key",
+        "malformed_bad_interval",
+    ],
+)
+def test_fetch_window_raises_on_every_condition_poll_swallows(
+    make_session: Callable[[], _FakeSession], expected_exception: type[Exception]
+) -> None:
+    session = make_session()
+    poller = CalendarPoller(
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(expected_exception):
+        poller.fetch_window()
+
+
+async def test_poll_still_degrades_to_empty_via_the_extracted_fetch_window() -> None:
+    session = _connection_error_session()
+    poller = CalendarPoller(
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    result = await poller.poll()  # MUST NOT raise, even though fetch_window() would
+
+    assert result == []

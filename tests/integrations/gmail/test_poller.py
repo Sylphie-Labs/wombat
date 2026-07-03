@@ -412,3 +412,59 @@ async def test_ac4_same_message_two_polls_identical_key_single_admission_via_reg
 
     assert len(enqueuer.admitted) == 1
     assert enqueuer.admitted[0].idempotency_key == derive_key("gmail", "msg-dup")
+
+
+# ------------------------------------------------------------------------------------- TK-98
+#
+# ``fetch_recent`` is the RAISING read seam ``poll()`` wraps (TK-98, Q-74): every transient/
+# malformed condition ``poll()`` degrades to ``[]`` on must actually PROPAGATE out of
+# ``fetch_recent`` uncaught, so a caller (``BriefGatherStage``) can distinguish "source
+# unavailable" from "zero messages". ``poll()`` itself must still degrade to ``[]`` unchanged
+# (the existing AC4 test above already proves this at the ``poll()`` level; the second test
+# below re-proves it directly against the now-extracted ``fetch_recent`` seam).
+
+
+@pytest.mark.parametrize(
+    ("make_session", "expected_exception"),
+    [
+        (_connection_error_session, requests.exceptions.ConnectionError),
+        (lambda: _http_error_session(401), requests.exceptions.HTTPError),
+        (lambda: _http_error_session(403), requests.exceptions.HTTPError),
+        (lambda: _http_error_session(500), requests.exceptions.HTTPError),
+        (lambda: _http_error_session(503), requests.exceptions.HTTPError),
+        (_malformed_missing_payload_session, KeyError),
+        (_malformed_bad_internal_date_session, ValueError),
+        (_per_message_get_error_session, requests.exceptions.HTTPError),
+    ],
+    ids=[
+        "connection_error",
+        "http_401",
+        "http_403",
+        "http_500",
+        "http_503",
+        "malformed_missing_payload_key",
+        "malformed_bad_internal_date",
+        "per_message_get_error",
+    ],
+)
+def test_fetch_recent_raises_on_every_condition_poll_swallows(
+    make_session: Callable[[], _FakeSession], expected_exception: type[Exception]
+) -> None:
+    session = make_session()
+    poller = GmailPoller(
+        session=session, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(expected_exception):
+        poller.fetch_recent()
+
+
+async def test_poll_still_degrades_to_empty_via_the_extracted_fetch_recent() -> None:
+    session = _connection_error_session()
+    poller = GmailPoller(
+        session=session, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    result = await poller.poll()  # MUST NOT raise, even though fetch_recent() would
+
+    assert result == []

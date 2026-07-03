@@ -188,6 +188,44 @@ class GmailPoller:
         """No lifecycle teardown needed."""
         return None
 
+    def fetch_recent(self, *, lookback_hours: float | None = None) -> list[GmailMessageItem]:
+        """Fetch inbox messages received in the last ``lookback_hours`` — the RAISING read seam
+        (TK-98).
+
+        ``lookback_hours`` defaults to the ctor's ``lookback_hours`` when omitted (``None``).
+        Unlike ``poll()``, this method does NOT catch anything: a network error, an HTTP
+        401/403/5xx, or a malformed response body (at either the list or per-message fetch) all
+        propagate to the caller as-is. This lets a caller (e.g. ``BriefGatherStage``, TK-98)
+        distinguish "source unavailable" from "zero messages" — something a swallowed-to-``[]``
+        result cannot. ``poll()`` below is the transient-error-tolerant wrapper around this
+        method (ruling 5 unchanged).
+        """
+        hours = self._lookback_hours if lookback_hours is None else lookback_hours
+        now = self._clock()
+        after_epoch = int((now - timedelta(hours=hours)).timestamp())
+        params = {"q": f"in:inbox after:{after_epoch}", "maxResults": "100"}
+        list_response = self._session.get(
+            _MESSAGES_LIST_URL, params=params, timeout=_REQUEST_TIMEOUT_S
+        )
+        list_response.raise_for_status()
+        list_body = list_response.json()
+        if list_body.get("nextPageToken"):
+            logger.warning(
+                "gmail source %r: list response has more pages (nextPageToken present) — "
+                "wake-burst bounding is TK-28's job; NOT paginating this poll",
+                self.id,
+            )
+        message_refs = list_body.get("messages") or []
+        items: list[GmailMessageItem] = []
+        for ref in message_refs:
+            message_id = ref["id"]
+            msg_response = self._session.get(
+                _message_url(message_id), params={"format": "full"}, timeout=_REQUEST_TIMEOUT_S
+            )
+            msg_response.raise_for_status()
+            items.append(_parse_message(msg_response.json()))
+        return items
+
     async def poll(self) -> list[SourceEvent]:
         """Fetch inbox messages received in the last ``lookback_hours`` and yield them as
         ``SourceEvent``s.
@@ -195,32 +233,11 @@ class GmailPoller:
         NEVER raises (ruling 5): a network error, an HTTP 401/403/5xx, or a malformed response
         body (at either the list or per-message fetch) are all logged as a WARNING naming
         "gmail" and degrade to ``[]`` — the registry keeps polling this source on the next
-        cycle instead of marking it degraded.
+        cycle instead of marking it degraded. A thin wrapper around the RAISING
+        ``fetch_recent`` (TK-98) — behavior-preserving.
         """
-        now = self._clock()
-        after_epoch = int((now - timedelta(hours=self._lookback_hours)).timestamp())
-        params = {"q": f"in:inbox after:{after_epoch}", "maxResults": "100"}
         try:
-            list_response = self._session.get(
-                _MESSAGES_LIST_URL, params=params, timeout=_REQUEST_TIMEOUT_S
-            )
-            list_response.raise_for_status()
-            list_body = list_response.json()
-            if list_body.get("nextPageToken"):
-                logger.warning(
-                    "gmail source %r: list response has more pages (nextPageToken present) — "
-                    "wake-burst bounding is TK-28's job; NOT paginating this poll",
-                    self.id,
-                )
-            message_refs = list_body.get("messages") or []
-            items: list[GmailMessageItem] = []
-            for ref in message_refs:
-                message_id = ref["id"]
-                msg_response = self._session.get(
-                    _message_url(message_id), params={"format": "full"}, timeout=_REQUEST_TIMEOUT_S
-                )
-                msg_response.raise_for_status()
-                items.append(_parse_message(msg_response.json()))
+            items = self.fetch_recent()
         except requests.exceptions.RequestException:
             logger.warning(
                 "gmail source %r: Gmail API request failed (network/auth/server error) — "
