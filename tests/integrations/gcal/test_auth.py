@@ -17,29 +17,6 @@ Calendar data-API calls (that is TK-72).
 
 from __future__ import annotations
 
-import sys
-
-if not hasattr(sys.modules.get("calendar"), "timegm"):
-    # tests/calendar/ (TK-73/74) is a wombat test PACKAGE that happens to share its name with
-    # the stdlib `calendar` module, and has no `tests/__init__.py` above it — so pytest (with
-    # `pythonpath = ["tests"]`) treats `tests/calendar/` as the top-level module `calendar`.
-    # Whichever test file pytest collects first (alphabetically, `tests/calendar/...` sorts
-    # before `tests/integrations/...`) can bind the WRONG module under the bare name
-    # `calendar` in `sys.modules` before this file even runs. `requests` (pulled in
-    # transitively by google-auth's requests transport) needs the REAL stdlib `calendar` for
-    # `http.cookiejar`'s `from calendar import timegm`. Detect a wrong/missing binding (no
-    # `timegm` attribute) and force-load the real stdlib module by explicit file path
-    # (bypassing the polluted sys.path search) before anything else in this file needs it.
-    import importlib.util
-    import os as _os
-
-    _stdlib_calendar_path = _os.path.join(_os.path.dirname(_os.__file__), "calendar.py")
-    _spec = importlib.util.spec_from_file_location("calendar", _stdlib_calendar_path)
-    if _spec is not None and _spec.loader is not None:
-        _stdlib_calendar = importlib.util.module_from_spec(_spec)
-        sys.modules["calendar"] = _stdlib_calendar
-        _spec.loader.exec_module(_stdlib_calendar)
-
 import json
 import logging
 import os

@@ -17,7 +17,7 @@ from typing import Any
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Done, Transition
 
-from support.stage_context_fake import StageContextFake
+from tests.support.stage_context_fake import StageContextFake
 from wombat.gate.models import GateAction, GateDecision, ItemKind, ScoredItem
 from wombat.queue import QueueItem
 from wombat.stages import review_or_speak as review_or_speak_module

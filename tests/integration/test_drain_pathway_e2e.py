@@ -42,7 +42,7 @@ from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 from cogworx.testing.doubles import InMemoryEntityKG
 
-from support.stage_context_fake import FakeModel
+from tests.support.stage_context_fake import FakeModel
 from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import DailyLedger

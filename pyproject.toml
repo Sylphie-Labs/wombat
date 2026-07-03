@@ -68,4 +68,3 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
-pythonpath = ["tests"]

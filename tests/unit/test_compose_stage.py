@@ -17,7 +17,7 @@ from cogworx.cost.budget import BudgetExceededError
 from cogworx.loop.result import Done
 from cogworx.model.base import ModelResponse
 
-from support.stage_context_fake import FakeModel, StageContextFake
+from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.gate.models import ItemKind

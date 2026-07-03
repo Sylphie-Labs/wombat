@@ -26,9 +26,8 @@ from cogworx.loop.graph import StageGraph
 from cogworx.loop.result import StageResult, Transition, Wait
 from cogworx.loop.stage import StageContext
 
-# tests/support is a sibling of tests/unit (not a subpackage of it); `pythonpath = ["tests"]` in
-# pyproject.toml's [tool.pytest.ini_options] makes it importable with no sys.path hack (TK-6).
-from support.stage_context_fake import StageContextFake
+# tests/support is a sibling package of tests/unit under the tests/ package root (TK-15).
+from tests.support.stage_context_fake import StageContextFake
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.queue import QueueItem, WombatQueue, ensure_schema
 from wombat.stages.artifacts import (

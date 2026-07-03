@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Transition
 
-from support.stage_context_fake import StageContextFake
+from tests.support.stage_context_fake import StageContextFake
 from wombat.gate.gate import gate_item_from_queue_item, stub_evaluate
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind, ScoredItem
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
