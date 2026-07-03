@@ -23,11 +23,21 @@ import pytest
 
 from wombat.domain.daily_ledger import DailyLedger, ensure_schema
 from wombat.gate.ceiling import CeilingLedger
+from wombat.gate.decay import LedgerReset
 from wombat.gate.models import GateAction, GateItem, ItemKind, ScoredItem
 from wombat.gate.pending_set import CapacityEviction, InMemoryPendingJournal, PendingSet
 from wombat.gate.pipeline import Gate
 from wombat.gate.trigger import CeilingHit, CeilingProtocol, is_surfacing_worthy
 from wombat.rating.params import EventClass, RatingParams
+
+
+class _NoOpRollover:
+    """A ``DayRolloverProtocol`` double that never fires (TK-28, Q-73): these tests exercise
+    the TK-27 arms only, not decay/rollover — ``decay_ttl_seconds=float("inf")`` pairs with
+    this so hygiene is a structural no-op here."""
+
+    def check(self) -> LedgerReset | None:
+        return None
 
 
 def _item(item_id: str, *, sender_class: str = "automated", **payload_extra: object) -> GateItem:
@@ -99,6 +109,8 @@ async def test_ac1_worthy_item_under_ceiling_surfaces_immediate_and_records_ceil
         urgency_threshold=0.1,
         load_flush_threshold=10.0,
         flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
     )
 
@@ -124,6 +136,8 @@ async def test_ac2_ceiling_denies_worthy_item_holds_and_emits_ceiling_hit() -> N
         urgency_threshold=0.1,
         load_flush_threshold=10.0,
         flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
         on_event=recorder,
     )
@@ -154,6 +168,8 @@ async def test_ac3_flush_arm_fires_all_pending_urgency_desc_and_clears() -> None
         urgency_threshold=0.5,  # both items below this -> neither is "worthy" (no immediate)
         load_flush_threshold=0.5,
         flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: clock_time[0],
     )
 
@@ -196,6 +212,8 @@ async def test_ac4_select_items_returns_worthy_sorted_and_preserves_pending_unto
         urgency_threshold=0.2,
         load_flush_threshold=10.0,
         flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
     )
     # Seed the LIVE pending set with an item unrelated to the brief-items list below.
@@ -239,6 +257,8 @@ async def test_capacity_eviction_from_a_held_add_routes_through_on_event() -> No
         urgency_threshold=0.9,  # nothing here is worthy -> both items fall through to add()
         load_flush_threshold=10.0,
         flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
         on_event=recorder,
     )

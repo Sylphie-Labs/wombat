@@ -186,6 +186,20 @@ class PendingSet:
     def list(self) -> list[ScoredItem]:
         return list(self._items.values())
 
+    def list_with_added_at(self) -> Sequence[tuple[ScoredItem, float]]:
+        """Snapshot of current items paired with their journaled ``added_at`` instant.
+
+        TK-28's ``decay_stale`` reads this (rather than the bare ``ScoredItem``) since
+        ``added_at`` is the only durably journaled instant an age comparison can be based on
+        (Q-73) — the canonical ``ScoredItem`` itself never carries a timestamp.
+
+        Typed ``Sequence`` (not the bare ``list`` builtin) because this class already defines a
+        method named ``list`` — inside a class body a same-named method binding shadows the
+        builtin for any LATER annotation resolved in this scope (a real mypy/Python name-
+        resolution gotcha, not a style choice).
+        """
+        return [(item, self._added_at[item_id]) for item_id, item in self._items.items()]
+
     def snapshot(self) -> tuple[ScoredItem, ...]:
         return tuple(self._items.values())
 

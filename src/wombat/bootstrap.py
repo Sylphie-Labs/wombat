@@ -49,6 +49,7 @@ from .config import WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
 from .domain.daily_ledger import DailyLedger
 from .gate.ceiling import CeilingLedger
+from .gate.decay import DayRollover
 from .gate.models import ItemKind
 from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
@@ -237,6 +238,10 @@ def assemble_runtime(
     ceiling = CeilingLedger(
         daily_ledger=daily_ledger, per_class_daily_ceiling=op.per_class_daily_ceiling
     )
+    # TK-28 (Q-73): DayRollover composed over the SAME DailyLedger instance as CeilingLedger
+    # (ceiling.py precedent) so the exactly-once boundary observation and the per-class ceiling
+    # share ONE durable row lifecycle.
+    day_rollover = DayRollover(daily_ledger=daily_ledger)
     user_model = UserModel(entity_kg=InMemoryEntityKG(), user_id=_RUNTIME_USER_ID)
     gate = Gate(
         user_model=user_model,
@@ -245,6 +250,8 @@ def assemble_runtime(
         urgency_threshold=op.urgency_threshold,
         load_flush_threshold=op.load_flush_threshold,
         flush_min_age_seconds=op.flush_min_age_seconds,
+        decay_ttl_seconds=op.decay_ttl_seconds,
+        day_rollover=day_rollover,
         clock=_epoch_now,
     )
     presence_provider = make_presence_provider(

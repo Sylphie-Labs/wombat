@@ -48,6 +48,7 @@ from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
 from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
 from wombat.gate.ceiling import CeilingLedger
+from wombat.gate.decay import LedgerReset
 from wombat.gate.models import ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.gate.pipeline import Gate
@@ -100,6 +101,14 @@ _ACTIVE_PRESENCE = PresenceSnapshot(
 _REAL_ACTIVE_PRESENCE = PresenceSnapshot(
     state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=_FIXED_NOW.timestamp()
 )
+
+
+class _NoOpRollover:
+    """A ``DayRolloverProtocol`` double that never fires (TK-28, Q-73) — this e2e module proves
+    the surface/hold/degrade/idle drain spine, not decay/rollover."""
+
+    def check(self) -> LedgerReset | None:
+        return None
 
 
 def _config() -> WombatConfig:
@@ -201,6 +210,8 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
         urgency_threshold=_REAL_URGENCY_THRESHOLD,
         load_flush_threshold=10.0,  # high enough that one held item never trips the flush arm
         flush_min_age_seconds=300.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: _FIXED_NOW.timestamp(),
     )
 

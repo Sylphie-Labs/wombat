@@ -35,7 +35,10 @@ class GateItem:
 
     item_id: str
     item_kind: ItemKind
-    created_at: float  # epoch seconds; compared against decay_ttl by the pipeline clock
+    # epoch seconds. NOTE (TK-28, Q-73): decay compares the journaled PendingSetAdd.added_at
+    # rider (pending_set.py) against decay_ttl_seconds, NOT this field — added_at is the only
+    # durably journaled instant, so it is the only restart-consistent decay basis.
+    created_at: float
     payload: dict[str, Any] = field(default_factory=dict)
 
 

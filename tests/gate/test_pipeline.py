@@ -12,10 +12,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from wombat.gate.decay import LedgerReset
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.gate.pipeline import Gate
 from wombat.rating.params import EventClass, RatingParams
+
+
+class _NoOpRollover:
+    """A ``DayRolloverProtocol`` double that never fires (TK-28, Q-73) — this module covers the
+    general async pipeline shape, not decay/rollover."""
+
+    def check(self) -> LedgerReset | None:
+        return None
 
 
 def _item(item_id: str, *, sender_class: str = "automated", **payload_extra: object) -> GateItem:
@@ -75,6 +84,8 @@ def _gate(
         urgency_threshold=urgency_threshold,
         load_flush_threshold=load_flush_threshold,
         flush_min_age_seconds=flush_min_age_seconds,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=clock,
         on_event=on_event,
     )

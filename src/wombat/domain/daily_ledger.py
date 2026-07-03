@@ -111,6 +111,13 @@ class DailyLedger:
             self._conn.close()
             self._conn = None
 
+    def today(self) -> date:
+        """The wombat-day boundary resolved right now (TK-28, Q-73): delegates to
+        ``wombat_today(clock(), tz)`` so every caller (``CeilingLedger``, ``DayRollover``)
+        shares the ONE singular boundary source instead of re-deriving it independently.
+        """
+        return wombat_today(self._clock(), self._tz)
+
     def current_row(self, ledger_name: str) -> DailyLedgerRow:
         """Return today's row for ``ledger_name``, creating it at 0 if it doesn't exist yet.
 

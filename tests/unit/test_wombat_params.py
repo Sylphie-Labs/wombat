@@ -233,6 +233,7 @@ _PRODUCTION_CONSUMER_PATHS = (
     _SRC_ROOT / "gate" / "pipeline.py",
     _SRC_ROOT / "gate" / "trigger.py",  # TK-27
     _SRC_ROOT / "gate" / "ceiling.py",  # TK-27
+    _SRC_ROOT / "gate" / "decay.py",  # TK-28 (decay_ttl_seconds)
     _SRC_ROOT / "cost" / "daily_spend_ledger.py",  # TK-9
     _SRC_ROOT / "stages" / "compose.py",  # TK-9 (mouth ceilings injected, not hard-coded)
     _SRC_ROOT / "bootstrap.py",  # TK-9 (BudgetPolicy ceilings wired from OperatingParams)

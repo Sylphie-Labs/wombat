@@ -13,6 +13,7 @@ from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Transition
 
 from tests.support.stage_context_fake import StageContextFake
+from wombat.gate.decay import LedgerReset
 from wombat.gate.gate import gate_item_from_queue_item, stub_evaluate
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind, ScoredItem
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
@@ -433,6 +434,14 @@ class _AlwaysAllowCeiling:
         pass
 
 
+class _NoOpRollover:
+    """A ``DayRolloverProtocol`` double that never fires (TK-28, Q-73) — this module covers the
+    ``make_gate_evaluator`` adapter, not decay/rollover."""
+
+    def check(self) -> LedgerReset | None:
+        return None
+
+
 def _real_gate(*, rating_params: RatingParams, urgency_threshold: float = 0.5) -> Gate:
     return Gate(
         user_model=_FixedUserModel(rating_params),
@@ -441,6 +450,8 @@ def _real_gate(*, rating_params: RatingParams, urgency_threshold: float = 0.5) -
         urgency_threshold=urgency_threshold,
         load_flush_threshold=10.0,
         flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
         clock=lambda: _TAKEN_AT,
     )
 
