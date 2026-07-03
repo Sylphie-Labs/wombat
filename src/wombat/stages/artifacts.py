@@ -69,6 +69,8 @@ SURFACED_ITEM = "wombat.surfaced_item"
 HOLD_REPORT = "wombat.hold_report"
 # TK-98, EP-30-ish morning-brief cluster: BriefGatherStage's terminal wire kind (Q-74).
 BRIEF_PAYLOAD = "wombat.brief_payload"
+# TK-99: BriefForceFlushStage's terminal wire kind (Q-75) — a sealed BriefDecisionArtifact.
+BRIEF_DECISION = "wombat.brief_decision"
 
 # One gate decision paired with the original queue item it was derived from (TK-7 acks holds off
 # the carried queue_item dict, so the pairing travels together through the wire helpers).
@@ -245,6 +247,7 @@ def hold_report_from_artifact_data(data: dict[str, Any]) -> list[dict[str, Any]]
 
 
 __all__ = [
+    "BRIEF_DECISION",
     "BRIEF_PAYLOAD",
     "COMPOSED_OUTPUT",
     "COMPOSE_REQUEST",
