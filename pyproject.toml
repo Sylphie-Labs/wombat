@@ -8,7 +8,11 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Jim Tisdale" }]
 keywords = ["agent", "assistant", "cog-worx", "cognitive-architecture", "llm"]
 dependencies = [
-    "cog-worx",
+    # openai is a hard RUNTIME dep of serve(): bootstrap.build_engine wires a
+    # DeepSeek OpenAICompatModel that Engine._build_context imports eagerly at
+    # boot, before ComposeStage's degrade try/except can catch it (TK-17/Q-72).
+    # Ride cog-worx's own [providers] constraint transitively — no parallel pin.
+    "cog-worx[providers]",
     "pyyaml>=6.0",
     "psycopg[binary]>=3.2",
     "google-auth-oauthlib>=1.2",

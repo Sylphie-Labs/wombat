@@ -182,6 +182,12 @@ dependencies = [
     { name = "structlog" },
 ]
 
+[package.optional-dependencies]
+providers = [
+    { name = "anthropic" },
+    { name = "openai" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'providers'", specifier = ">=0.40.0" },
@@ -1297,7 +1303,7 @@ name = "wombat"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "cog-worx" },
+    { name = "cog-worx", extra = ["providers"] },
     { name = "google-auth-oauthlib" },
     { name = "keyring" },
     { name = "psycopg", extra = ["binary"] },
@@ -1322,7 +1328,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'providers'", specifier = ">=0.40.0" },
-    { name = "cog-worx", editable = "../cog_worx/cog-worx" },
+    { name = "cog-worx", extras = ["providers"], editable = "../cog_worx/cog-worx" },
     { name = "google-auth-oauthlib", specifier = ">=1.2" },
     { name = "keyring", specifier = ">=25.0" },
     { name = "openai", marker = "extra == 'providers'", specifier = ">=1.55.0" },
