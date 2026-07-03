@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Bump in lock-step with wombat_params.yaml's ``version`` whenever a field is added, removed,
 # or renamed, so a persisted file can be reconciled against the code's expectation.
-OPERATING_PARAMS_VERSION = 2
+OPERATING_PARAMS_VERSION = 3
 
 _PARAMS_FILENAME = "wombat_params.yaml"
 
@@ -83,8 +83,12 @@ class OperatingParams(BaseModel):
     decay_ttl_seconds: float
     max_pending: int  # the MAX_PENDING cap on the pending-set size
 
-    # --- Spend ledger (TK-9) ---
-    daily_token_ceiling: int
+    # --- Spend ledger (TK-9) — two layers: the wombat-owned daily token ceiling (layer 2, the
+    # DailySpendLedger) and cog-worx's per-drive-segment BudgetPolicy ceilings (layer 1, the
+    # inner backstop; CF-3.0-B cumulative-per-run remains deferred in cog-worx) ---
+    mouth_daily_token_ceiling: int
+    mouth_max_usd_per_drive: float
+    mouth_max_calls_per_drive: int
 
     # --- Morning brief (TK-97) — the single fixed value; no runtime knob ---
     morning_brief_time: time

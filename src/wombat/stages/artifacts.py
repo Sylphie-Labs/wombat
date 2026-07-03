@@ -28,7 +28,13 @@ produce it later with zero rework. The wire is deliberately narrow: ``item_id``,
 queue internals may cross it. This is a structural enforcement of the "the model may only ever
 see user-facing content" non_goal, not just prompt-construction discipline.
 ``composed_output_to_artifact_data`` / ``composed_output_from_artifact_data`` are the same
-convention applied to ``ComposeStage``'s own terminal output.
+convention applied to ``ComposeStage``'s own terminal output. ``composed_output_to_artifact_data``
+gains an ADDITIVE optional ``tokens_spent: int | None = None`` field (TK-9, Q-68) so a successful,
+non-degraded compose call's token spend rides the artifact and lands in the journal via the wire
+(no direct journal write). The PRIMARY inverse, ``composed_output_from_artifact_data``, keeps its
+existing 4-tuple shape unchanged (TK-8 regression guard — its round-trip callers are untouched);
+``composed_output_tokens_spent_from_artifact_data`` is the small additive accessor that reads the
+new field back.
 
 ``surfaced_item_to_artifact_data`` / ``surfaced_item_from_artifact_data`` (TK-10, Q-51) define the
 NEW single-item ``wombat.surfaced_item`` wire — ``review_or_speak`` (TK-7) single-izes a mixed
@@ -145,23 +151,45 @@ def compose_request_from_artifact_data(
 
 
 def composed_output_to_artifact_data(
-    text: str, item_id: str, item_kind: ItemKind, degraded: bool
+    text: str,
+    item_id: str,
+    item_kind: ItemKind,
+    degraded: bool,
+    tokens_spent: int | None = None,
 ) -> dict[str, Any]:
     """Serialize ``ComposeStage``'s terminal output into an Artifact ``data`` payload (TK-8, Q-50).
 
-    ``{"text", "item_id", "item_kind": <ItemKind .value string>, "degraded"}``.
+    ``{"text", "item_id", "item_kind": <ItemKind .value string>, "degraded", "tokens_spent"}``.
+    ``tokens_spent`` is ADDITIVE (TK-9, Q-68) — ``None`` for a degraded call (no successful,
+    accounted model call happened) or for any caller that predates TK-9; a successful,
+    non-degraded call passes ``response.usage.prompt_tokens + completion_tokens``.
     """
     return {
         "text": text,
         "item_id": item_id,
         "item_kind": item_kind.value,
         "degraded": degraded,
+        "tokens_spent": tokens_spent,
     }
 
 
 def composed_output_from_artifact_data(data: dict[str, Any]) -> tuple[str, str, ItemKind, bool]:
-    """The inverse of ``composed_output_to_artifact_data`` — the ONLY path back (TK-8, Q-50)."""
+    """The inverse of ``composed_output_to_artifact_data`` — the ONLY path back (TK-8, Q-50).
+
+    Kept to its original 4-tuple shape (text, item_id, item_kind, degraded) so every existing
+    caller/round-trip keeps working unchanged (TK-8 regression guard); use
+    ``composed_output_tokens_spent_from_artifact_data`` for the additive TK-9 field.
+    """
     return data["text"], data["item_id"], ItemKind(data["item_kind"]), data["degraded"]
+
+
+def composed_output_tokens_spent_from_artifact_data(data: dict[str, Any]) -> int | None:
+    """Read the ADDITIVE optional ``tokens_spent`` field back off a composed-output wire (TK-9).
+
+    Absent on data written before TK-9 (or by a degraded call) -> ``None``, never a KeyError.
+    """
+    tokens_spent = data.get("tokens_spent")
+    return None if tokens_spent is None else int(tokens_spent)
 
 
 def surfaced_item_to_artifact_data(
@@ -227,6 +255,7 @@ __all__ = [
     "compose_request_to_artifact_data",
     "composed_output_from_artifact_data",
     "composed_output_to_artifact_data",
+    "composed_output_tokens_spent_from_artifact_data",
     "gate_decisions_from_artifact_data",
     "gate_decisions_to_artifact_data",
     "hold_report_from_artifact_data",

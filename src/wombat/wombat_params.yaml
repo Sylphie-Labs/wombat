@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 2
+version: 3
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -38,9 +38,14 @@ decay_ttl_seconds: 86400.0
 max_pending: 100
 
 # --- Spend ledger (TK-9) ---------------------------------------------------------------
-# daily_token_ceiling: CHOSEN-HERE — the daily model-token budget the spend ledger enforces
-#   against the DeepSeek egress. A provisional operating budget; revise from real usage.
-daily_token_ceiling: 100000
+# Two layers: mouth_daily_token_ceiling is the wombat-owned OUTER cap (the durable
+# DailySpendLedger, cumulative prompt+completion tokens, survives restarts); the two
+# mouth_max_* values are cog-worx's per-drive-segment BudgetPolicy INNER backstop
+# (in-memory, resets per drive; CF-3.0-B cumulative-per-run stays deferred in cog-worx).
+# All three CHOSEN-HERE — provisional operating budgets; revise from real usage.
+mouth_daily_token_ceiling: 100000
+mouth_max_usd_per_drive: 0.50
+mouth_max_calls_per_drive: 3
 
 # --- Morning brief (TK-97) -------------------------------------------------------------
 # morning_brief_time: CHOSEN-HERE — TK-97 FORBIDS runtime configurability but never stated

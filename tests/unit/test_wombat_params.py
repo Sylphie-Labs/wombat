@@ -32,14 +32,16 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "wombat"
 def _valid_mapping() -> dict[str, object]:
     """A complete, well-typed parameter mapping (mirrors the shipped wombat_params.yaml)."""
     return {
-        "version": 2,
+        "version": 3,
         "urgency_threshold": 0.75,
         "load_flush_threshold": 1.0,
         "per_class_daily_ceiling": 3,
         "flush_min_age_seconds": 300.0,
         "decay_ttl_seconds": 86400.0,
         "max_pending": 100,
-        "daily_token_ceiling": 100000,
+        "mouth_daily_token_ceiling": 100000,
+        "mouth_max_usd_per_drive": 0.50,
+        "mouth_max_calls_per_drive": 3,
         "morning_brief_time": "07:00:00",
         "rating_tuner": {
             "clamp_floor": 0.35,
@@ -76,7 +78,9 @@ def test_shipped_params_load_with_every_field_typed() -> None:
     assert isinstance(params.decay_ttl_seconds, float)
     assert isinstance(params.max_pending, int)
     assert isinstance(params.per_class_daily_ceiling, int)
-    assert isinstance(params.daily_token_ceiling, int)
+    assert isinstance(params.mouth_daily_token_ceiling, int)
+    assert isinstance(params.mouth_max_usd_per_drive, float)
+    assert isinstance(params.mouth_max_calls_per_drive, int)
     assert isinstance(params.morning_brief_time, time)
     assert isinstance(params.rating_tuner, RatingTunerBounds)
     assert isinstance(params.presence_staleness_ceiling_seconds, float)
@@ -159,6 +163,23 @@ def test_presence_hold_fields_load_are_float_and_equal_shipped_values() -> None:
     assert params.presence_idle_threshold_seconds == 60.0
 
 
+# --- Spend ledger (TK-9) — the 3 mouth-budget tunables load, are typed, equal shipped values ---
+
+
+def test_spend_ledger_fields_load_are_typed_and_equal_shipped_values() -> None:
+    """The TK-9 mouth-budget tunables load as the documented shipped YAML values."""
+    params = load_operating_params()
+
+    assert isinstance(params.mouth_daily_token_ceiling, int)
+    assert params.mouth_daily_token_ceiling == 100000
+
+    assert isinstance(params.mouth_max_usd_per_drive, float)
+    assert params.mouth_max_usd_per_drive == 0.50
+
+    assert isinstance(params.mouth_max_calls_per_drive, int)
+    assert params.mouth_max_calls_per_drive == 3
+
+
 # --- AC3 — the morning-brief time is owned here and nowhere else ------------------------
 
 
@@ -194,7 +215,9 @@ _PRODUCTION_CONSUMER_PATHS = (
     _SRC_ROOT / "gate" / "pipeline.py",
     _SRC_ROOT / "gate" / "trigger.py",  # TK-27
     _SRC_ROOT / "gate" / "ceiling.py",  # TK-27
-    _SRC_ROOT / "ledger" / "spend_ledger.py",  # TK-9, not yet built
+    _SRC_ROOT / "cost" / "daily_spend_ledger.py",  # TK-9
+    _SRC_ROOT / "stages" / "compose.py",  # TK-9 (mouth ceilings injected, not hard-coded)
+    _SRC_ROOT / "bootstrap.py",  # TK-9 (BudgetPolicy ceilings wired from OperatingParams)
     _SRC_ROOT / "rating" / "rating_tuner.py",  # TK-49, not yet built
 )
 

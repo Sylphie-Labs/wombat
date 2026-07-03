@@ -26,6 +26,12 @@ unreachable pair above makes ``ComposeStage``'s network call fail and degrade cl
 only inside ``complete()``, which ``ComposeStage`` already wraps in a broad except — TK-8's own
 contract). Either way this script runs to completion and never raises.
 
+NOTE (Q-69 recorded limitation): this demo hand-rolls ``Engine``/``ComposeStage`` and therefore
+BYPASSES both TK-9 mouth-budget layers — no per-drive ``BudgetPolicy`` ceiling and no daily token
+cap apply here, so a REAL ``DEEPSEEK_API_KEY`` runs unbudgeted. The BUDGETED composition path is
+``bootstrap.build_engine`` + ``bootstrap.build_compose_stage``, which the runtime boot (TK-53)
+wires at start-up; this scripted one-shot deliberately does not.
+
 WHAT THIS SCRIPT WIRES (every seam below is as-built; nothing here is invented for the demo):
   * ``load_operating_params()`` — the SAME audited ``wombat_params.yaml`` thresholds production
     reads. PROVISIONAL (DEF-1): fixture-confirmed only, not yet Jim's confirmatory label pass —
