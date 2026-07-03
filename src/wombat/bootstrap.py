@@ -22,10 +22,20 @@ TK-7 drain pathway and wires the REAL production gate (TK-27) over the TK-29 dur
 ``build_source_registry`` rather than hand-rolling (closing the ``scripts/demo_drain.py``
 Q-69 bypass gap). ``wombat.runtime.serve()`` only starts/drives/stops what this returns — it
 registers nothing (the ticket's own non_goal).
+
+TK-96: ``assemble_runtime`` ALSO registers the ``wombat.brief`` pathway — the four already-built
+brief stages, wired via ``build_brief_pathway`` off the SAME composed ``Gate``/substrate/
+``dsn`` the drain pathway uses (never a second gate, never a second Postgres). Registration is
+CONDITIONAL on ``config.wombat_brief_path`` being non-blank (mirrors ``build_brief_deliver_stage``'s
+own fail-loud-at-construction posture, but at the composition-root level so a Google-less/
+sink-less boot still starts): blank/absent -> a loud warning and the pathway is simply not
+registered (``RuntimeBundle.brief_pathway_id`` stays ``None``); TK-97's timer/fence wires against
+that field once it exists, never a hardcoded pathway id.
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,14 +66,18 @@ from .gate.models import ItemKind
 from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
+from .integrations.gmail.triage import load_triage_rules
 from .params import OperatingParams, load_operating_params
+from .pathways.brief_pathway import BRIEF_PATHWAY_ID, build_brief_pathway
 from .pathways.drain_pathway import build_drain_pathway
 from .queue import WombatQueue
-from .sources.bootstrap import build_source_registry
+from .sources.bootstrap import build_brief_fetches, build_source_registry
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
 from .stages.brief_compose_stage import BriefComposeStage
 from .stages.brief_deliver_stage import BriefDeliverStage
+from .stages.brief_force_flush_stage import BriefForceFlushStage
+from .stages.brief_gather_stage import BriefGatherStage
 from .stages.compose import ComposeStage
 from .stages.compose_dispatch_router import ComposeDispatchRouter
 from .stages.drain_queue import DrainQueueStage
@@ -72,10 +86,14 @@ from .stages.review_or_speak import ReviewOrSpeakStage
 from .substrate import SubstrateBundle, build_substrate
 from .user_model.user_model import UserModel
 
+logger = logging.getLogger(__name__)
+
 MODEL_PROFILE = "deepseek"
 
 # TK-53 (Q-71) composition-root constants for the standing runtime.
 DRAIN_PATHWAY_ID = "wombat.drain"
+# TK-96: BRIEF_PATHWAY_ID ("wombat.brief") is imported above from pathways/brief_pathway.py —
+# never redefined here, so the constant has exactly one owner.
 _DRAIN_BATCH_SIZE = 1
 # A plain composition-root default (mirrors sources/bootstrap.py's DEFAULT_*_POLL_INTERVAL_
 # SECONDS pattern) — no ticket asked for a TK-13 tunable here, so this is not an OperatingParams
@@ -242,6 +260,12 @@ def _epoch_now() -> float:
     return datetime.now(UTC).timestamp()
 
 
+def _utc_now() -> datetime:
+    """The real-clock default for ``BriefGatherStage``'s ``datetime``-typed clock seam (TK-96) —
+    mirrors ``_epoch_now`` above, just not epoch-seconds shaped."""
+    return datetime.now(UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeBundle:
     """Everything ``wombat.runtime.serve()`` needs to start/drive/stop the standing process
@@ -258,6 +282,9 @@ class RuntimeBundle:
     queue: WombatQueue
     daily_ledger: DailyLedger
     compose_stage: ComposeStage
+    # TK-96: the registered ``wombat.brief`` pathway id, or ``None`` when ``config.wombat_brief_
+    # path`` was blank/absent and registration was skipped (TK-97's entrypoint reads this field).
+    brief_pathway_id: str | None
 
 
 def assemble_runtime(
@@ -344,6 +371,35 @@ def assemble_runtime(
     )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
+    # TK-96: register wombat.brief off the SAME composed Gate/substrate/dsn — CONDITIONAL on a
+    # non-blank brief sink path (mirrors build_brief_deliver_stage's own fail-loud-at-construction
+    # posture, but decided HERE so a Google-less/sink-less boot still starts rather than raising).
+    raw_brief_path = config.wombat_brief_path
+    brief_pathway_id: str | None = None
+    if raw_brief_path is None or not raw_brief_path.strip():
+        logger.warning(
+            "assemble_runtime: WOMBAT_BRIEF_PATH is missing/blank; skipping wombat.brief "
+            "pathway registration (the drain spine still boots without a brief sink)"
+        )
+    else:
+        triage_rules = load_triage_rules()
+        brief_fetches = build_brief_fetches(config, tz=tz)
+        brief_gather_stage = BriefGatherStage(
+            fetch_calendar=brief_fetches.fetch_calendar,
+            fetch_gmail=brief_fetches.fetch_gmail,
+            triage_rules=triage_rules,
+            clock=_utc_now,
+        )
+        # SAME composed gate as the drain pathway (never a second Gate/pending-set/ceiling).
+        brief_force_flush_stage = BriefForceFlushStage(select_items=gate.select_items, tz=tz)
+        brief_compose_stage = build_brief_compose_stage(config=config, dsn=dsn, params=op, tz=tz)
+        brief_deliver_stage = build_brief_deliver_stage(config=config, tz=tz)
+        brief_graph = build_brief_pathway(
+            brief_gather_stage, brief_force_flush_stage, brief_compose_stage, brief_deliver_stage
+        )
+        substrate.pathways.register(BRIEF_PATHWAY_ID, brief_graph)
+        brief_pathway_id = BRIEF_PATHWAY_ID
+
     engine = build_engine(substrate, config=config, params=op)
     source_registry = build_source_registry(config, queue, tz=tz)
 
@@ -357,4 +413,5 @@ def assemble_runtime(
         queue=queue,
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
+        brief_pathway_id=brief_pathway_id,
     )

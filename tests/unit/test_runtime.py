@@ -20,6 +20,7 @@ standing-loop cycle (AC5) live in ``tests/integration/test_serve_boot.py``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -29,7 +30,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.graph import StageGraph
-from cogworx.loop.pathway import PathwayRegistry
+from cogworx.loop.pathway import PathwayError, PathwayRegistry
 from cogworx.loop.result import Done, StageResult, Wait
 from cogworx.loop.stage import StageContext
 from cogworx.loop.state import RunStatus
@@ -313,6 +314,37 @@ def test_ac4_assemble_runtime_registers_drain_pathway_and_wires_pg_pending_journ
     assert bundle.compose_stage._spend_ledger is not None
 
 
+# --- TK-96: assemble_runtime's CONDITIONAL wombat.brief registration ---------------------------
+
+
+def test_assemble_runtime_with_brief_path_registers_wombat_brief(tmp_path: Path) -> None:
+    op = load_operating_params()
+    config = _config_with_brief_path(str(tmp_path / "brief.txt"))
+
+    bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+
+    assert bundle.brief_pathway_id == "wombat.brief"
+    # pathways.get resolves the brief pathway id (raises PathwayError if not registered).
+    graph = bundle.pathways.get(bundle.brief_pathway_id)
+    assert graph is not None
+    assert graph.entry == "brief_gather"
+
+
+def test_assemble_runtime_blank_brief_path_skips_registration_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    op = load_operating_params()
+    config = _config()  # wombat_brief_path defaults to None
+
+    with caplog.at_level(logging.WARNING):
+        bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+
+    assert bundle.brief_pathway_id is None
+    assert "WOMBAT_BRIEF_PATH" in caplog.text
+    with pytest.raises(PathwayError):
+        bundle.pathways.get("wombat.brief")
+
+
 class _NullEnqueuer:
     """An ``Enqueuer`` that is never expected to be called (no sources are registered below)."""
 
@@ -416,6 +448,7 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         queue=queue,
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
+        brief_pathway_id=None,
     )
     op = load_operating_params().model_copy(
         update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}

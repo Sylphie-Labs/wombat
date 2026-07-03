@@ -34,10 +34,10 @@ from pydantic import SecretStr
 
 import wombat.integrations.gcal.session as gcal_session_module
 import wombat.integrations.gmail.session as gmail_session_module
-from wombat.config import WombatConfig
+from wombat.config import ConfigurationError, WombatConfig
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.base import SourceEvent
-from wombat.sources.bootstrap import build_source_registry
+from wombat.sources.bootstrap import build_brief_fetches, build_source_registry
 from wombat.sources.registry import SourceRegistry
 
 _TZ = ZoneInfo("America/Chicago")
@@ -403,4 +403,78 @@ async def test_both_configured_and_tokened_registers_both_and_polls_end_to_end(
     assert any("evt1" in k for k in keys)
     assert any("m1" in k for k in keys)
     assert registry.degraded_sources == frozenset()
+    assert consent_calls == []
+
+
+# ------------------------------------------------------------------ TK-96: build_brief_fetches
+
+
+def test_build_brief_fetches_unwired_sources_raise_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero configured Google creds -> BOTH fetch callables are RAISING placeholders (TK-96) —
+    never a network call, never an exception at build time (the raise is lazy, on first call)."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_config()  # no client id/secret at all
+
+    fetches = build_brief_fetches(
+        config,
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+
+    with pytest.raises(ConfigurationError):
+        fetches.fetch_calendar()
+    with pytest.raises(ConfigurationError):
+        fetches.fetch_gmail()
+    assert consent_calls == []
+
+
+def test_build_brief_fetches_wired_sources_bind_the_real_poller_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both sources configured + tokened -> BOTH fetch callables are bound to the REAL poller's
+    ``fetch_window``/``fetch_recent`` (TK-96) — the same wired/unwired decision
+    ``build_source_registry`` makes, proven by a genuine (fake-sessioned) read succeeding."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+
+    class _FakeCalendarAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            return _FakeCredentials()
+
+    class _FakeGmailAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            return _FakeCredentials()
+
+    monkeypatch.setattr(gcal_session_module, "CalendarAuth", _FakeCalendarAuth)
+    monkeypatch.setattr(
+        gcal_session_module, "AuthorizedSession", lambda creds: _one_calendar_event_session(creds)
+    )
+    monkeypatch.setattr(gmail_session_module, "GmailAuth", _FakeGmailAuth)
+    monkeypatch.setattr(
+        gmail_session_module, "AuthorizedSession", lambda creds: _one_gmail_message_session(creds)
+    )
+
+    config = _make_config(**_CONFIGURED)
+    fetches = build_brief_fetches(
+        config,
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial="gcal-token"),
+        gmail_token_store=_FakeTokenStore(initial="gmail-token"),
+    )
+
+    events = fetches.fetch_calendar()
+    messages = fetches.fetch_gmail()
+
+    assert [e.event_id for e in events] == ["evt1"]
+    assert [m.message_id for m in messages] == ["m1"]
     assert consent_calls == []
