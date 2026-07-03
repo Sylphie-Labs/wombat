@@ -32,6 +32,7 @@ from typing import Any
 import psycopg
 import pytest
 
+from wombat.domain.item_identity import idempotency_key as derive_key
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue, ensure_schema
 from wombat.sources.base import SourceEvent
 from wombat.sources.registry import SourceRegistry
@@ -118,7 +119,8 @@ async def test_ac1_registered_source_start_poll_enqueue_end_to_end() -> None:
         await registry.stop()
 
     assert stub.start_called == 1
-    assert enqueuer.items[0].idempotency_key == "test:e1"
+    # canonical TK-12 derivation (Q-59 registry rider) — NOT the interim colon-join.
+    assert enqueuer.items[0].idempotency_key == derive_key("test", "e1")
     assert enqueuer.items[0].payload == {"x": 1}
 
 
@@ -218,7 +220,7 @@ async def test_ac1_end_to_end_against_a_real_wombat_queue() -> None:
             await registry.stop()
 
         drained = queue.drain()
-        assert [item.idempotency_key for item in drained] == ["real:e1"]
+        assert [item.idempotency_key for item in drained] == [derive_key("real", "e1")]
         assert drained[0].payload == {"n": 1}
     finally:
         queue.close()

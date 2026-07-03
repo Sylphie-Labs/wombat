@@ -11,6 +11,8 @@ needs only ``event_id``, the [start, end) interval, and a human-readable title.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 MINUTES_PER_DAY = 24 * 60
 
@@ -94,3 +96,68 @@ class AlternativeSlot:
     @property
     def duration(self) -> int:
         return self.end - self.start
+
+
+# --------------------------------------------------------------------------------------- TK-72
+
+# ``CalendarEvent`` (Q-60): a NEW SIBLING domain type, not a promotion of ``CalendarEventItem``
+# above. The two model DIFFERENT domains — ``CalendarEventItem`` is the day-projection the
+# proven slot math (``slots.py``) lives in; ``CalendarEvent`` is the absolute-time wire fact a
+# real Google Calendar event carries (an instant can span arbitrary days, unlike the spike's
+# 0..1440 minutes-since-midnight). The spike types above stay untouched (frozen, Q-43).
+#
+# ``CalendarPoller`` (TK-72) is the only producer; ``to_payload``/``from_payload`` are the
+# JSON-native wire helpers (Q-49) a ``SourceEvent.payload`` round-trips through — datetimes
+# serialize as ISO-8601 strings. TK-74 (conflict detection) and TK-98 (gather) are future
+# consumers of this type, not this ticket's concern.
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarEvent:
+    """One real Google Calendar event, as an absolute-time wire fact.
+
+    ``start``/``end`` are timezone-AWARE instants (normalized to UTC by the producer —
+    ``CalendarPoller``); ``all_day`` distinguishes a date-only Google event (midnight-to-midnight
+    in the configured wombat timezone, normalized to UTC) from a timed one. ``title`` is Google's
+    ``summary`` field, or ``""`` if absent.
+    """
+
+    event_id: str
+    title: str
+    start: datetime
+    end: datetime
+    all_day: bool
+
+    def __post_init__(self) -> None:
+        if self.start.tzinfo is None:
+            raise ValueError(f"CalendarEvent {self.event_id!r}: start is naive (must be aware)")
+        if self.end.tzinfo is None:
+            raise ValueError(f"CalendarEvent {self.event_id!r}: end is naive (must be aware)")
+        if not self.start < self.end:
+            msg = (
+                f"CalendarEvent {self.event_id!r}: require start < end, "
+                f"got start={self.start.isoformat()}, end={self.end.isoformat()}"
+            )
+            raise ValueError(msg)
+
+    def to_payload(self) -> dict[str, Any]:
+        """JSON-native wire form (Q-49): datetimes as ISO-8601 strings. The one shape
+        ``SourceEvent.payload`` carries and ``from_payload`` round-trips exactly."""
+        return {
+            "event_id": self.event_id,
+            "title": self.title,
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+            "all_day": self.all_day,
+        }
+
+    @staticmethod
+    def from_payload(d: dict[str, Any]) -> CalendarEvent:
+        """Inverse of ``to_payload`` — exact round-trip: ``from_payload(e.to_payload()) == e``."""
+        return CalendarEvent(
+            event_id=d["event_id"],
+            title=d["title"],
+            start=datetime.fromisoformat(d["start"]),
+            end=datetime.fromisoformat(d["end"]),
+            all_day=d["all_day"],
+        )

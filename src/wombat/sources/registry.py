@@ -16,6 +16,12 @@ A source's ``poll()`` raising is caught per-loop-iteration (AC4): the exception 
 the source id, the source is added to ``degraded_sources``, and its OWN loop keeps running (a
 later poll may recover) — other sources' loops are separate asyncio tasks, so one source's
 failure never stops or crashes another's.
+
+TK-72/Q-59 SANCTIONED RIDER: the interim ``f"{source.id}:{event.event_key}"`` join has been
+replaced by TK-12's canonical ``item_identity.idempotency_key(source_id, source_natural_id)``
+derivation — the ONE place every dedup path (queue, gate pending-set, outcome binding) agrees
+on identity (Q-18/D). This makes TK-12's AC4 one-derivation obligation real at the first real
+source (``gcal``, TK-72); registry behavior is otherwise unchanged.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ import contextlib
 import logging
 from typing import Protocol
 
+from wombat.domain.item_identity import idempotency_key as derive_key
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.base import InputSource
 
@@ -86,7 +93,7 @@ class SourceRegistry:
                 for event in events:
                     self._enqueue.enqueue(
                         QueueItem(
-                            idempotency_key=f"{source.id}:{event.event_key}",
+                            idempotency_key=derive_key(source.id, event.event_key),
                             payload=event.payload,
                         )
                     )
