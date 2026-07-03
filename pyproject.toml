@@ -11,6 +11,8 @@ dependencies = [
     "cog-worx",
     "pyyaml>=6.0",
     "psycopg[binary]>=3.2",
+    "google-auth-oauthlib>=1.2",
+    "keyring>=25.0",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +58,11 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+# google_auth_oauthlib ships no py.typed marker (google-auth itself does) — TK-71.
+module = ["google_auth_oauthlib.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

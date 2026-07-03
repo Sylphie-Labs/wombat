@@ -32,6 +32,14 @@ class WombatConfig(BaseSettings):
     deepseek_api_key: SecretStr
     deepseek_base_url: str
 
+    # OPTIONAL (TK-71, Q-57(b)): the Google OAuth client credentials for the gcal integration.
+    # Deliberately NOT in REQUIRED_ENV — the drain spine/demo must keep booting Google-less.
+    # Validation is deferred to construction of the gcal auth component (CalendarAuth), which
+    # follows the TK-8 AC3-at-construction precedent and raises ConfigurationError naming the
+    # first missing/blank var.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: SecretStr | None = None
+
 
 def load_config() -> WombatConfig:
     """Load + validate config from the environment, or raise ConfigurationError loudly."""
