@@ -1,0 +1,33 @@
+# wombat Gmail triage rules (TK-76, EP-17, Q-66) — versioned rule-set DATA ARTIFACT.
+#
+# NOT a TK-13 OperatingParams tunable (that store owns numeric operating constants; this owns a
+# rule vocabulary). Loaded + schema-validated by ``load_triage_rules`` in
+# ``wombat.integrations.gmail.triage`` and injected into the pure ``triage_message`` function —
+# the function never loads this file itself.
+#
+# Rules are matched against MESSAGE METADATA ONLY: ``sender_allowlist_rules`` match against the
+# message ``sender``; ``subject_keyword_rules`` match against the message ``subject``. Neither
+# rule kind may reference the message body — ``triage.py`` intentionally never reads
+# ``body_text`` (Q-66 ruling 2; enforced at build time by the Q-65 body-key guard, which does
+# not allowlist triage.py).
+#
+# Bump ``version`` whenever a field is added, removed, or renamed so a persisted file can be
+# reconciled against the loader's expectations. A missing/unversioned/malformed file raises a
+# loud ConfigurationError at load — never a silent default.
+
+version: 1
+
+sender_allowlist_rules:
+  - name: vip_sender_allowlist
+    senders:
+      - boss@example.com
+    urgency_score: 0.9
+    priority_band: high
+
+subject_keyword_rules:
+  - name: urgent_subject_keyword
+    keywords:
+      - urgent
+      - asap
+    urgency_score: 0.8
+    priority_band: high
