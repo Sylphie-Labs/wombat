@@ -29,9 +29,9 @@ idle test below.
 
 from __future__ import annotations
 
-import functools
 import os
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -40,12 +40,17 @@ from cogworx.loop.state import RunStatus
 from cogworx.model.base import ModelResponse
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
+from cogworx.testing.doubles import InMemoryEntityKG
 
 from support.stage_context_fake import FakeModel
 from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
-from wombat.gate.gate import stub_evaluate
+from wombat.domain.daily_ledger import DailyLedger
+from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
+from wombat.gate.ceiling import CeilingLedger
 from wombat.gate.models import ItemKind
+from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
+from wombat.gate.pipeline import Gate
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.queue import QueueItem, WombatQueue, ensure_schema
 from wombat.sources.presence import PresenceSnapshot, PresenceState
@@ -57,9 +62,10 @@ from wombat.stages.artifacts import (
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
-from wombat.stages.gate_stage import GateStage
+from wombat.stages.gate_stage import GateStage, make_gate_evaluator, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
 from wombat.substrate import cold_boot_bundle
+from wombat.user_model.user_model import UserModel
 
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
 
@@ -78,8 +84,21 @@ _URGENCY_THRESHOLD = 0.5
 _STALENESS_CEILING_S = 300.0
 _CONFIDENCE_FLOOR = 0.5
 
+# The REAL Gate variant (Q-55) uses the audited wombat_params.yaml urgency_threshold (0.75) —
+# under the default GENERIC RatingParams (urgency_base=0.5) an untimed/automated item never
+# clears this bar (raw_urgency tops out well under 1.0) while a timed VIP item does.
+_REAL_URGENCY_THRESHOLD = 0.75
+
 _ACTIVE_PRESENCE = PresenceSnapshot(
     state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=0.0
+)
+
+# The real-gate variant's presence must NOT be stale relative to the REAL clock the production
+# Gate's presence_hold check compares against (make_gate_evaluator calls presence_hold(presence,
+# clock(), ...) with the genuine `now` — unlike the stub, which passes the snapshot's OWN
+# taken_at as `now`, making staleness inert by construction). taken_at must sit at _FIXED_NOW.
+_REAL_ACTIVE_PRESENCE = PresenceSnapshot(
+    state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=_FIXED_NOW.timestamp()
 )
 
 
@@ -107,8 +126,7 @@ def _build_stack(*, model_factory: object) -> tuple[Engine, WombatQueue]:
 
     drain_queue_stage = DrainQueueStage(queue, batch_size=1, poll_interval_seconds=5.0)
     gate_stage = GateStage(
-        evaluate=functools.partial(
-            stub_evaluate,
+        evaluate=make_stub_evaluator(
             urgency_threshold=_URGENCY_THRESHOLD,
             staleness_ceiling_s=_STALENESS_CEILING_S,
             confidence_floor=_CONFIDENCE_FLOOR,
@@ -153,6 +171,90 @@ def clean_table() -> None:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE wombat_queue")
+        conn.commit()
+
+
+def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueue, DailyLedger]:
+    """Assemble the drain pathway with the REAL production ``Gate`` (TK-27) wired in via
+    ``make_gate_evaluator`` (Q-55) — mirrors ``_build_stack`` exactly except for the gate itself:
+
+    * ``UserModel`` over a FRESH ``InMemoryEntityKG`` (no seeded claims -> every event class reads
+      its documented defaults, ``rating/params.py``).
+    * ``PendingSet`` over a fresh ``InMemoryPendingJournal`` (in-memory custody — TK-29 is real
+      pg durability, out of scope here).
+    * ``CeilingLedger`` over a REAL ``DailyLedger`` on the SAME docker Postgres as the queue (the
+      one piece of the real Gate that genuinely needs Postgres).
+
+    Returns the ``DailyLedger`` too so the caller can ``close()`` its own lazily-opened connection.
+    """
+    assert _DSN is not None
+    queue = WombatQueue(_DSN, max_size=10)
+
+    user_model = UserModel(entity_kg=InMemoryEntityKG(), user_id="demo-user")
+    pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=100)
+    daily_ledger = DailyLedger(_DSN, tz=ZoneInfo("UTC"), clock=lambda: _FIXED_NOW)
+    ceiling = CeilingLedger(daily_ledger=daily_ledger, per_class_daily_ceiling=3)
+    gate = Gate(
+        user_model=user_model,
+        pending_set=pending_set,
+        ceiling=ceiling,
+        urgency_threshold=_REAL_URGENCY_THRESHOLD,
+        load_flush_threshold=10.0,  # high enough that one held item never trips the flush arm
+        flush_min_age_seconds=300.0,
+        clock=lambda: _FIXED_NOW.timestamp(),
+    )
+
+    drain_queue_stage = DrainQueueStage(queue, batch_size=1, poll_interval_seconds=5.0)
+    gate_stage = GateStage(
+        evaluate=make_gate_evaluator(
+            gate=gate,
+            staleness_ceiling_s=_STALENESS_CEILING_S,
+            confidence_floor=_CONFIDENCE_FLOOR,
+            clock=lambda: _FIXED_NOW.timestamp(),
+        ),
+        presence_provider=lambda: _REAL_ACTIVE_PRESENCE,
+    )
+    review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
+    compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
+    compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+
+    graph = build_drain_pathway(
+        drain_queue_stage,
+        gate_stage,
+        review_or_speak_stage,
+        compose_dispatch_router,
+        compose_stage,
+    )
+
+    bundle = cold_boot_bundle()
+    bundle.pathways.register(_PATHWAY_ID, graph)
+
+    models = ModelRegistry()
+    models.register_factory("deepseek", model_factory)  # type: ignore[arg-type]
+
+    engine = Engine(
+        models=models,
+        journal=bundle.journal,
+        graph_store=bundle.graph_store,
+        latent=bundle.latent,
+        pathways=bundle.pathways,
+        model_profile="deepseek",
+        clock=lambda: _FIXED_NOW,
+    )
+    return engine, queue, daily_ledger
+
+
+@pytest.fixture
+def clean_table_and_ledger() -> None:
+    """Like ``clean_table`` but also resets ``daily_ledger`` (the real ``CeilingLedger``'s table)
+    so a prior test's per-class daily count can never leak into this one's ceiling check."""
+    assert _DSN is not None
+    with psycopg.connect(_DSN) as conn:
+        ensure_schema(conn)
+        ensure_daily_ledger_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE wombat_queue")
+            cur.execute("TRUNCATE TABLE daily_ledger")
         conn.commit()
 
 
@@ -300,3 +402,107 @@ async def test_idle_second_drive_on_empty_queue_parks_wait(clean_table: None) ->
         assert tuple(s.stage_name for s in final.steps) == ("drain_queue",)
     finally:
         queue.close()
+
+
+# --- REAL-gate variant (Q-55): the production Gate wired via make_gate_evaluator, not the stub ----
+
+
+async def test_real_gate_surfaces_a_high_urgency_item_and_composes(
+    clean_table_and_ledger: None,
+) -> None:
+    """A timed, VIP-sender item clears the real Gate's urgency bar -> SURFACE_IMMEDIATE, under
+    ceiling, all the way to a composed_output — no stub anywhere on this path."""
+    success_model = lambda guard: FakeModel(  # noqa: E731
+        response=ModelResponse(
+            text="VIP meeting starting now.", model_id="fake", finish_reason="stop"
+        )
+    )
+    engine, queue, daily_ledger = _build_real_gate_stack(model_factory=success_model)
+    try:
+        queue.enqueue(
+            QueueItem(
+                idempotency_key="real-surface-1",
+                payload={
+                    "item_kind": "generic",
+                    "subject": "VIP meeting starting now",
+                    "is_timed": True,
+                    "seconds_to_event": 0.0,
+                    "sender_class": "vip",
+                },
+            )
+        )
+
+        final = await engine.run(
+            run_id="run-real-surface",
+            session_id="sess-real-surface",
+            pathway_id=_PATHWAY_ID,
+            initial=_initial_artifact(),
+        )
+
+        assert final.status is RunStatus.COMPLETED
+        assert queue.drain() == []  # acked
+
+        compose_steps = [s for s in final.steps if s.stage_name == "compose"]
+        assert len(compose_steps) == 1
+        composed_artifact = compose_steps[0].result.output
+        assert composed_artifact is not None
+        text, _item_id, item_kind, degraded = composed_output_from_artifact_data(
+            composed_artifact.data
+        )
+        assert text
+        assert item_kind is ItemKind.GENERIC
+        assert degraded is False
+    finally:
+        queue.close()
+        daily_ledger.close()
+
+
+async def test_real_gate_holds_a_low_urgency_item_and_accumulates_in_pending(
+    clean_table_and_ledger: None,
+) -> None:
+    """An untimed, automated-sender item never clears the real Gate's urgency bar -> HOLD, and
+    accumulates into the durable pending set; the mouth is never called."""
+    never_called_model = lambda guard: FakeModel(  # noqa: E731
+        raises=AssertionError("the mouth must never be called on the real-gate hold path")
+    )
+    engine, queue, daily_ledger = _build_real_gate_stack(model_factory=never_called_model)
+    try:
+        queue.enqueue(
+            QueueItem(
+                idempotency_key="real-hold-1",
+                payload={
+                    "item_kind": "generic",
+                    "subject": "Automated newsletter",
+                    "is_timed": False,
+                    "sender_class": "automated",
+                },
+            )
+        )
+
+        final = await engine.run(
+            run_id="run-real-hold",
+            session_id="sess-real-hold",
+            pathway_id=_PATHWAY_ID,
+            initial=_initial_artifact(),
+        )
+
+        assert final.status is RunStatus.COMPLETED
+        assert queue.drain() == []  # acked on the hold branch too
+
+        ros_steps = [s for s in final.steps if s.stage_name == "review_or_speak"]
+        assert len(ros_steps) == 1
+        hold_artifact = ros_steps[0].result.output
+        assert hold_artifact is not None
+        assert hold_artifact.kind == HOLD_REPORT
+        holds = hold_artifact.data["holds"]
+        assert holds[0]["item_id"] == "real-hold-1"
+        # Q-55: the production Gate's HOLD carries no ScoredItem at all (the score lives only in
+        # the durable pending set) — review_or_speak's fallback hold record is honest about that
+        # rather than fabricating a score.
+        assert holds[0]["urgency"] is None
+        assert holds[0]["load"] is None
+
+        assert not any(s.stage_name in ("compose_dispatch", "compose") for s in final.steps)
+    finally:
+        queue.close()
+        daily_ledger.close()

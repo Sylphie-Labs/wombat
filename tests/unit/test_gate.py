@@ -1,4 +1,4 @@
-"""TK-6 — deterministic gate stub acceptance criteria (Q-48).
+"""TK-6 — deterministic gate stub acceptance criteria (Q-48; async-batch seam, Q-55).
 
 All PURE: no Postgres, no model. ``support.stage_context_fake`` is importable via the
 ``pythonpath = ["tests"]`` pytest setting (no sys.path hack, TK-6 test-tooling cleanup).
@@ -15,7 +15,10 @@ from cogworx.loop.result import Transition
 from support.stage_context_fake import StageContextFake
 from wombat.gate.gate import gate_item_from_queue_item, stub_evaluate
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind, ScoredItem
+from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
+from wombat.gate.pipeline import Gate
 from wombat.queue import QueueItem
+from wombat.rating.params import EventClass, RatingParams
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.stages.artifacts import (
     DRAINED_BATCH,
@@ -24,7 +27,7 @@ from wombat.stages.artifacts import (
     gate_decisions_to_artifact_data,
     queue_items_to_artifact_data,
 )
-from wombat.stages.gate_stage import GateStage
+from wombat.stages.gate_stage import GateStage, make_gate_evaluator, make_stub_evaluator
 
 _FIXED_NOW = datetime(2026, 7, 2, 12, 0, 0, tzinfo=UTC)
 _TAKEN_AT = _FIXED_NOW.timestamp()
@@ -40,19 +43,14 @@ _URGENCY_THRESHOLD = 0.75
 _STALENESS_CEILING_S = 300.0
 _CONFIDENCE_FLOOR = 0.5
 
-
-def _evaluate(gate_item: GateItem, presence: PresenceSnapshot | None) -> GateDecision:
-    """The evaluate callable GateStage is composed with — a partial-shaped wrapper over
-    ``stub_evaluate`` binding ``urgency_threshold``/``staleness_ceiling_s``/``confidence_floor``
-    (mirrors the real ``functools.partial`` composition wiring; a plain function is equivalent
-    and simpler for tests)."""
-    return stub_evaluate(
-        gate_item,
-        presence,
-        urgency_threshold=_URGENCY_THRESHOLD,
-        staleness_ceiling_s=_STALENESS_CEILING_S,
-        confidence_floor=_CONFIDENCE_FLOOR,
-    )
+# The async-batch evaluate callable GateStage is composed with (Q-55) — built via the same
+# ``make_stub_evaluator`` factory production composition uses, binding urgency_threshold/
+# staleness_ceiling_s/confidence_floor exactly as ``functools.partial`` composition would.
+_evaluate = make_stub_evaluator(
+    urgency_threshold=_URGENCY_THRESHOLD,
+    staleness_ceiling_s=_STALENESS_CEILING_S,
+    confidence_floor=_CONFIDENCE_FLOOR,
+)
 
 
 def _drained_batch_artifact(items: list[QueueItem]) -> Artifact:
@@ -216,11 +214,12 @@ async def test_ac4_ten_items_in_sequence_all_decide_with_no_exceptions() -> None
 # --- GateStage integration (pure, via StageContextFake / real Artifact) --------------------------
 
 
-async def test_gate_stage_surfaces_and_holds_round_trip_through_the_wire_helpers() -> None:
-    items = [
-        QueueItem(idempotency_key="a", payload={"stub_urgency": "high"}, item_id=1),
-        QueueItem(idempotency_key="b", payload={"stub_urgency": "low"}, item_id=2),
-    ]
+async def test_gate_stage_surfaces_a_high_urgency_item_round_trip_through_the_wire_helpers() -> (
+    None
+):
+    """At the Q-51 mvp batch_size=1 composition rule, one drained item -> one evaluate() call ->
+    one GateDecision, pairing exactly (decision, its own queue_item) as the sole entry."""
+    items = [QueueItem(idempotency_key="a", payload={"stub_urgency": "high"}, item_id=1)]
     ctx = StageContextFake(
         now_fn=lambda: _FIXED_NOW,
         last_output_map={"drain_queue": _drained_batch_artifact(items)},
@@ -237,12 +236,28 @@ async def test_gate_stage_surfaces_and_holds_round_trip_through_the_wire_helpers
     assert result.output.provenance.confidence == 1.0
 
     entries = gate_decisions_from_artifact_data(result.output.data)
-    assert len(entries) == 2
-    (decision_a, queue_item_a), (decision_b, queue_item_b) = entries
-    assert decision_a.action is GateAction.SURFACE_IMMEDIATE
-    assert queue_item_a == items[0]
-    assert decision_b.action is GateAction.HOLD
-    assert queue_item_b == items[1]
+    assert len(entries) == 1
+    decision, queue_item = entries[0]
+    assert decision.action is GateAction.SURFACE_IMMEDIATE
+    assert queue_item == items[0]
+
+
+async def test_gate_stage_holds_a_low_urgency_item() -> None:
+    items = [QueueItem(idempotency_key="b", payload={"stub_urgency": "low"}, item_id=2)]
+    ctx = StageContextFake(
+        now_fn=lambda: _FIXED_NOW,
+        last_output_map={"drain_queue": _drained_batch_artifact(items)},
+    )
+    stage = GateStage(evaluate=_evaluate, presence_provider=lambda: _ACTIVE)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    entries = gate_decisions_from_artifact_data(result.output.data)
+    assert len(entries) == 1
+    decision, queue_item = entries[0]
+    assert decision.action is GateAction.HOLD
+    assert queue_item == items[0]
 
 
 async def test_gate_stage_holds_all_items_when_presence_is_unknown() -> None:
@@ -287,10 +302,8 @@ def test_gate_decisions_artifact_data_round_trip_is_lossless() -> None:
         action=GateAction.SURFACE_IMMEDIATE,
         items=(ScoredItem(item_id="a", item_kind=ItemKind.DRAFT, urgency=0.9, load=0.2),),
     )
-    decision_hold = GateDecision(
-        action=GateAction.HOLD,
-        items=(ScoredItem(item_id="b", item_kind=ItemKind.GENERIC, urgency=0.1, load=0.0),),
-    )
+    # A HOLD with EMPTY items (Q-55: the production Gate's HOLD carries no scored item at all).
+    decision_hold = GateDecision(action=GateAction.HOLD, items=())
     queue_item_a = QueueItem(idempotency_key="a", payload={"stub_urgency": "high"}, item_id=1)
     queue_item_b = QueueItem(idempotency_key="b", payload={"stub_urgency": "low"}, item_id=2)
     entries = [(decision_surface, queue_item_a), (decision_hold, queue_item_b)]
@@ -301,12 +314,14 @@ def test_gate_decisions_artifact_data_round_trip_is_lossless() -> None:
         "decisions": [
             {
                 "action": "surface_immediate",
-                "scored_item": {
-                    "item_id": "a",
-                    "item_kind": "draft",  # enum on the wire as its .value string (Q-49)
-                    "urgency": 0.9,
-                    "load": 0.2,
-                },
+                "scored_items": [
+                    {
+                        "item_id": "a",
+                        "item_kind": "draft",  # enum on the wire as its .value string (Q-49)
+                        "urgency": 0.9,
+                        "load": 0.2,
+                    }
+                ],
                 "queue_item": {
                     "idempotency_key": "a",
                     "payload": {"stub_urgency": "high"},
@@ -315,12 +330,7 @@ def test_gate_decisions_artifact_data_round_trip_is_lossless() -> None:
             },
             {
                 "action": "hold",
-                "scored_item": {
-                    "item_id": "b",
-                    "item_kind": "generic",  # enum on the wire as its .value string (Q-49)
-                    "urgency": 0.1,
-                    "load": 0.0,
-                },
+                "scored_items": [],  # Q-55: zero-or-many, never a bare "scored_item"
                 "queue_item": {
                     "idempotency_key": "b",
                     "payload": {"stub_urgency": "low"},
@@ -329,6 +339,24 @@ def test_gate_decisions_artifact_data_round_trip_is_lossless() -> None:
             },
         ]
     }
+    assert gate_decisions_from_artifact_data(data) == entries
+
+
+def test_gate_decisions_artifact_data_round_trips_a_multi_item_flush_decision() -> None:
+    """Q-55: SURFACE_FLUSH can carry MANY scored items (the whole flushed pending set)."""
+    decision_flush = GateDecision(
+        action=GateAction.SURFACE_FLUSH,
+        items=(
+            ScoredItem(item_id="x", item_kind=ItemKind.GENERIC, urgency=0.8, load=0.3),
+            ScoredItem(item_id="y", item_kind=ItemKind.DRAFT, urgency=0.6, load=0.4),
+        ),
+    )
+    queue_item = QueueItem(idempotency_key="x", payload={"stub_urgency": "high"}, item_id=5)
+    entries = [(decision_flush, queue_item)]
+
+    data = gate_decisions_to_artifact_data(entries)
+
+    assert len(data["decisions"][0]["scored_items"]) == 2
     assert gate_decisions_from_artifact_data(data) == entries
 
 
@@ -378,6 +406,95 @@ def test_gate_decisions_artifact_data_is_json_native_and_round_trips_through_jso
     serialized = json.dumps(data)
     # 2. full round-trip through the JSON string yields the exact same entries (lossless).
     assert gate_decisions_from_artifact_data(json.loads(serialized)) == entries
+
+
+# --- make_gate_evaluator: the production Gate adapter (Q-55) ------------------------------------
+
+
+class _FixedUserModel:
+    """Returns a fixed RatingParams/EventClass regardless of the item (mirrors test_pipeline.py's
+    ``_FakeUserModel`` — a real ``Gate`` needs the ``UserModelProtocol`` shape, not a mock)."""
+
+    def __init__(self, rating_params: RatingParams) -> None:
+        self._rating_params = rating_params
+
+    def resolve_event_class(self, item: GateItem) -> EventClass:
+        return EventClass.GENERIC
+
+    async def ratings_for(self, item: GateItem) -> RatingParams:
+        return self._rating_params
+
+
+class _AlwaysAllowCeiling:
+    def allow(self, event_class: EventClass) -> bool:
+        return True
+
+    def record(self, event_class: EventClass) -> None:
+        pass
+
+
+def _real_gate(*, rating_params: RatingParams, urgency_threshold: float = 0.5) -> Gate:
+    return Gate(
+        user_model=_FixedUserModel(rating_params),
+        pending_set=PendingSet(journal=InMemoryPendingJournal(), max_pending=50),
+        ceiling=_AlwaysAllowCeiling(),
+        urgency_threshold=urgency_threshold,
+        load_flush_threshold=10.0,
+        flush_min_age_seconds=100.0,
+        clock=lambda: _TAKEN_AT,
+    )
+
+
+async def test_make_gate_evaluator_surfaces_a_worthy_item_when_presence_is_active() -> None:
+    rating_params = RatingParams(urgency_base=0.9, urgency_gain=0.0, load_base=0.0, load_gain=0.0)
+    gate = _real_gate(rating_params=rating_params, urgency_threshold=0.1)
+    evaluate = make_gate_evaluator(
+        gate=gate,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+        clock=lambda: _TAKEN_AT,
+    )
+    item = GateItem(item_id="a", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    decision = await evaluate([item], _ACTIVE)
+
+    assert decision.action is GateAction.SURFACE_IMMEDIATE
+    assert [scored.item_id for scored in decision.items] == ["a"]
+
+
+async def test_make_gate_evaluator_holds_when_presence_is_none() -> None:
+    """``presence=None`` -> ``presence_hold`` returns True -> ``surfacing_permitted=False`` —
+    the SAME degrade-to-held rule every presence-first call site in wombat honors (Q-12)."""
+    rating_params = RatingParams(urgency_base=0.9, urgency_gain=0.0, load_base=0.0, load_gain=0.0)
+    gate = _real_gate(rating_params=rating_params, urgency_threshold=0.1)
+    evaluate = make_gate_evaluator(
+        gate=gate,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+        clock=lambda: _TAKEN_AT,
+    )
+    item = GateItem(item_id="a", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    decision = await evaluate([item], None)
+
+    assert decision.action is GateAction.HOLD
+    assert decision.items == ()  # the production Gate's HOLD carries no scored item (Q-55)
+
+
+async def test_make_gate_evaluator_holds_when_presence_is_unknown() -> None:
+    rating_params = RatingParams(urgency_base=0.9, urgency_gain=0.0, load_base=0.0, load_gain=0.0)
+    gate = _real_gate(rating_params=rating_params, urgency_threshold=0.1)
+    evaluate = make_gate_evaluator(
+        gate=gate,
+        staleness_ceiling_s=_STALENESS_CEILING_S,
+        confidence_floor=_CONFIDENCE_FLOOR,
+        clock=lambda: _TAKEN_AT,
+    )
+    item = GateItem(item_id="a", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    decision = await evaluate([item], _UNKNOWN)
+
+    assert decision.action is GateAction.HOLD
 
 
 def test_drained_batch_artifact_data_is_json_native() -> None:

@@ -13,6 +13,14 @@ principle). ``gate_decisions_to_artifact_data`` / ``gate_decisions_from_artifact
 same convention applied to the gate's own output (Q-48): each entry carries the ORIGINAL Q-47
 queue-item dict alongside the decision so TK-7 can ack holds without a second lookup.
 
+GENERALIZATION (Q-55 rider, demo-harness assembly): ``GateDecision.items`` widened from an
+always-exactly-one invariant (the TK-6 stub) to ZERO-OR-MANY once the production ``Gate``
+(TK-27, ``gate/pipeline.py``) landed — its HOLD carries an EMPTY ``items`` tuple (the score was
+discarded once the item entered the pending set) and its SURFACE_FLUSH carries the WHOLE flushed
+pending set (possibly many). The wire key is therefore ``"scored_items"`` (a LIST, never a bare
+``"scored_item"``) so both cardinalities round-trip losslessly; there is no per-entry "exactly
+one" assertion any more.
+
 ``compose_request_to_artifact_data`` / ``compose_request_from_artifact_data`` (TK-8, Q-50) define
 the ``ComposeStage`` input wire NOW so TK-10 (the not-yet-built ``compose_dispatch`` stage) can
 produce it later with zero rework. The wire is deliberately narrow: ``item_id``, ``item_kind``
@@ -70,25 +78,28 @@ def queue_items_from_artifact_data(data: dict[str, Any]) -> list[QueueItem]:
 
 
 def gate_decisions_to_artifact_data(entries: list[GateDecisionEntry]) -> dict[str, Any]:
-    """Serialize gate decisions into an Artifact ``data`` payload (Q-48).
+    """Serialize gate decisions into an Artifact ``data`` payload (Q-48, widened Q-55).
 
-    ``{"decisions": [{"action": <GateAction value str>, "scored_item": <ScoredItem asdict>,
-    "queue_item": <the original Q-47 queue-item dict>}, ...]}`` — one entry per queue item,
-    each carrying its original queue-item dict so TK-7 can ack holds.
+    ``{"decisions": [{"action": <GateAction value str>, "scored_items": [<ScoredItem asdict>,
+    ...], "queue_item": <the original Q-47 queue-item dict>}, ...]}`` — one entry per queue item,
+    each carrying its original queue-item dict so TK-7 can ack holds. ``scored_items`` is a LIST
+    (zero-or-many, Q-55): the production ``Gate``'s HOLD carries no items and its SURFACE_FLUSH
+    can carry many; the TK-6 stub's always-exactly-one shape round-trips as a one-element list.
     """
     decisions: list[dict[str, Any]] = []
     for decision, queue_item in entries:
-        assert len(decision.items) == 1, "stub_evaluate always emits exactly one ScoredItem"
-        scored_item = decision.items[0]
-        # Artifact.data must be plain-JSON-native (Q-49): enums go on the wire as their .value,
-        # never as the enum MEMBER. asdict() leaves item_kind as the ItemKind member, so overwrite
-        # it with .value — mirroring how "action" already stores GateAction.value.
-        scored_dict = asdict(scored_item)
-        scored_dict["item_kind"] = scored_item.item_kind.value
+        scored_items: list[dict[str, Any]] = []
+        for scored_item in decision.items:
+            # Artifact.data must be plain-JSON-native (Q-49): enums go on the wire as their
+            # .value, never as the enum MEMBER. asdict() leaves item_kind as the ItemKind member,
+            # so overwrite it with .value — mirroring how "action" already stores GateAction.value.
+            scored_dict = asdict(scored_item)
+            scored_dict["item_kind"] = scored_item.item_kind.value
+            scored_items.append(scored_dict)
         decisions.append(
             {
                 "action": decision.action.value,
-                "scored_item": scored_dict,
+                "scored_items": scored_items,
                 "queue_item": asdict(queue_item),
             }
         )
@@ -96,17 +107,19 @@ def gate_decisions_to_artifact_data(entries: list[GateDecisionEntry]) -> dict[st
 
 
 def gate_decisions_from_artifact_data(data: dict[str, Any]) -> list[GateDecisionEntry]:
-    """The inverse of ``gate_decisions_to_artifact_data`` — the ONLY path back (Q-48)."""
+    """The inverse of ``gate_decisions_to_artifact_data`` — the ONLY path back (Q-48/Q-55)."""
     entries: list[GateDecisionEntry] = []
     for raw in data["decisions"]:
-        scored_raw = raw["scored_item"]
-        scored_item = ScoredItem(
-            item_id=scored_raw["item_id"],
-            item_kind=ItemKind(scored_raw["item_kind"]),
-            urgency=scored_raw["urgency"],
-            load=scored_raw["load"],
+        scored_items = tuple(
+            ScoredItem(
+                item_id=scored_raw["item_id"],
+                item_kind=ItemKind(scored_raw["item_kind"]),
+                urgency=scored_raw["urgency"],
+                load=scored_raw["load"],
+            )
+            for scored_raw in raw["scored_items"]
         )
-        decision = GateDecision(action=GateAction(raw["action"]), items=(scored_item,))
+        decision = GateDecision(action=GateAction(raw["action"]), items=scored_items)
         queue_item = QueueItem(**raw["queue_item"])
         entries.append((decision, queue_item))
     return entries
