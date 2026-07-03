@@ -37,9 +37,13 @@ from cogworx.runtime.sweeper import Sweeper
 from wombat.bootstrap import RuntimeBundle, assemble_runtime
 from wombat.config import ConfigurationError, load_config
 from wombat.params import OperatingParams, load_operating_params
+from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 
 _HEARTBEAT_ARTIFACT_KIND = "drain-tick"
 _RUNTIME_RUN_ID_PREFIX = "wombat-drain"
+# TK-97: the schedule pathway's initial-drive run-id prefix — arms the brief timer at boot (which
+# is also the crash-miss catch: a boot after this morning's brief_time fires the missed brief once).
+_SCHEDULE_RUN_ID_PREFIX = "wombat-brief-schedule"
 
 
 def _heartbeat_artifact() -> Artifact:
@@ -70,6 +74,17 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
             pathway_id=bundle.drain_pathway_id,
             initial=_heartbeat_artifact(),
         )
+        # TK-97: a SECOND initial drive arms the once-daily brief timer (and catches a brief missed
+        # while the process was down: a boot past this morning's brief_time fires it once). Only
+        # when the schedule pathway was registered — a brief-path-less boot skips it, never crashes.
+        if bundle.brief_schedule_pathway_id is not None:
+            schedule_run_id = f"{_SCHEDULE_RUN_ID_PREFIX}-{uuid4()}"
+            await bundle.engine.run(
+                run_id=schedule_run_id,
+                session_id=schedule_run_id,
+                pathway_id=bundle.brief_schedule_pathway_id,
+                initial=brief_timer_tick_artifact(datetime.now(UTC)),
+            )
         sweeper = Sweeper(
             journal=bundle.journal,
             fire=bundle.engine.fire_timer,

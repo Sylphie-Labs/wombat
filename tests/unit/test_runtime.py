@@ -40,7 +40,7 @@ from cogworx.runtime.engine import Engine
 from cogworx.runtime.sweeper import Sweeper
 from cogworx.testing.doubles import InMemoryGraphStore, InMemoryJournal, InMemoryLatentStore
 
-from tests.support.stage_context_fake import FakeModel
+from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat import bootstrap, runtime
 from wombat.bootstrap import RuntimeBundle
 from wombat.compose.templates import TemplateComposer
@@ -345,6 +345,71 @@ def test_assemble_runtime_blank_brief_path_skips_registration_and_warns(
         bundle.pathways.get("wombat.brief")
 
 
+# --- TK-97: assemble_runtime's CONDITIONAL wombat.brief_schedule registration -------------------
+
+
+def test_build_brief_schedule_pathway_constructs_without_stage_graph_error() -> None:
+    """Locks in the Q-80-as-amended fix: a lone self-only-edge timer stage would trip cog-worx's
+    "the graph can end" invariant, so the builder pairs it with a never-reached terminal stub."""
+    from datetime import time
+
+    from wombat.pathways.brief_pathway import build_brief_schedule_pathway
+    from wombat.stages.brief_timer_stage import BriefTimerStage
+
+    async def _never_fires(now: object) -> object:  # pragma: no cover - never called here
+        raise AssertionError("construction must not fire the brief")
+
+    timer = BriefTimerStage(
+        fire_brief=_never_fires,  # type: ignore[arg-type]
+        ran_today=lambda: False,
+        mark_ran=lambda: 1,
+        tz=ZoneInfo("UTC"),
+        brief_time=time(7, 0),
+    )
+
+    graph = build_brief_schedule_pathway(timer)  # must NOT raise StageGraphError
+
+    assert graph.entry == "brief_timer"
+    assert set(graph.names()) == {"brief_timer", "brief_timer_terminal"}
+    assert graph.is_terminal("brief_timer_terminal")
+    assert not graph.is_terminal("brief_timer")  # the timer self-parks, never terminal
+
+
+async def test_brief_timer_terminal_stub_raises_if_ever_entered() -> None:
+    from wombat.pathways.brief_pathway import BriefTimerTerminalStage
+
+    ctx = StageContextFake(now_fn=lambda: datetime.now(UTC))
+    with pytest.raises(RuntimeError):
+        await BriefTimerTerminalStage().run(ctx)
+
+
+def test_assemble_runtime_with_brief_path_registers_schedule(tmp_path: Path) -> None:
+    op = load_operating_params()
+    config = _config_with_brief_path(str(tmp_path / "brief.txt"))
+
+    bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+
+    assert bundle.brief_schedule_pathway_id == "wombat.brief_schedule"
+    graph = bundle.pathways.get(bundle.brief_schedule_pathway_id)
+    assert graph is not None
+    assert graph.entry == "brief_timer"
+
+
+def test_assemble_runtime_blank_brief_path_skips_schedule(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    op = load_operating_params()
+    config = _config()  # wombat_brief_path defaults to None
+
+    with caplog.at_level(logging.WARNING):
+        bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+
+    # BOTH brief and schedule are skipped together (one conditional, no crash).
+    assert bundle.brief_schedule_pathway_id is None
+    with pytest.raises(PathwayError):
+        bundle.pathways.get("wombat.brief_schedule")
+
+
 class _NullEnqueuer:
     """An ``Enqueuer`` that is never expected to be called (no sources are registered below)."""
 
@@ -449,6 +514,7 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
         brief_pathway_id=None,
+        brief_schedule_pathway_id=None,
     )
     op = load_operating_params().model_copy(
         update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
@@ -465,3 +531,124 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         await task
 
     assert registry.stop_calls == 1
+
+
+# --- TK-97: serve() fires the SECOND initial drive on the schedule pathway when registered -------
+
+
+@dataclass
+class _ScheduleSpyStage:
+    """A schedule-pathway entry stage that records each drive and self-parks far in the future —
+    stands in for ``BriefTimerStage`` so this stays a pure serve()-wiring test (the fire/fence
+    behavior is covered by the stage + e2e tests)."""
+
+    ran: list[int] = field(default_factory=list)
+    name: str = "sched_only"
+    transitions: tuple[str, ...] = ("sched_only", "sched_terminal")
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        self.ran.append(1)
+        return Wait(
+            to="sched_only",
+            wake_at=ctx.clock() + timedelta(hours=1),
+            output=Artifact(
+                kind="noop",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _ScheduleTerminalStage:
+    name: str = "sched_terminal"
+    transitions: tuple[str, ...] = ()
+
+    async def run(self, ctx: StageContext) -> StageResult:  # pragma: no cover - never reached
+        return Done(
+            output=Artifact(
+                kind="noop",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            )
+        )
+
+
+def _serve_bundle(
+    *, schedule_spy: _ScheduleSpyStage | None, schedule_pathway_id: str | None
+) -> tuple[RuntimeBundle, _RecordingSourceRegistry]:
+    """Assemble a minimal in-memory ``RuntimeBundle`` with the drain pathway ``only`` plus, when
+    ``schedule_spy`` is given, a schedule pathway ``sched`` — so a serve() run can prove the second
+    initial drive fires (or is skipped) purely from the ``brief_schedule_pathway_id`` field."""
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    pathways.register("only", StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only"))
+    if schedule_spy is not None:
+        pathways.register(
+            "sched",
+            StageGraph([schedule_spy, _ScheduleTerminalStage()], entry="sched_only"),
+        )
+
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
+    )
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+    )
+    registry = _RecordingSourceRegistry()
+    bundle = RuntimeBundle(
+        engine=engine,
+        pathways=pathways,
+        journal=journal,
+        drain_pathway_id="only",
+        source_registry=registry,
+        pending_journal=PgPendingJournal(_FAKE_DSN),
+        queue=WombatQueue(_FAKE_DSN, max_size=10),
+        daily_ledger=DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC")),
+        compose_stage=ComposeStage(config=_config(), template_composer=TemplateComposer()),
+        brief_pathway_id=None,
+        brief_schedule_pathway_id=schedule_pathway_id,
+    )
+    return bundle, registry
+
+
+async def _run_serve_briefly(bundle: RuntimeBundle) -> None:
+    op = load_operating_params().model_copy(
+        update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
+    )
+    task: asyncio.Task[None] = asyncio.ensure_future(runtime._drive_and_serve(bundle, params=op))
+    for _ in range(50):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_serve_fires_second_initial_drive_on_schedule_when_registered() -> None:
+    spy = _ScheduleSpyStage()
+    bundle, _registry = _serve_bundle(schedule_spy=spy, schedule_pathway_id="sched")
+
+    await _run_serve_briefly(bundle)
+
+    assert spy.ran == [1]  # the schedule pathway was driven exactly once at boot (timer armed)
+
+
+async def test_serve_skips_schedule_drive_when_none_and_does_not_crash() -> None:
+    # A schedule pathway IS registered, but brief_schedule_pathway_id is None -> serve() must not
+    # drive it (and must boot cleanly regardless).
+    spy = _ScheduleSpyStage()
+    bundle, registry = _serve_bundle(schedule_spy=spy, schedule_pathway_id=None)
+
+    await _run_serve_briefly(bundle)
+
+    assert spy.ran == []  # never driven when the field is None
+    assert registry.stop_calls == 1  # still shut down cleanly

@@ -53,13 +53,14 @@ from cogworx.model.providers.config import ProviderConfig
 from cogworx.model.registry import ModelRegistry, ModelSpec
 from cogworx.recall.stack import RecallStack
 from cogworx.runtime.engine import Engine
-from cogworx.substrate.journal import Journal
+from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
-from .domain.daily_ledger import DailyLedger
+from .domain.brief_schedule import BriefRunLedger
+from .domain.daily_ledger import DailyLedger, wombat_today
 from .gate.ceiling import CeilingLedger
 from .gate.decay import DayRollover
 from .gate.models import ItemKind
@@ -68,7 +69,13 @@ from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
 from .integrations.gmail.triage import load_triage_rules
 from .params import OperatingParams, load_operating_params
-from .pathways.brief_pathway import BRIEF_PATHWAY_ID, build_brief_pathway
+from .pathways.brief_pathway import (
+    BRIEF_PATHWAY_ID,
+    BRIEF_SCHEDULE_PATHWAY_ID,
+    brief_trigger_artifact,
+    build_brief_pathway,
+    build_brief_schedule_pathway,
+)
 from .pathways.drain_pathway import build_drain_pathway
 from .queue import WombatQueue
 from .sources.bootstrap import build_brief_fetches, build_source_registry
@@ -78,6 +85,7 @@ from .stages.brief_compose_stage import BriefComposeStage
 from .stages.brief_deliver_stage import BriefDeliverStage
 from .stages.brief_force_flush_stage import BriefForceFlushStage
 from .stages.brief_gather_stage import BriefGatherStage
+from .stages.brief_timer_stage import BriefTimerStage
 from .stages.compose import ComposeStage
 from .stages.compose_dispatch_router import ComposeDispatchRouter
 from .stages.drain_queue import DrainQueueStage
@@ -285,6 +293,10 @@ class RuntimeBundle:
     # TK-96: the registered ``wombat.brief`` pathway id, or ``None`` when ``config.wombat_brief_
     # path`` was blank/absent and registration was skipped (TK-97's entrypoint reads this field).
     brief_pathway_id: str | None
+    # TK-97: the registered ``wombat.brief_schedule`` pathway id (the once-daily brief timer), or
+    # ``None`` when the brief path was blank/absent (BOTH brief + schedule are skipped together).
+    # ``runtime.serve()`` fires a second initial drive on this pathway only when it is non-None.
+    brief_schedule_pathway_id: str | None
 
 
 def assemble_runtime(
@@ -403,6 +415,37 @@ def assemble_runtime(
     engine = build_engine(substrate, config=config, params=op)
     source_registry = build_source_registry(config, queue, tz=tz)
 
+    # TK-97 (Q-80): register wombat.brief_schedule — the once-daily brief timer — inside the SAME
+    # brief-path conditional (blank brief path already loud-skipped BOTH above, leaving
+    # brief_pathway_id None here). Built AFTER build_engine so the fire_brief closure can capture
+    # the live Engine. fire_brief drives wombat.brief under a DAY-KEYED run_id: same wombat-day ->
+    # same run_id -> the TK-101 file-marker makes a re-fire a replay=True no-op (AC4).
+    brief_schedule_pathway_id: str | None = None
+    if brief_pathway_id is not None:
+
+        async def fire_brief(now: datetime) -> RunState:
+            run_id = f"wombat-brief-{wombat_today(now, tz).isoformat()}"
+            return await engine.run(
+                run_id=run_id,
+                session_id=run_id,
+                pathway_id=BRIEF_PATHWAY_ID,
+                initial=brief_trigger_artifact(now),
+            )
+
+        # The exactly-once fence rides the SAME DailyLedger instance as the ceiling/spend ledgers
+        # (a distinct "brief:run" row — no collision), so the runtime shares ONE row lifecycle.
+        brief_run_ledger = BriefRunLedger(daily_ledger)
+        brief_timer_stage = BriefTimerStage(
+            fire_brief=fire_brief,
+            ran_today=brief_run_ledger.ran_today,
+            mark_ran=brief_run_ledger.mark_ran,
+            tz=tz,
+            brief_time=op.morning_brief_time,
+        )
+        schedule_graph = build_brief_schedule_pathway(brief_timer_stage)
+        substrate.pathways.register(BRIEF_SCHEDULE_PATHWAY_ID, schedule_graph)
+        brief_schedule_pathway_id = BRIEF_SCHEDULE_PATHWAY_ID
+
     return RuntimeBundle(
         engine=engine,
         pathways=substrate.pathways,
@@ -414,4 +457,5 @@ def assemble_runtime(
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
         brief_pathway_id=brief_pathway_id,
+        brief_schedule_pathway_id=brief_schedule_pathway_id,
     )
