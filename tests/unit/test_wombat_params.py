@@ -32,7 +32,7 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "wombat"
 def _valid_mapping() -> dict[str, object]:
     """A complete, well-typed parameter mapping (mirrors the shipped wombat_params.yaml)."""
     return {
-        "version": 3,
+        "version": 4,
         "urgency_threshold": 0.75,
         "load_flush_threshold": 1.0,
         "per_class_daily_ceiling": 3,
@@ -53,6 +53,8 @@ def _valid_mapping() -> dict[str, object]:
         "presence_staleness_ceiling_seconds": 300.0,
         "presence_confidence_floor": 0.5,
         "presence_idle_threshold_seconds": 60.0,
+        "sweeper_interval_seconds": 5.0,
+        "sweeper_lease_ttl_seconds": 60.0,
     }
 
 
@@ -86,6 +88,8 @@ def test_shipped_params_load_with_every_field_typed() -> None:
     assert isinstance(params.presence_staleness_ceiling_seconds, float)
     assert isinstance(params.presence_confidence_floor, float)
     assert isinstance(params.presence_idle_threshold_seconds, float)
+    assert isinstance(params.sweeper_interval_seconds, float)
+    assert isinstance(params.sweeper_lease_ttl_seconds, float)
 
 
 def test_file_carries_a_version_field() -> None:
@@ -163,6 +167,20 @@ def test_presence_hold_fields_load_are_float_and_equal_shipped_values() -> None:
     assert params.presence_idle_threshold_seconds == 60.0
 
 
+# --- Sweeper cadence (TK-53) — the 2 sweeper tunables load, are typed, equal shipped values ---
+
+
+def test_sweeper_cadence_fields_load_are_typed_and_equal_shipped_values() -> None:
+    """The TK-53 sweeper cadence tunables load as the documented shipped YAML values."""
+    params = load_operating_params()
+
+    assert isinstance(params.sweeper_interval_seconds, float)
+    assert params.sweeper_interval_seconds == 5.0
+
+    assert isinstance(params.sweeper_lease_ttl_seconds, float)
+    assert params.sweeper_lease_ttl_seconds == 60.0
+
+
 # --- Spend ledger (TK-9) — the 3 mouth-budget tunables load, are typed, equal shipped values ---
 
 
@@ -218,6 +236,7 @@ _PRODUCTION_CONSUMER_PATHS = (
     _SRC_ROOT / "cost" / "daily_spend_ledger.py",  # TK-9
     _SRC_ROOT / "stages" / "compose.py",  # TK-9 (mouth ceilings injected, not hard-coded)
     _SRC_ROOT / "bootstrap.py",  # TK-9 (BudgetPolicy ceilings wired from OperatingParams)
+    _SRC_ROOT / "runtime.py",  # TK-53 (sweeper cadence injected, not hard-coded)
     _SRC_ROOT / "rating" / "rating_tuner.py",  # TK-49, not yet built
 )
 

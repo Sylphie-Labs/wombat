@@ -40,6 +40,12 @@ class WombatConfig(BaseSettings):
     google_oauth_client_id: str | None = None
     google_oauth_client_secret: SecretStr | None = None
 
+    # OPTIONAL (TK-53, Q-36/Q-71): the Postgres DSN backing the standing runtime's queue/daily-
+    # ledger/pending-journal (the queue is pg-only). Deliberately NOT in REQUIRED_ENV — the
+    # drain spine/demo/tests must keep booting without it; ``wombat.runtime.serve()`` requires
+    # it and fails loud (``ConfigurationError`` naming it) before starting.
+    wombat_pg_dsn: str | None = None
+
 
 def load_config() -> WombatConfig:
     """Load + validate config from the environment, or raise ConfigurationError loudly."""

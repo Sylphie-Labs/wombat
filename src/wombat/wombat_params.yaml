@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 3
+version: 4
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -82,3 +82,12 @@ presence_confidence_floor: 0.5
 #   IDLE (or AWAY once idle exceeds the descriptive-only AWAY_THRESHOLD_S in
 #   sources/presence.py). 60s, matching the TK-4 hypothesis.
 presence_idle_threshold_seconds: 60.0
+
+# --- Sweeper cadence (TK-53) ------------------------------------------------------------
+# CHOSEN-HERE — the standing runtime's durable-timer poll loop (cogworx.runtime.sweeper.Sweeper).
+# sweeper_interval_seconds: how often the sweeper polls the journal for due timers.
+sweeper_interval_seconds: 5.0
+# sweeper_lease_ttl_seconds: how long a claimed-but-not-fired timer's lease is held before a
+#   later poll reclaims it (crash safety — see Sweeper's own docstring for the at-least-once-
+#   fire/exactly-once-advance guarantee this backs).
+sweeper_lease_ttl_seconds: 60.0

@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Bump in lock-step with wombat_params.yaml's ``version`` whenever a field is added, removed,
 # or renamed, so a persisted file can be reconciled against the code's expectation.
-OPERATING_PARAMS_VERSION = 3
+OPERATING_PARAMS_VERSION = 4
 
 _PARAMS_FILENAME = "wombat_params.yaml"
 
@@ -100,6 +100,10 @@ class OperatingParams(BaseModel):
     presence_staleness_ceiling_seconds: float
     presence_confidence_floor: float
     presence_idle_threshold_seconds: float
+
+    # --- Sweeper cadence (TK-53) — the standing runtime's durable-timer poll loop ---
+    sweeper_interval_seconds: float
+    sweeper_lease_ttl_seconds: float
 
 
 def _default_params_path() -> Path:
