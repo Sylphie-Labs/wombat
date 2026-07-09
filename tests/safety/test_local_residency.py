@@ -141,6 +141,48 @@ def test_ac1_off_host_endpoints_are_refused_naming_the_endpoint(
         check(endpoint)
 
 
+# ------------------------------------------------------------------------------- TK-183 (CR2-6)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "resolved"),
+    [
+        # remote-first: libpq tries resolved addresses in order and may dial the remote one
+        ("postgresql://db.example.com:5432/wombat", ["8.8.8.8", "127.0.0.1"]),
+        ("postgresql://db.example.com:5432/wombat", ["203.0.113.9", "127.0.0.1"]),
+    ],
+)
+def test_tk183_a_co_resolved_loopback_record_cannot_smuggle_a_remote_endpoint(
+    endpoint: str, resolved: list[str]
+) -> None:
+    """The register's exact repro: a hostname co-resolving to a remote address AND a loopback
+    address (multi-homed, or a DNS-rebinding response appending a loopback record) must be
+    REFUSED, not accepted on the strength of the one local address among several."""
+    check = make_residency_check(
+        resolver=lambda host: resolved, local_addrs=lambda: ["127.0.0.1", "::1"]
+    )
+    with pytest.raises(RemoteStorageConfigError, match=r"db\.example\.com"):
+        check(endpoint)
+
+
+def test_tk183_empty_resolution_is_refused_naming_the_key() -> None:
+    """A hostname the resolver cannot resolve at all (``[]``) must fail closed — refused, not
+    silently accepted (an empty ``resolved`` list satisfies no all-local guarantee)."""
+    config = _config(wombat_pg_dsn="postgresql://db.example.com:5432/wombat")
+    check = make_residency_check(resolver=lambda host: [], local_addrs=lambda: ["127.0.0.1"])
+    with pytest.raises(RemoteStorageConfigError, match=r"db\.example\.com"):
+        check(config.wombat_pg_dsn)  # type: ignore[arg-type]
+
+
+def test_tk183_multiple_local_addresses_are_accepted() -> None:
+    """A hostname resolving to several addresses, ALL of which are local, still passes — TK-183
+    only tightens the guard against a MIX of local and remote, not against multi-homing itself."""
+    check = make_residency_check(
+        resolver=lambda host: ["127.0.0.1", "::1"], local_addrs=lambda: ["127.0.0.1", "::1"]
+    )
+    check("postgresql://db.example.com:5432/wombat")  # must not raise
+
+
 # ------------------------------------------------------------------------------- TK-178 (CR2-1)
 
 

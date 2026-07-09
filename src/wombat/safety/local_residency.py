@@ -166,7 +166,12 @@ def make_residency_check(
                 return
         else:
             resolved = resolver(stripped_host)
-            if any(_addr_is_local(addr, locals_now) for addr in resolved):
+            # TK-183 (CR2-6): ALL resolved addresses must be local, not merely one — otherwise a
+            # co-resolved loopback record (multi-homed hostname, or a DNS-rebinding response that
+            # appends a loopback address) smuggles a genuinely remote endpoint past this guard,
+            # since libpq tries resolved addresses in order and may dial the remote one. An empty
+            # resolution list also fails closed (refused, not silently accepted).
+            if resolved and all(_addr_is_local(addr, locals_now) for addr in resolved):
                 return
 
         raise RemoteStorageConfigError(
