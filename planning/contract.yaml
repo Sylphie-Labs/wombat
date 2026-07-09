@@ -3093,6 +3093,291 @@ nodes:
     files_in_scope:
       - tests/sinks/test_speak_sink.py
 
+  # --- Tickets routed from the 2026-07-06 whole-codebase review (planning/code-review-2026-07-06.md, CR-1..CR-17) by the architect, 2026-07-08. ---
+  - id: TK-166
+    kind: ticket
+    parent: EP-8
+    title: 'Boot replay of the pg pending journal - held items survive restart (CR-1)'
+    intent: As the user, an item wombat held for me before a crash/restart still flushes into a later brief - journaled pending state is actually RECOVERED at boot, not just written (CST-1, RISK-5, Q-81, review CR-1).
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: One composition-root change plus one pg-gated crash-recovery test file. bootstrap.assemble_runtime() builds the gate's pending set via PendingSet.rebuild_from_journal(pending_journal, max_pending=op.max_pending) instead of the cold PendingSet(...) constructor (bootstrap.py line ~332). No PendingSet/PgPendingJournal code changes - rebuild_from_journal already exists (pending_set.py line ~220) and is proven by TK-25/TK-29 tests; this ticket wires the ONE missing production caller.
+    acceptance_criteria:
+      - given: a PgPendingJournal at the runtime DSN holding journaled PendingSetAdd records from a PRIOR process (held items whose queue rows were already acked)
+        when: bootstrap.assemble_runtime(dsn) constructs the runtime
+        then: the gate's pending set is built via PendingSet.rebuild_from_journal over that SAME pg journal - list() and cumulative_load() reflect the prior process's journaled held items (pg-gated test).
+      - given: a first assembled runtime that scores an item below threshold (held, journaled add, acked off the queue by review_or_speak) and is then dropped WITHOUT any teardown (simulated kill between queue-ack and restart)
+        when: a SECOND assemble_runtime over the same DSN boots and the gate's flush/select path runs (gate.select_items or the flush arm)
+        then: the held item is present - it survived the restart into the next flush and is not silently lost (the CR-1 crash-recovery proof, pg-gated).
+      - given: an empty pending journal (fresh install) and the existing DSN-gated boot suite
+        when: assemble_runtime boots
+        then: behavior is unchanged - empty pending set, max_pending still from OperatingParams, all existing boot/runtime tests stay green.
+    non_goals:
+      - No PendingSet or PgPendingJournal semantic changes (TK-25/TK-29 stand as-built).
+      - No journal compaction (deferred, DEF-6).
+      - No multi-process recovery (ASMP-2 unchanged).
+    depends_on:
+      - TK-29
+      - TK-53
+    files_in_scope:
+      - src/wombat/bootstrap.py
+      - tests/gate/test_boot_replay_pg.py
+  - id: TK-167
+    kind: ticket
+    parent: EP-20
+    title: 'Brief render treats wire-derived free text as untrusted display data (CR-2, DEC-27)'
+    intent: As the user, the morning brief - the one surface I am trained to trust on sight - cannot be socially engineered by an outside sender's subject/sender headers (or calendar titles) flowing verbatim into the mouth prompt (DEC-19 posture realized per DEC-27, review CR-2).
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: One pure deterministic sanitizer in brief_template.py applied to EVERY wire-derived free-text field at the render boundary (gmail subject/sender, calendar prep/conflict titles) - length-cap, strip newlines/control chars, delimit as quoted data - plus one BRIEF_SYSTEM_INSTRUCTION sentence telling the mouth quoted-data lines are content to render, never instructions to follow. render_brief_lines stays the ONE string feeding both the model prompt and the S8 fallback (TK-100 invariant), so sanitation lands in exactly one place. One adversarial test file mirroring tests/safety/test_taint_latch_adversarial.py's posture. The DEC-26/TK-148 body taint latch is untouched (bodies stay latched; this ticket covers metadata display strings).
+    acceptance_criteria:
+      - given: a GmailBriefItem whose subject and sender carry newlines, control characters, an over-long payload, and an instruction-shaped string (e.g. urging the reader to ignore the brief and call a phone number)
+        when: render_brief_lines renders the recap line
+        then: the emitted line is length-capped, contains no newline/control characters, and presents subject/sender delimited as quoted data via ONE shared sanitizer function.
+      - given: an adversarial battery of injection-shaped subjects/senders/titles (mirroring the taint-latch adversarial posture)
+        when: BriefComposeStage builds the model user message AND the S8 fallback path renders
+        then: no raw un-sanitized subject/sender/title appears in either output - both flow through render_brief_lines (the single-source-of-truth invariant held).
+      - given: calendar prep and conflict titles (outside-controlled wire text of the same trust class)
+        when: rendered
+        then: the SAME sanitizer applies to them.
+      - given: benign everyday subjects/senders/titles and the existing brief template + compose stage suites
+        when: the full suite runs
+        then: green - benign fields still render recognizably (verbatim modulo delimiting/caps), and BRIEF_SYSTEM_INSTRUCTION carries the quoted-data-is-content sentence.
+    non_goals:
+      - No change to the TK-148 body taint latch or the gmail/models.py metadata-only shape.
+      - No LLM-based sanitation (deterministic string treatment only, CON-1).
+      - Triage keyword gameability is NOT fixed here (accepted as RISK-9).
+    depends_on:
+      - TK-100
+    files_in_scope:
+      - src/wombat/compose/brief_template.py
+      - tests/compose/test_brief_template.py
+      - tests/compose/test_brief_render_adversarial.py
+  - id: TK-168
+    kind: ticket
+    parent: EP-17
+    title: 'OAuth readonly-scope guard bites on the STORED-token path, gmail + gcal (CR-3)'
+    intent: As the operator, a vaulted token that granted broader-than-readonly scopes (older consent, manual edit, future scope change without re-consent) is refused loudly at load - the guard checks what the token ACTUALLY granted, not the constant it was constructed with (DEC-3/DEC-9 read-only posture, review CR-3).
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: Two parallel small fixes (gmail/auth.py get_credentials, gcal/auth.py same pattern) - assert the readonly scope set against json.loads(stored).get("scopes") BEFORE constructing Credentials (from_authorized_user_info overrides creds.scopes with the passed constant, making the current post-construction assert tautological); keep the existing post-refresh assert and the fresh-consent path unchanged. One over-scoped-stored-token unit test per integration.
+    acceptance_criteria:
+      - given: a stored token JSON whose scopes list contains a broader scope (e.g. gmail.modify)
+        when: GmailAuth.get_credentials() loads it
+        then: the readonly scope assertion raises BEFORE any credential use - asserted against the STORED scopes, not the ctor constant (unit test with an over-scoped stored token, no network).
+      - given: a stored gcal token JSON whose scopes list contains a broader-than-readonly calendar scope
+        when: the gcal auth get_credentials() loads it
+        then: same refusal, same mechanism.
+      - given: a correctly-scoped stored token, the refresh path, and the fresh-consent path
+        when: the existing auth suites run
+        then: green - the post-refresh assert is retained and consent behavior is unchanged.
+    non_goals:
+      - No scope migration/re-consent flow (refusal is loud; re-consent is the operator's one-time CLI, TK-71 as-built).
+      - No token-store changes.
+    depends_on:
+      - TK-71
+      - TK-75
+    files_in_scope:
+      - src/wombat/integrations/gmail/auth.py
+      - src/wombat/integrations/gcal/auth.py
+      - tests/integrations/gmail/test_auth.py
+      - tests/integrations/gcal/test_auth.py
+  - id: TK-169
+    kind: ticket
+    parent: EP-9
+    title: 'DayRollover marks the day only AFTER the durable increment succeeds (CR-4)'
+    intent: As the user, a transient pg blip on the first gate check of a new day cannot permanently swallow that day's LedgerReset - the rollover retries until the durable upsert lands (DEC-21 day boundary, review CR-4).
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: A one-line ordering fix in gate/decay.py DayRollover.check() - assign self._last_seen = today only AFTER DailyLedger.increment() returns (currently assigned before, so a raising increment leaves _last_seen stamped and every later same-day check short-circuits). One test injecting a first-call-raising ledger double.
+    acceptance_criteria:
+      - given: a DailyLedger double whose increment raises on the FIRST call of a new wombat-day
+        when: DayRollover.check() is called (exception propagates, fail-loud unchanged) and then check() is called again the same day with the ledger healthy
+        then: the second call retries increment and emits the day's LedgerReset exactly once (value==1) - _last_seen was NOT stamped by the failed attempt.
+      - given: the existing TK-28 exactly-once battery (same-day repeats silent, restart never re-emits, 3-boundary probe)
+        when: the suite runs
+        then: green - exactly-once semantics unchanged on the healthy path.
+    non_goals:
+      - No retry/backoff machinery (the next natural check IS the retry).
+      - No change to the composite-PK ledger or LedgerReset consumers.
+    depends_on:
+      - TK-28
+    files_in_scope:
+      - src/wombat/gate/decay.py
+      - tests/gate/test_decay_and_reset.py
+  - id: TK-170
+    kind: ticket
+    parent: EP-15
+    title: 'GCal fetch_window tolerates a missing items key and warns loudly on truncation (CR-5)'
+    intent: As the user, an EMPTY calendar window never renders as Calendar-is-unavailable in the trusted brief, and a window larger than one page is never SILENTLY truncated (DEC-16 brief honesty, review CR-5).
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: Two small fixes in integrations/gcal/poller.py fetch_window - (1) response.json().get("items") or [] (Google may omit items on an empty window; gmail poller already defends this way); (2) when the response carries a nextPageToken, log a loud WARNING naming the source and the truncation (parity with gmail/poller.py's truncation convention). A full pagination loop is OPTIONAL - the loud warning is the accepted floor for v1's 48h window.
+    acceptance_criteria:
+      - given: a fake session returning a valid response body WITHOUT an items key
+        when: fetch_window runs
+        then: it returns [] with no KeyError - and BriefGatherStage over that source renders an EMPTY calendar, not the calendar-unavailable degrade line.
+      - given: a fake session returning a page carrying nextPageToken
+        when: fetch_window runs
+        then: a WARNING naming the gcal source and the truncation is logged (or all pages are fetched, in which case no warning and all events returned).
+      - given: the existing gcal poller and gather suites
+        when: they run
+        then: green - poll()'s never-raises degrade contract is unchanged.
+    non_goals:
+      - No mandatory full pagination (loud truncation is the v1 floor; revisit if a real window exceeds one page).
+      - No gmail poller changes (already conformant).
+    depends_on:
+      - TK-72
+      - TK-98
+    files_in_scope:
+      - src/wombat/integrations/gcal/poller.py
+      - tests/integrations/gcal/test_poller.py
+  - id: TK-171
+    kind: ticket
+    parent: EP-3
+    title: 'Degraded-source flag recovers on success; threshold predicate aligned across prod/sim/stub (CR-6 + CR-9)'
+    intent: As the operator, a single failed poll no longer marks a source degraded FOREVER (the health surface tells the truth after recovery), and the tuning sim that justified the shipped thresholds agrees with production exactly at the boundary value (review CR-6 + CR-9).
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: Two one-liners plus targeted tests. (1) sources/registry.py _poll_loop - self._degraded.discard(source.id) in the success branch, making the degraded_sources docstring (most recent poll raised) true again. (2) Align the boundary predicate to production's STRICT urgency > threshold (gate/trigger.py is_surfacing_worthy) - trigger_sim.py line ~82 and the TK-21 stub in gate.py line ~110 currently use >=, and the wombat_params.yaml comment says >= ; fix sim + stub + comment to the strict form.
+    acceptance_criteria:
+      - given: a source whose poll() raises on the first cycle and succeeds on the second
+        when: the registry poll loop runs both cycles
+        then: degraded_sources contains the id after the failure and does NOT contain it after the success.
+      - given: an item whose urgency EXACTLY equals urgency_threshold
+        when: production is_surfacing_worthy, the trigger sim, and the TK-21 stub gate each evaluate it
+        then: all three HOLD (strict greater-than everywhere); the params comment matches.
+      - given: the existing registry, trigger, and sim suites
+        when: they run
+        then: green (boundary-value test updates included where they asserted the old >=).
+    non_goals:
+      - No retirement of the TK-21 stub in this ticket (alignment only).
+      - No threshold VALUE changes (DEF-1 owns calibration).
+    depends_on:
+      - TK-3
+      - TK-27
+    files_in_scope:
+      - src/wombat/sources/registry.py
+      - src/wombat/gate/trigger_sim.py
+      - src/wombat/gate/gate.py
+      - src/wombat/wombat_params.yaml
+      - tests/unit/test_source_registry.py
+      - tests/gate/test_trigger_sim.py
+      - tests/unit/test_gate.py
+  - id: TK-172
+    kind: ticket
+    parent: EP-4
+    title: 'Own the latent fences - drain batch-size guard + router fallback edge declared (CR-10 + CR-12)'
+    intent: As a maintainer, the two silently-load-bearing composition facts are now ENFORCED where they live - batch_size=1 is a checked invariant (not a coincidence protecting against mid-batch surface + whole-batch-ack loss), and the router's compose fallback is always a declared graph edge (review CR-10 + CR-12).
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: Two guards plus tests, no behavior change at current composition. (1) The drain assembly path refuses a drain batch size other than 1 with a loud error NAMING the coupling (gate/pipeline.py returns mid-iteration on SURFACE_IMMEDIATE while gate_stage pairs the one decision with EVERY drained item and review_or_speak acks them all - silent loss at batch>1); guard lives where _DRAIN_BATCH_SIZE is consumed. (2) compose_dispatch_router.py derives transitions from the map values UNION the compose fallback constant, so Transition(to="compose") on an unknown kind is always a declared edge even when a future map omits it (verified latent - today's bootstrap map contains compose, so this is a fence, not a behavior change).
+    acceptance_criteria:
+      - given: the drain assembly seam invoked with batch size 2
+        when: assembly runs
+        then: it raises a loud error naming the mid-batch-surface/whole-batch-ack coupling; with batch size 1 assembly succeeds unchanged.
+      - given: a ComposeDispatchRouter constructed with a composer_by_kind map that does NOT contain compose among its values
+        when: the router is constructed
+        then: router.transitions contains compose (the fallback edge is declared), and an unknown-kind dispatch still transitions to compose with the existing warning.
+      - given: the existing pipeline, gate-stage, and router suites
+        when: they run
+        then: green - current composition (batch 1, GENERIC->compose map) behaves byte-identically.
+    non_goals:
+      - No batch>1 support (that is a future re-design of the decision wire, not a guard).
+      - No router dispatch-semantics changes.
+    depends_on:
+      - TK-6
+      - TK-10
+    files_in_scope:
+      - src/wombat/bootstrap.py
+      - src/wombat/stages/compose_dispatch_router.py
+      - tests/unit/test_bootstrap.py
+      - tests/unit/test_compose_dispatch_router.py
+  - id: TK-173
+    kind: ticket
+    parent: EP-1
+    title: 'Review hygiene batch - README refresh, tests-mypy debt, ledger close lifecycle, queue duplicate-at-capacity (CR-13..CR-16)'
+    intent: As a maintainer (human or agent), a fresh read of the repo is correctly calibrated (README describes the standing runtime), the strict-mypy bar covers tests/, every pg connection built at assembly is closed at shutdown, and an idempotent duplicate enqueue at capacity is the no-op it claims to be (review CR-13/14/15/16).
+    status: todo
+    priority: P3
+    estimate: M
+    engineering_level: prototype
+    complexity_budget: Four contained hygiene fixes, no new abstractions. (1) README.md rewritten to the standing runtime (python -m wombat serve, WOMBAT_PG_DSN required-loud, drain + brief + brief_schedule pathways, deterministic-gate thesis, optional env WOMBAT_BRIEF_PATH/WOMBAT_VOICE_ENABLED, test-suite gating) - kill the bootstrap-stub/agent-is-TBD text. (2) Clear the 13 mypy errors in tests/ (fake-session structural mismatches in the two poller tests; missing return annotations in test_taint_latch_adversarial.py). (3) bootstrap builds THREE DailyLedger connections (lines ~202/226/333) but runtime teardown closes only the bundle's - share or track-and-close so shutdown closes them all. (4) queue.py enqueue - check idempotent-duplicate BEFORE the capacity refusal so a duplicate at capacity returns ALREADY_QUEUED (a would-be no-op must not raise QueueFullError).
+    acceptance_criteria:
+      - given: the refreshed README.md
+        when: grepped for the stale bootstrap-stub claims (agent itself is TBD)
+        then: no match - and it names the serve entrypoint, the required/optional env, and the three registered pathways as-built.
+      - given: mypy strict over src AND tests
+        when: run
+        then: exit 0 (the 13 tests/ errors cleared; src stays clean).
+      - given: an assembled runtime driven through the runtime teardown path
+        when: shutdown completes
+        then: EVERY DailyLedger constructed during assembly is closed (test records constructed instances and asserts all closed).
+      - given: a queue at max_size already containing idempotency_key K (pg-gated)
+        when: enqueue(K) is called again
+        then: it returns ALREADY_QUEUED without raising; a NEW key at capacity still raises QueueFullError.
+    non_goals:
+      - No pending-journal compaction, brief-sink streaming, prose-density trim, or stage renames (all DEF-6).
+      - No behavior changes beyond the four listed.
+    depends_on:
+      - TK-2
+      - TK-53
+    files_in_scope:
+      - README.md
+      - src/wombat/bootstrap.py
+      - src/wombat/runtime.py
+      - src/wombat/queue.py
+      - tests/unit/test_queue.py
+      - tests/unit/test_runtime.py
+      - tests/integrations/gcal/test_poller.py
+      - tests/integrations/gmail/test_poller.py
+      - tests/safety/test_taint_latch_adversarial.py
+  - id: TK-174
+    kind: ticket
+    parent: EP-8
+    title: 'Urgency-aware capacity eviction - a low-urgency newcomer never displaces a more-urgent held item (CR-8)'
+    intent: As the user, when the pending set is full the items that survive are the MOST load-bearing ones - a low-urgency newcomer is dropped rather than pushing out a higher-urgency held item, so the eventual flush/brief carries what matters (DEC-13 gate honesty, Q-82, review CR-8).
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: One branch in PendingSet.add() at the capacity path (pending_set.py line ~150) - if the incoming item's urgency is <= the lowest HELD urgency, drop the INCOMING item (no add, no remove, NO journal records) and return a CapacityEviction naming the incoming item; otherwise the existing lowest-held eviction with its proven Remove-before-Add ordering runs unchanged. Tie goes to the incumbent (deterministic, replay-stable). Targeted tests incl. journal/rebuild parity.
+    acceptance_criteria:
+      - given: a pending set at capacity where EVERY held item has urgency strictly higher than the incoming item
+        when: add(incoming) is called
+        then: no held item is evicted, the incoming item is NOT added, ZERO journal records are appended, and the returned CapacityEviction names the INCOMING item (observability preserved).
+      - given: a pending set at capacity holding at least one item with urgency strictly lower than the incoming item
+        when: add(incoming) is called
+        then: as-built behavior unchanged - the lowest-urgency held item is evicted via the Remove-before-Add journaled ordering and the incoming item is added.
+      - given: a tie (incoming urgency equals the lowest held urgency)
+        when: add(incoming) is called
+        then: the incumbent wins - the incoming item is dropped (deterministic, identical outcome on journal replay).
+      - given: a drop-incoming sequence followed by PendingSet.rebuild_from_journal
+        when: the rebuilt set is compared to the live set
+        then: identical items and cumulative_load (no phantom records), and the existing TK-25 kill/eviction-atomicity regressions stay green.
+    non_goals:
+      - No capacity/ceiling value changes and no new eviction policies (single urgency comparison only).
+      - No queue-side changes (the dropped item shares today's evictee custody - already past the queue).
+    depends_on:
+      - TK-25
+    files_in_scope:
+      - src/wombat/gate/pending_set.py
+      - tests/gate/test_pending_set.py
+
 # Open questions, assumptions, risks, decisions, deferrals. Decisions are append-only.
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
@@ -3609,6 +3894,35 @@ governance:
       description: "TK-74 AC2 prose originally said alternatives fall to the next WORKING day when the conflict day has no free slot. The as-built (and as-verified) behavior is next CALENDAR day (conflict.day + 1): neither the frozen spike CalendarEventItem/WorkingHours nor the Q-60 CalendarEvent carries a weekday concept, and Q-62 specified the projection in civil-local days without business-day semantics. AC2 reworded to calendar-day for record honesty (Q-28 prose-matches-what-was-done principle); the aspiration is preserved HERE instead of silently implied by prose the code cannot satisfy. Real business-day logic needs a weekday-aware WorkingHours (per-weekday hours or a workweek mask) plumbed through suggest_alternatives — a small deliberate ticket, not a patch inside the frozen kernel.",
       revisit_trigger: "The DEF-2 rating pass (first real conflict in a live brief) flags a weekend/holiday alternative as unhelpful — then open a ticket adding weekday-aware WorkingHours (owned alongside the TK-13 working-hours field pre-authorized in Q-62) and extend suggest_alternatives fallback; until then next-calendar-day is the accepted v1 behavior.",
       links: ["TK-74","TK-73","TK-13","Q-62","DEF-2","Q-28"] }
+  # --- Architect routing of the 2026-07-06 whole-codebase review (planning/code-review-2026-07-06.md, CR-1..CR-17), 2026-07-08. Fix tickets TK-166..TK-173; accepted/deferred findings below. ---
+  - { id: Q-81, type: open_question, status: resolved, scope: EP-8, date_raised: "2026-07-08", date_updated: "2026-07-08", title: "CR-1 (code review 2026-07-06) - the pg pending journal is written but never REPLAYED at boot; did Q-70/TK-53 own boot replay?",
+      description: "The review's S1 finding, re-verified in source - zero production callers of PendingSet.rebuild_from_journal; bootstrap.assemble_runtime() (line ~332) constructs the pending set COLD over the pg journal. Failure path - item scores below threshold, held, journaled add, review_or_speak acks it off the queue, process restarts, nothing reads the journal at boot, at-least-once redelivery cannot save it (already acked) - the item is silently lost and never flushes into a brief. Restart is this product's NORMAL operating condition (CST-1), and this is RISK-5's exact scenario.",
+      resolution: "RESOLVED by architect 2026-07-08 (within authority - ownership-gap ruling, no locked decision touched). NEITHER Q-70/TK-29 NOR TK-53 owned replay-at-boot. TK-29 owned journal durability + replay ORDERING (rebuild equivalence proven in its tests only); TK-53's boot AC asserted only that the journal wired into the gate IS the TK-29 pg adapter (isinstance), never that journaled state is LOADED. The obligation was UNOWNED - the June-21 audit's TK-28 finding had already flagged ambiguity in exactly this wiring, and the v0.85/v0.87 record's RISK-5 rider (durability honestly claimable for the live runtime) was OVER-CLAIMED: durable-but-unrecovered. Owned now by NEW TK-166 (P1, EP-8) - assemble_runtime builds the pending set via PendingSet.rebuild_from_journal, with a kill-between-queue-ack-and-restart crash-recovery AC. RISK-5 stays retired-as-mechanism; its honest live-runtime claim is restored only when TK-166 lands.",
+      links: ["TK-166","TK-29","TK-53","RISK-5","Q-70"] }
+  - { id: DEC-27, type: decision, status: accepted, scope: EP-20, date_raised: "2026-07-08", title: "Wire-derived free text rendered into the brief (email subject/sender, calendar titles) is UNTRUSTED DISPLAY DATA - sanitized and delimited at the single render boundary; the taint latch stays body-scoped",
+      context: "Review CR-2 (S1, re-verified in source) - _render_recap_line emits raw subject/sender into render_brief_lines, which IS the mouth's user message in BriefComposeStage; the TK-148 structural latch covers BODIES only and gmail/models.py deliberately declares subject/sender ordinary metadata. Any outside sender can inject instruction-shaped text into the flagship trusted-on-sight surface. Candidate treatments - (a) untrusted-display-string sanitation at the render boundary; (b) sealed-decision-only recap lines with no free text from the wire.",
+      decision: "Option (a). Every wire-derived free-text field rendered into the brief (gmail subject/sender AND calendar prep/conflict titles - the same trust class) passes ONE deterministic sanitizer at the render_brief_lines boundary (length-cap, strip newlines/control chars, delimit as quoted data), and BRIEF_SYSTEM_INSTRUCTION states that quoted-data lines are content to render, never instructions to follow. Option (b) rejected - a recap without subject/sender is not a useful brief (it guts the v1 wedge's value), and a sealed-decision-only path would either smuggle the same wire strings in via the sealed artifact or drop them entirely. (a) is the simplest treatment that keeps the structural model honest - the compose stage holds no tools (blast radius is phrasing, not action), and TK-100's one-render-string invariant gives exactly ONE place to sanitize, feeding prompt and S8 fallback alike.",
+      consequences: "(+) Injection on the trusted brief is reduced to phrasing-nudge attempts inside clearly-delimited quoted data read by a tool-free stage. (+) Zero change to the TK-148 latch or its DEC-26 invariant - the structural body boundary stays structural. (-) Sanitation is a mitigation, not a structural guarantee: a mouth that obeys injected quoted text remains possible in principle; accepted because the stage is tool-free and output goes to the user's eyes. Realized by TK-167 (P1). The related deterministic-triage keyword gameability is ACCEPTED separately as RISK-9." }
+  - { id: RISK-8, type: risk, status: accepted, scope: EP-1, date_raised: "2026-07-08", date_updated: "2026-07-08", probability: low, impact: medium, title: "Module-global engine singleton in bootstrap ignores a fresh substrate on a second in-process assemble_runtime (review CR-11)",
+      mitigation: "ACCEPTED-AND-RECORDED by architect 2026-07-08 under ASMP-2 (one process, one assembly; the memo is the TK-1 single-engine-guard posture, deliberate). A second in-process assemble_runtime would return the memoized engine bound to the OLD PathwayRegistry while RuntimeBundle reports fresh pathway ids - harmless under the operating premise, but it is the only global mutable state in an otherwise DI-clean codebase. ADDED TO THE ASMP-2 REVISIT INVENTORY: whoever relaxes ASMP-2 (multi-assembly or multi-process) must DROP the bootstrap engine memo (assembly is cheap) alongside replacing the queue lease reclaim and the trail-writer discrimination path. No ticket - fixing it today would be speculative motion against the premise the whole v1 rests on.",
+      links: ["ASMP-2","TK-1","TK-53"] }
+  - { id: RISK-9, type: risk, status: accepted, scope: EP-17, date_raised: "2026-07-08", date_updated: "2026-07-08", probability: medium, impact: low, title: "Deterministic gmail triage is gameable - any sender can self-promote to the HIGH band via rule keywords in the subject (review CR-2 rider)",
+      mitigation: "ACCEPTED-AND-RECORDED by architect 2026-07-08. Blast radius is bounded by construction - the triage band feeds recap PROMINENCE inside the once-daily brief (HIGH maps to the known_human recap family), never the gate's surface/hold decision and never any tool dispatch; a gamed keyword earns a more prominent line in a brief the user reads once, and with TK-167/DEC-27 that line is sanitized + delimited. A real fix (sender-reputation weighting, per-sender caps) is exactly the adaptive-ratings territory the nightly dreaming pass owns. REVISIT rides DEF-1's first real calibration pass - if live inbox data shows keyword self-promotion producing misleading briefs, extend the versioned triage rules (TK-76's rules artifact is versioned for this).",
+      links: ["TK-76","TK-167","DEF-1"] }
+  - { id: DEF-5, type: deferral, status: deferred, scope: EP-3, date_raised: "2026-07-08", date_updated: "2026-07-08", title: "Defer de-blocking the synchronous pg enqueue inside the async source-registry poll loop (review CR-7)",
+      description: "sources/registry.py _poll_loop calls the blocking WombatQueue.enqueue on the event loop. At v1 scale (two pollers at 300s cadence, single user, ASMP-2 single process) the head-of-line blocking is invisible; it becomes real as sources multiply or cadences shrink.",
+      rationale: "Accept-and-record over wrap-in-asyncio.to_thread now: the thread hop would add concurrency surface (a second thread touching a psycopg connection) to fix a problem that does not exist at v1 scale, against the simplest-thing rule. The seam is one call site, trivially wrappable when the trigger fires.",
+      revisit_trigger: "A third registered POLLING source, any poll interval below 60s, or an observed drain/brief latency stall attributed to enqueue blocking - then wrap the enqueue in asyncio.to_thread (or hand the registry a thread-owned connection) as a small owned ticket.",
+      links: ["TK-3","ASMP-2"] }
+  - { id: DEF-6, type: deferral, status: deferred, scope: project, date_raised: "2026-07-08", date_updated: "2026-07-08", title: "Defer unbounded-growth compaction and the prose-density trim to post-v1 (review CR-14 remainder + CR-17)",
+      description: "Fine-for-months-not-years surfaces - the pg pending journal has no compaction; the brief sink file is fully re-read on every delivery; docstring prose runs ~50 percent ticket-ID-laden reviewer-facing justification (a recorded deliberate tradeoff); plus the cosmetic BriefForceFlushStage naming note (it never flushes the live pending set - CORRECT behavior per the Q-75 select_items ruling, merely a misleading name).",
+      rationale: "None threatens correctness inside v1's operating window; compaction/streaming now would be speculative capacity engineering, and the prose density deliberately serves the multi-agent build cadence - trimming it mid-build destroys the thing it exists for. NOTE the queue duplicate-at-capacity edge from CR-14 is NOT deferred - it is a real correctness edge, fixed in TK-173.",
+      revisit_trigger: "First sustained live month - check pending-journal row count and brief-sink file size and add compaction/streaming if either grows past comfort; post-v1 (FEAT-7 live-verified) - one prose-trim + rename pass over reviewer-facing justification comments.",
+      links: ["TK-29","TK-101","TK-173","Q-75"] }
+  - { id: Q-82, type: open_question, status: resolved, scope: EP-8, date_raised: "2026-07-08", date_updated: "2026-07-08", title: "CR-8 (code review 2026-07-06) - at capacity the pending set ALWAYS evicts the lowest-urgency HELD item, even when the incoming item is less urgent than everything held; fix or accept? (changes TK-25 as-built semantics)",
+      description: "Re-verified in source (pending_set.py line ~150) - the capacity path unconditionally evicts the lowest-urgency held item, so a low-urgency newcomer can displace a higher-urgency held item. The review flagged that a fix changes TK-25 semantics and needs an architect ruling.",
+      resolution: "RESOLVED by architect 2026-07-08 - FIX, ruled within authority. TK-25's eviction policy was a ticket-level how, fixed by no locked decision; the as-built rule contradicts the gate thesis it serves (the pending set exists so the flush/brief carries the most load-bearing backlog - a policy that can silently trade a high-urgency held item for a low-urgency newcomer surfaces the WRONG things). Ruled the minimal urgency-aware form into NEW TK-174 (P2, EP-8): evict the minimum-urgency item across held-plus-incoming; when that minimum IS the incoming item, drop it with ZERO journal records (no add, no remove - rebuild parity is trivial) and return a CapacityEviction naming it; ties go to the incumbent (deterministic under replay). The proven Remove-before-Add ordering and all TK-25 kill regressions are preserved on the unchanged evict-held branch.",
+      links: ["TK-174","TK-25","Q-45"] }
   - { id: Q-15, type: open_question, status: resolved, scope: FEAT-1, date_raised: "2026-06-20", date_updated: "2026-06-20", title: "HIGH: the canonical 'wombat day' boundary + timezone is undefined across three independent daily ledgers",
       description: "TK-9 (DailySpendLedger), TK-27 (per-class surfacing ceiling) and TK-97 (brief once-per-day run ledger) each independently define a Postgres 'daily counter, reset at midnight, survive restart' mechanism, and none specifies a timezone. TK-101 writes a UTC timestamp header while the brief timer (TK-97) fires at a local 'morning time', so 'today' is defined at least two ways. On a laptop that sleeps across midnight (CST-1/DEC-6) a UTC-vs-local mismatch double-counts or skips a day in all three ledgers. Resolve: a decision fixing the canonical wombat-day boundary + timezone and a SHARED DailyLedger primitive that TK-9/TK-27/TK-97 reference.",
       resolution: "RESOLVED by architect 2026-06-20 (within authority — no locked DEC fixed a timezone). Recorded DEC-21: the canonical wombat-day is the CIVIL-LOCAL date in a configured IANA timezone (default host zone), computed at ACCESS time (wombat_today()), not by a fired timer — so a sleep across midnight resolves correctly on wake. Added TK-152 (shared DailyLedger primitive, P1, EP-2) that owns the boundary + row lifecycle; rewired TK-9 (spend), TK-27/TK-28 (ceiling) and TK-97 (brief run) to consume it, and fixed TK-101's header to the wombat timezone (was bare UTC). The three independent ad-hoc date mechanisms now share ONE tested primitive — the split-definition double-count/skip bug is structurally closed.",
@@ -3721,3 +4035,4 @@ changelog:
   - { date: "2026-07-03", version: "1.01", change: "TK-97 BRIEFED + BUILD-READY (Q-80 rulings LOCKED) - the durable once-daily brief timer, THE LAST TICKET OF THE INGESTION ARC. Mechanism ruled STRUCTURALLY: cog-worx has NO standalone cron timer (Timer records are run-bound, armed only by a committed Wait; fire_timer re-drives an existing WAITING run) -> the brief timer is a Wait-SELF-PARKING scheduler stage (single-stage pathway wombat.brief_schedule, stage brief_timer, self-edge - the TK-5 idle idiom) re-driven by the existing verified TK-53 Sweeper; brief_timer_stage.py stays; TK-97 sets the scheduling-pathway precedent EP-13 reuses. Exactly-once = fence-READ (BriefRunLedger over the SAME composed DailyLedger, row brief:run, DEC-21 boundary) gating each due entry + MARK only after the fired brief run returns COMPLETED; the brief run_id is wombat-day-keyed (wombat-brief-<date>) so the crash-after-Deliver-before-mark double window is STRUCTURALLY CLOSED by TK-101 s proven run_id-keyed file-marker (replay=true, no re-append/re-speak). AC4 REWORDED for v1 honesty (Q-39/DEF-4 precedent): resume-from-last-journaled-stage is unachievable across restart under the cold-boot in-memory substrate (TK-53 s recorded clean-slate non_goal) - the honest v1 guarantee is exactly-once DELIVERY (crash before Deliver -> unmarked day re-fires from Gather, bounded re-spend, one brief; crash after Deliver -> marker dedupes); within-process S6 committed-step replay stays; cross-restart mid-run resume rides the TK-53 real-substrate deferral. morning_brief_time confirmed ALREADY HOMED in OperatingParams (TK-13, 07:00:00) - no params change; non_goal[0] clarified (versioned YAML constant, never a runtime knob). None-case: scheduler registered inside the same WOMBAT_BRIEF_PATH conditional as wombat.brief (blank -> loud skip of BOTH, serve() never crashes); additive RuntimeBundle.brief_schedule_pathway_id; serve() fires a SECOND initial drive on the scheduler when registered (boot entry = crash-miss catch; Sweeper claim of the overdue Wait = sleep-miss catch). Tests: never run_forever - pure-unit domain (is_due/next_fire_at DST + midnight probes) + spy-seam stage tests (fire-when-due, park-when-early, AC3 skip+DEBUG log, raising fire -> loud+no-mark+no-raise) + DSN-gated real-Engine/real-DailyLedger battery on docker pg (AC1 fire-once, AC2 sleep-jump single tick + cold-boot late-morning variant, AC3 byte-identical sink, AC4 both crash windows). TK-97 amended: AC4 + non_goal[0] reworded, complexity_budget Q-80 rider, depends_on EP-9 -> TK-28 (all EP-9 children done), files_in_scope 3 -> 5 (+bootstrap.py +runtime.py), estimate M stands. TK-97 is the FINAL ticket before FEAT-7 is code-complete (then only Jim s OAuth bring-up + the two live smokes gate the first live morning brief).", by: "architect" }
   - { date: "2026-07-03", version: "1.02", change: "Q-80 AMENDED same day - TK-97 timer-pathway STAGE-COUNT CORRECTION (builder seam flag, runnable-proven, blessed by architect; the flag-do-not-guess loop working as designed). The builder proved StageGraph.__init__ UNCONDITIONALLY requires a reachable terminal stage (cog-worx loop/graph.py line 74 - no opt-out), so Q-80 ruling 1 s pure self-edge SINGLE-stage wombat.brief_schedule graph raises StageGraphError at every construction. Amended to the in-repo TK-53 precedent (tests/unit/test_runtime.py _WaitForeverStage/_TerminalStage - the identical eternal-self-park problem): BriefTimerStage.transitions = (brief_timer, brief_timer_terminal) - self-edge PLUS a declared-but-NEVER-TAKEN stub edge (run() always returns Wait(to=brief_timer)); NEW BriefTimerTerminalStage stub (transitions=(), run() raises RuntimeError if ever entered - self-enforcing never-reached) homed in pathways/brief_pathway.py (graph-construction artifact, not scheduling behavior); build_brief_schedule_pathway(timer_stage) constructs StageGraph([timer_stage, BriefTimerTerminalStage()], entry=timer_stage.name) - internally TWO stages, one never reached. Runtime behavior UNCHANGED; every other Q-80 ruling stands verbatim; ACs/files_in_scope/deps/estimate unchanged; complexity_budget rider updated to name the stub. TK-97 REMAINS BUILD-READY.", by: "architect (blessing the builder-flagged seam correction)" }
   - { date: "2026-07-03", version: "1.03", change: "TK-97 DONE (45/83) - the durable once-daily brief timer, THE FINAL TICKET OF THE INGESTION ARC; built under Q-80-as-amended (the v1.02 terminal-stub correction) + INDEPENDENTLY adversarially verified (PASS - nothing blocking). Shape landed exactly: domain/brief_schedule.py (BriefRunLedger over the SAME composed DailyLedger, row brief:run; pure tz-aware next_fire_at/is_due - DST both directions fold=0, midnight straddle, strict >now); stages/brief_timer_stage.py (Wait-self-parking brief_timer always re-parks on next_fire_at; fence-READ gates the fire, mark_ran ONLY after RunStatus.COMPLETED, loud-no-mark-no-raise on crash/non-COMPLETED, DEBUG skip when already ran, never touches ctx.journal, no model call); pathways/brief_pathway.py (wombat.brief_schedule two-stage graph, entry=timer, never-reached BriefTimerTerminalStage stub raising if entered - StageGraphError genuinely reproduced without the stub, so the amendment is REAL); bootstrap.py (fire_brief closure built AFTER build_engine with wombat-day-keyed run_id wombat-brief-<date>; scheduler registered inside the SAME WOMBAT_BRIEF_PATH conditional as wombat.brief; additive RuntimeBundle.brief_schedule_pathway_id); runtime.py (serve() fires a second initial drive on the schedule pathway only when registered - boot arm + crash-miss catch; None -> skip, no crash). VERIFICATION: the fence proven on real pg by the verifier's OWN script (raising fire -> ledger stays 0, no double-mark, no escape; same-day double-drive -> one fire, ledger 1, second pass skipped); AC4 BOTH crash windows genuine on docker pg (crash-before-Deliver -> unmarked day re-fires, ONE brief delivered; crash-after-append-before-mark -> same day-keyed run_id -> TK-101 file-marker -> replay=true, header count stays 1, mark lands - the run_id->marker tie is structural); AC2 miss-catch via a single reused tick()-driven Sweeper (sleep-jump + cold-boot variants); full DST battery; honest exactly-once-DELIVERY framing matches code + the Q-80 resolution (no over-claim); ruff clean, zero new mypy, 590/38 no-DSN + 639/4 with docker pg (6/6 gated timer tests pass), scope = files_in_scope exactly, no contract/params/stage-file tampering. One NON-BLOCKING note recorded: next_fire_at/is_due do not runtime-guard a naive datetime (rides the codebase-wide ctx.clock()-returns-aware convention; not a gap introduced here; note only, no action). MILESTONE ON THE RECORD: FEAT-7 - the ingestion-arc -> morning-brief wedge, the v1 north star - is CODE-COMPLETE. All EP-19 children (TK-96/97/98/99) and all EP-20 children (TK-100/101) are done; feature/epic status fields deliberately left untouched per the EP-15/EP-16 precedent (arc completion lives on this changelog + the architect brief; FEAT-7 flips only after live verification). The ONLY remaining gate to the first LIVE morning brief is Jim's OAuth bring-up (Google OAuth client + two consent passes + enable Gmail API) + the two armed live smokes (gcal WOMBAT_TEST_GCAL_LIVE + gmail GMAIL_LIVE) - an operator bring-up step, NOT a build blocker. Q-56 residue unchanged: exactly TK-77 -> EP-13 (the dream track).", by: "architect (recording the TK-97 build + independent adversarial verification; FEAT-7 code-complete milestone)" }
+  - { date: "2026-07-08", version: "1.04", change: "Architect ROUTED the 2026-07-06 whole-codebase review (planning/code-review-2026-07-06.md, CR-1..CR-17) into the contract - all 17 findings dispositioned within the locked frame, nothing escalated, nothing parked on Jim. FIX TICKETS (+9, 83->92): TK-166 (P1, EP-8) boot replay of the pg pending journal via PendingSet.rebuild_from_journal in assemble_runtime, with a kill-between-queue-ack-and-restart crash-recovery AC (CR-1, the S1 held-items-lost-across-restart gap; ownership resolved at Q-81 - neither Q-70/TK-29 nor TK-53 owned replay-at-boot, so the v0.85/v0.87 RISK-5 honestly-claimable rider was OVER-CLAIMED and is restored only when TK-166 lands). TK-167 (P1, EP-20) brief render treats wire-derived free text (gmail subject/sender AND calendar titles) as untrusted display data per NEW DEC-27 - option (a) sanitize+delimit at the ONE render_brief_lines boundary chosen over sealed-decision-only, which would gut the recap; body taint latch untouched (CR-2). TK-168 (P2, EP-17) OAuth readonly guard asserts the STORED token scopes on both gmail+gcal, killing the tautological constant-vs-constant check (CR-3). TK-169 (P2, EP-9) DayRollover stamps _last_seen only AFTER the durable increment, so a transient pg error can no longer permanently swallow the day LedgerReset (CR-4). TK-170 (P2, EP-15) gcal fetch_window tolerates a missing items key (an empty window renders EMPTY, never calendar-unavailable) + loud gmail-parity truncation warning (CR-5). TK-171 (P2, EP-3) degraded_sources recovers on a subsequent successful poll + the boundary predicate aligned to production strict > across trigger_sim/stub-gate/params-comment (CR-6+CR-9). TK-174 (P2, EP-8) urgency-aware capacity eviction - a low-urgency newcomer is dropped (zero journal records, CapacityEviction still returned) instead of displacing a more-urgent held item; ruled at Q-82 as a deliberate TK-25 semantics change serving the gate thesis (CR-8). TK-172 (P3, EP-4) the two latent fences made real - drain batch-size-1 guard naming the mid-batch-surface/whole-batch-ack coupling (CR-10), and the router compose fallback always a declared transitions edge (CR-12 independently RE-VERIFIED by the architect against source: compose_dispatch_router.py line 56 derives transitions from map values only while line 74 can return the fallback; currently FENCED because the sole bootstrap construction maps GENERIC->compose - latent, one-line fix). TK-173 (P3, EP-1, prototype) hygiene batch - README refreshed off the stale bootstrap-stub text, the 13 tests/ mypy-strict errors cleared, ALL three assembly-built DailyLedger connections closed at shutdown, and duplicate-enqueue-at-capacity returns ALREADY_QUEUED instead of raising (CR-13/14/15/16). ACCEPTED / DEFERRED (each with a revisit trigger): RISK-8 - the bootstrap engine-singleton memo accepted under ASMP-2 and ADDED to the ASMP-2 revisit inventory (CR-11); RISK-9 - deterministic-triage keyword gameability accepted, bounded to recap prominence (never the gate decision, never dispatch), revisit rides DEF-1 (CR-2 rider); DEF-5 - synchronous pg enqueue on the poll loop deferred, trigger = third polling source / sub-60s cadence / observed stall (CR-7); DEF-6 - pending-journal compaction, brief-sink full re-read, prose-density trim + BriefForceFlushStage rename deferred post-v1 (CR-14 remainder + CR-17; the CR-14 queue duplicate edge is NOT deferred - TK-173 owns it). SEQUENTIAL BUILD ORDER for this run: TK-169 -> TK-171 -> TK-172 -> TK-166 (the P1 lands this run) -> TK-174 -> TK-168 -> TK-170 -> TK-167 -> TK-173. validate PASS; gate_check analyze PASS.", by: "architect (routing the 2026-07-06 code review, CR-1..CR-17)" }
