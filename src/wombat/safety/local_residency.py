@@ -18,6 +18,10 @@ address that RESOLVES to one of this host's own interface addresses (covers a Do
 service name resolving to self) all PASS. An address resolving to a genuinely different host
 FAILS, raising ``RemoteStorageConfigError`` naming the offending endpoint.
 
+TK-178 (CR2-1): ``hostaddr=`` (URL query key, keyword token, or bare with no ``host=`` at all) is
+the address libpq/psycopg actually dial — ``host=``/``?host=`` is then only auth/TLS SNI. When
+both are present the residency check runs against ``hostaddr``; see ``_extract_host``.
+
 Q-87 ruling 3: the resolution seam is INJECTED (``resolver``: hostname -> list of IPs;
 ``local_addrs``: this host's own interface addresses) with stdlib-``socket`` defaults, via
 ``make_residency_check`` — this keeps the table-driven test battery deterministic and
@@ -79,9 +83,16 @@ def _strip_brackets(host: str) -> str:
 
 
 def _extract_host(endpoint: str) -> str | None:
-    """Return the hostname/IP component of a DSN/URI, or ``None`` when the endpoint denotes a
-    local path (a bare filesystem path or a Unix-domain socket — which can never be off-host)
-    or omits a host entirely (Postgres' own convention: no host means the local Unix socket).
+    """Return the address libpq actually dials for a DSN/URI, or ``None`` when the endpoint
+    denotes a local path (a bare filesystem path or a Unix-domain socket — which can never be
+    off-host) or omits a host entirely (Postgres' own convention: no host means the local Unix
+    socket).
+
+    TK-178 (CR2-1): libpq/psycopg dial ``hostaddr=`` when present — ``host=``/``?host=`` then
+    only supplies auth/TLS SNI, it is NEVER the TCP connection target. So whenever ``hostaddr``
+    is present (URL query key OR keyword token — including the bare-hostaddr-no-host form) it
+    takes precedence over ``host`` here, matching what libpq actually connects to. ``hostaddr``
+    absent -> behavior is byte-identical to the pre-TK-178 host-only extraction.
     """
     stripped = endpoint.strip()
     if stripped.startswith("/"):
@@ -89,19 +100,30 @@ def _extract_host(endpoint: str) -> str | None:
 
     if "://" in stripped:
         parsed = urlsplit(stripped)
+        query = parse_qs(parsed.query)
+        query_hostaddr = query.get("hostaddr", [None])[0]
+        if query_hostaddr:
+            return query_hostaddr  # the actual TCP dial target — wins over host/?host=
         if parsed.hostname:
             return parsed.hostname
-        query_host = parse_qs(parsed.query).get("host", [None])[0]
+        query_host = query.get("host", [None])[0]
         if not query_host or query_host.startswith("/"):
             return None  # no host, or an explicit unix-socket path via ?host=/...
         return query_host
 
     # A keyword=value DSN (e.g. "host=/var/run/postgresql dbname=wombat user=wombat").
+    keyword_hostaddr: str | None = None
+    keyword_host: str | None = None
     for token in stripped.split():
-        if token.startswith("host="):
-            value = token[len("host=") :]
-            return None if (not value or value.startswith("/")) else value
-    return None  # no "host=" keyword present -> the local Unix socket default
+        if token.startswith("hostaddr="):
+            keyword_hostaddr = token[len("hostaddr=") :]
+        elif token.startswith("host="):
+            keyword_host = token[len("host=") :]
+    if keyword_hostaddr:
+        return keyword_hostaddr  # the actual TCP dial target — wins over host, even bare
+    if keyword_host is not None:
+        return None if (not keyword_host or keyword_host.startswith("/")) else keyword_host
+    return None  # no "host="/"hostaddr=" keyword present -> the local Unix socket default
 
 
 def _addr_is_local(addr: str, local_addrs: list[str]) -> bool:

@@ -141,6 +141,58 @@ def test_ac1_off_host_endpoints_are_refused_naming_the_endpoint(
         check(endpoint)
 
 
+# ------------------------------------------------------------------------------- TK-178 (CR2-1)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "postgresql://localhost/wombat?hostaddr=8.8.8.8",
+        "host=localhost hostaddr=8.8.8.8 dbname=wombat",
+        "hostaddr=8.8.8.8 dbname=wombat",
+    ],
+)
+def test_tk178_hostaddr_forms_are_refused_naming_wombat_pg_dsn(endpoint: str) -> None:
+    """AC1: the register's three exact repro DSNs — libpq/psycopg dial ``hostaddr=`` when
+    present, so a ``host=localhost``/no-host DSN carrying an off-host ``hostaddr=`` must be
+    refused, not pass on the strength of ``host`` (or the unix-socket default)."""
+    config = _config(wombat_pg_dsn=endpoint)
+    with pytest.raises(RemoteStorageConfigError, match="wombat_pg_dsn"):
+        check_config(config)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "postgresql://localhost/wombat?hostaddr=127.0.0.1",
+        "host=localhost hostaddr=127.0.0.1 dbname=wombat",
+        "hostaddr=127.0.0.1 dbname=wombat",
+    ],
+)
+def test_tk178_hostaddr_same_host_is_accepted_with_or_without_host(endpoint: str) -> None:
+    """AC2: ``hostaddr=127.0.0.1``, with or without a ``host=`` alongside it, is accepted —
+    no false refusal of a genuinely same-host endpoint."""
+    check_config(_config(wombat_pg_dsn=endpoint))  # no raise
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected_host"),
+    [
+        ("postgresql://localhost/wombat?hostaddr=8.8.8.8", "8.8.8.8"),
+        ("host=localhost hostaddr=8.8.8.8 dbname=wombat", "8.8.8.8"),
+        ("hostaddr=8.8.8.8 dbname=wombat", "8.8.8.8"),
+        ("postgresql://localhost/wombat?hostaddr=127.0.0.1", "127.0.0.1"),
+        ("hostaddr=127.0.0.1 dbname=wombat", "127.0.0.1"),
+    ],
+)
+def test_tk178_extract_host_prefers_hostaddr_over_host(
+    endpoint: str, expected_host: str
+) -> None:
+    """The module-private extraction helper resolves ``hostaddr`` (the real dial target) over
+    ``host`` — pinned directly so the precedence rule doesn't silently regress."""
+    assert local_residency._extract_host(endpoint) == expected_host
+
+
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
 
 _requires_pg = pytest.mark.skipif(
