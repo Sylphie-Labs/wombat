@@ -7,7 +7,7 @@ different owner fails structurally (S7, enforced by ``ScopeRegistry.claim_write_
 than silently racing this one. TK-42's ``UserModel`` reads the RAW ``EntityKG`` (no token), so
 there is no S7 conflict between the reader and this writer.
 
-Two write paths:
+Three write paths:
   ``record``               generic behavior/outcome claims (``ClaimPredicate``-typed, TK-43's
                             closed vocabulary). The schema wall is re-checked here (defense in
                             depth beyond ``Claim.__post_init__``) so a duck-typed stand-in with a
@@ -15,16 +15,24 @@ Two write paths:
   ``record_rating_params``  the BINDING Q-41 wire (ruling 4, standing obligation v0.30): writes
                             EXACTLY the predicate/subject/payload shape ``wombat.rating.params``
                             defines and ``UserModel.ratings_for`` reads, so the read/write wire
-                            cannot drift (AC1b). No supersede surface yet — TK-45 widens this.
+                            cannot drift (AC1b).
+  ``record_superseding``   TK-45's supersede-capable widening: invalidates an existing claim THEN
+                            writes the replacement via the exact ``record`` path. Invalidate-then-
+                            assert IS the as-built supersede (Q-90) — the read side (TK-42's
+                            ``UserModel``) is already newest-ACTIVE-wins, so there is no separate
+                            Defeat/SUPERSEDES write needed here.
 
 ``claim.value`` (TK-43's already-JSON-native payload string, Q-49 convention) and ``event_id``
 are carried together as one JSON envelope object (``{"value": ..., "event_id": ...}``) written as
 the claim's ``obj`` — ``assert_fact`` accepts a single ``obj`` string, and treating ``value`` as an
 opaque nested string (rather than re-parsing it) works regardless of what shape it holds.
 
-Frame: no outcome-decision logic (TK-50), no labeling (TK-45), no supersede/Defeat call-site yet,
-does not construct ``EntityKG``/``ScopeRegistry`` (injected; TK-14's bundle owns them), no LLM,
-no pg.
+Frame: no outcome-decision logic (TK-50) — this writer records what TK-45's ``OutcomeLabeler``
+hands it, never decides an outcome itself. No CoherenceStore/Defeat call-site (Q-90, verified
+against the installed cog-worx ``scoped_kg.py``: that surface is the reconciler's
+``CoherenceStore.commit_reconciliation``, not this writer's — ``ScopedKG``'s write surface is
+``assert_fact``/``add_evidence``/``invalidate`` only). Does not construct ``EntityKG``/
+``ScopeRegistry`` (injected; TK-14's bundle owns them), no LLM, no pg.
 """
 
 from __future__ import annotations
@@ -100,7 +108,7 @@ class ObservationWriter:
         predicate=``RATING_CLAIM_PREDICATE``, subject=``event_class.value``,
         obj=``to_claim_payload(params)`` — so
         ``UserModel.ratings_for`` (the as-built read seam) reads back EXACTLY what was written
-        (AC1b). No supersede surface yet (TK-45). On an entity-KG write failure the error is
+        (AC1b). On an entity-KG write failure the error is
         logged and RE-RAISED, never silently dropped (AC3).
         """
         try:
@@ -119,3 +127,29 @@ class ObservationWriter:
                 exc_info=True,
             )
             raise
+
+    async def record_superseding(self, claim: Claim, *, supersedes_claim_id: str) -> str:
+        """Invalidate ``supersedes_claim_id`` THEN write ``claim`` via the exact ``record`` write
+        path (TK-45 widening). Returns the canonical claim id of the newly-written claim.
+
+        Invalidate-then-assert IS the as-built supersede (Q-90): the read side (TK-42's
+        ``UserModel``) is already newest-ACTIVE-wins, so no separate Defeat/SUPERSEDES write is
+        needed — ``ScopedKG``'s write surface is ``assert_fact``/``add_evidence``/``invalidate``
+        only; the reconciler's ``CoherenceStore.commit_reconciliation`` is a different surface
+        this writer does not touch.
+
+        ``claim.predicate`` is re-validated as a ``ClaimPredicate`` BEFORE any I/O (``TypeError``
+        otherwise) — same defense-in-depth as ``record``, checked here first so an invalid claim
+        never reaches ``invalidate`` either. ``self._scoped_kg.invalidate`` raises ``ValueError``
+        for an unknown or out-of-scope ``supersedes_claim_id`` — propagated, not caught (there is
+        no compensating write to roll back). The subsequent write reuses ``record`` verbatim, so
+        it carries the same schema wall and the same store-failure logged + RE-RAISED discipline
+        (AC3).
+        """
+        if not isinstance(claim.predicate, ClaimPredicate):
+            raise TypeError(
+                f"ObservationWriter.record_superseding: claim.predicate must be a "
+                f"ClaimPredicate, got {type(claim.predicate).__name__}: {claim.predicate!r}"
+            )
+        await self._scoped_kg.invalidate(supersedes_claim_id)
+        return await self.record(claim)
