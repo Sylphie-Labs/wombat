@@ -9,6 +9,7 @@ import pytest
 from wombat import bootstrap
 from wombat.bootstrap import MODEL_PROFILE, build_engine, reset_engine
 from wombat.config import ConfigurationError, WombatConfig, load_config
+from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.substrate import cold_boot_bundle
 
@@ -110,8 +111,62 @@ def test_assemble_runtime_still_succeeds_at_current_batch_size_of_one() -> None:
     is byte-identical, no new raise on the real boot path."""
     op = load_operating_params()
     # A fake Postgres DSN -- every adapter assemble_runtime wires is lazy (no connection at
-    # construction), so this never touches a real Postgres (mirrors tests/unit/test_runtime.py).
+    # construction) with replay_pending=False, so this never touches a real Postgres (mirrors
+    # tests/unit/test_runtime.py).
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+    )
+    assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
+
+
+# --- TK-166 (CR-1, Q-83): replay_pending is the ONE eager-read boot-replay flag -----------------
+
+
+def test_assemble_runtime_default_replay_pending_calls_rebuild_from_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DEFAULT (``replay_pending=True``, the ``serve()`` production posture) routes the
+    gate's pending set through ``PendingSet.rebuild_from_journal`` -- proven via a spy that
+    returns a COLD ``PendingSet`` so no real I/O ever happens against the fake DSN."""
+    op = load_operating_params()
+    calls: list[object] = []
+    cold = PendingSet(journal=InMemoryPendingJournal(), max_pending=op.max_pending)
+
+    def spy_rebuild(journal: object, *, max_pending: int) -> PendingSet:
+        calls.append(journal)
+        return cold
+
+    monkeypatch.setattr(PendingSet, "rebuild_from_journal", spy_rebuild)
+
     bundle = bootstrap.assemble_runtime(
         config=_config(), dsn="postgresql://fake-host/fake-db", params=op
     )
+
+    assert len(calls) == 1  # the default path calls rebuild_from_journal exactly once
+    assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
+
+
+def test_assemble_runtime_replay_pending_false_never_calls_rebuild_from_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``replay_pending=False`` never touches ``PendingSet.rebuild_from_journal`` -- the cold
+    constructor stands, so a fake/unreachable DSN stays connection-free."""
+    op = load_operating_params()
+    calls: list[object] = []
+    real_rebuild = PendingSet.rebuild_from_journal
+
+    def spy_rebuild(journal: object, *, max_pending: int) -> PendingSet:
+        calls.append(journal)
+        return real_rebuild(journal, max_pending=max_pending)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PendingSet, "rebuild_from_journal", spy_rebuild)
+
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+    )
+
+    assert calls == []  # never called -- the opted-out path stays connection-free
     assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID

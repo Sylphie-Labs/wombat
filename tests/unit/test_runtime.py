@@ -298,7 +298,9 @@ def test_build_brief_deliver_stage_none_path_raises_configuration_error() -> Non
 
 def test_ac4_assemble_runtime_registers_drain_pathway_and_wires_pg_pending_journal() -> None:
     op = load_operating_params()
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_FAKE_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
 
     # pathways.get resolves the drain pathway id (raises PathwayError if not registered).
     graph = bundle.pathways.get(bundle.drain_pathway_id)
@@ -321,7 +323,9 @@ def test_assemble_runtime_with_brief_path_registers_wombat_brief(tmp_path: Path)
     op = load_operating_params()
     config = _config_with_brief_path(str(tmp_path / "brief.txt"))
 
-    bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
 
     assert bundle.brief_pathway_id == "wombat.brief"
     # pathways.get resolves the brief pathway id (raises PathwayError if not registered).
@@ -337,7 +341,9 @@ def test_assemble_runtime_blank_brief_path_skips_registration_and_warns(
     config = _config()  # wombat_brief_path defaults to None
 
     with caplog.at_level(logging.WARNING):
-        bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+        bundle = bootstrap.assemble_runtime(
+            config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+        )
 
     assert bundle.brief_pathway_id is None
     assert "WOMBAT_BRIEF_PATH" in caplog.text
@@ -387,7 +393,9 @@ def test_assemble_runtime_with_brief_path_registers_schedule(tmp_path: Path) -> 
     op = load_operating_params()
     config = _config_with_brief_path(str(tmp_path / "brief.txt"))
 
-    bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
 
     assert bundle.brief_schedule_pathway_id == "wombat.brief_schedule"
     graph = bundle.pathways.get(bundle.brief_schedule_pathway_id)
@@ -402,7 +410,9 @@ def test_assemble_runtime_blank_brief_path_skips_schedule(
     config = _config()  # wombat_brief_path defaults to None
 
     with caplog.at_level(logging.WARNING):
-        bundle = bootstrap.assemble_runtime(config=config, dsn=_FAKE_DSN, params=op)
+        bundle = bootstrap.assemble_runtime(
+            config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+        )
 
     # BOTH brief and schedule are skipped together (one conditional, no crash).
     assert bundle.brief_schedule_pathway_id is None

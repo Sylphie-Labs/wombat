@@ -326,6 +326,7 @@ def assemble_runtime(
     dsn: str,
     params: OperatingParams | None = None,
     tz: ZoneInfo = _UTC_ZONE,
+    replay_pending: bool = True,
 ) -> RuntimeBundle:
     """Compose the ONE standing wombat process (TK-53, Q-71).
 
@@ -338,8 +339,14 @@ def assemble_runtime(
 
     ``dsn`` backs every Postgres-touching seam composed here (the queue, the daily ledger, and
     the pending journal) — ONE Postgres, per ASMP-2. Every adapter below is lazy (no connection
-    at construction), so calling this with an unreachable ``dsn`` is safe; the first real I/O
-    happens once the returned bundle is actually driven.
+    at construction) EXCEPT the pending-set boot replay (TK-166, CR-1): with ``replay_pending=
+    True`` (the DEFAULT — the ``serve()`` production posture) assembly performs ONE eager read
+    of the pending journal via ``PendingSet.rebuild_from_journal`` so held items journaled by a
+    PRIOR process survive into this gate — a restart is this product's normal operating
+    condition, not a data-loss event. Pass ``replay_pending=False`` for a connection-free
+    assembly (tests/tooling): the cold ``PendingSet(journal=..., max_pending=...)`` constructor
+    stands, an unreachable ``dsn`` is safe, and the first real I/O happens once the returned
+    bundle is actually driven.
     """
     op = params if params is not None else load_operating_params()
 
@@ -350,7 +357,13 @@ def assemble_runtime(
 
     queue = WombatQueue(dsn, max_size=op.max_pending)
     pending_journal = PgPendingJournal(dsn)
-    pending_set = PendingSet(journal=pending_journal, max_pending=op.max_pending)
+    # TK-166 (CR-1, Q-83): the ONE eager read this composition performs — replay the durable
+    # journal into the gate's pending set so a prior process's held items survive a restart.
+    pending_set = (
+        PendingSet.rebuild_from_journal(pending_journal, max_pending=op.max_pending)
+        if replay_pending
+        else PendingSet(journal=pending_journal, max_pending=op.max_pending)
+    )
     daily_ledger = DailyLedger(dsn, tz=tz)
     ceiling = CeilingLedger(
         daily_ledger=daily_ledger, per_class_daily_ceiling=op.per_class_daily_ceiling
