@@ -22,9 +22,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -662,3 +663,86 @@ async def test_serve_skips_schedule_drive_when_none_and_does_not_crash() -> None
 
     assert spy.ran == []  # never driven when the field is None
     assert registry.stop_calls == 1  # still shut down cleanly
+
+
+# --- TK-173 (CR-15): every DailyLedger constructed during assembly is closed on teardown -------
+
+
+async def test_daily_ledger_lifecycle_every_constructed_instance_closed_after_teardown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``assemble_runtime`` constructs a ``DailyLedger`` at up to three call sites
+    (``build_compose_stage``, ``build_brief_compose_stage``, and the ceiling/day-rollover
+    instance) -- every instance ACTUALLY constructed during assembly must be closed once the
+    runtime's teardown path runs, not just whichever one ``RuntimeBundle`` happens to expose as
+    ``daily_ledger``. Proven by monkeypatching the constructor/``close`` to record every instance,
+    then driving the real ``_drive_and_serve`` teardown to completion."""
+    constructed: list[DailyLedger] = []
+    closed: list[DailyLedger] = []
+    real_init = DailyLedger.__init__
+    real_close = DailyLedger.close
+
+    def _tracking_init(self: DailyLedger, *args: Any, **kwargs: Any) -> None:
+        real_init(self, *args, **kwargs)
+        constructed.append(self)
+
+    def _tracking_close(self: DailyLedger) -> None:
+        closed.append(self)
+        real_close(self)
+
+    monkeypatch.setattr(DailyLedger, "__init__", _tracking_init)
+    monkeypatch.setattr(DailyLedger, "close", _tracking_close)
+
+    op = load_operating_params()
+    config = _config_with_brief_path(str(tmp_path / "brief.txt"))
+    bundle = bootstrap.assemble_runtime(
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
+
+    assert len(constructed) >= 1  # sanity: assembly actually built at least one
+
+    # Swap in a trivial self-parking pathway/engine (mirrors the AC4 shutdown test above) so
+    # _drive_and_serve's finally teardown runs without ever touching a real Postgres -- the
+    # point of this test is the close() lifecycle, not gate/pathway behavior. The real
+    # queue/daily_ledger/pending_journal/compose_stage assemble_runtime built are kept as-is.
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    pathways.register("only", StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only"))
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
+    )
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+    )
+    registry = _RecordingSourceRegistry()
+    test_bundle = replace(
+        bundle,
+        engine=engine,
+        pathways=pathways,
+        journal=journal,
+        drain_pathway_id="only",
+        source_registry=registry,
+        brief_schedule_pathway_id=None,  # skip the second initial drive (its own pathway/engine)
+    )
+
+    run_op = op.model_copy(
+        update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
+    )
+    task: asyncio.Task[None] = asyncio.ensure_future(
+        runtime._drive_and_serve(test_bundle, params=run_op)
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert {id(x) for x in constructed} == {id(x) for x in closed}

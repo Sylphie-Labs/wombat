@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import requests
@@ -80,15 +80,18 @@ class _FakeSession:
     exception: Exception | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
 
-    def get(self, url: str, *, params: dict[str, str], timeout: float) -> _FakeResponse:
+    def get(self, url: str, *, params: dict[str, str], timeout: float) -> requests.Response:
         self.calls.append({"url": url, "params": params, "timeout": timeout})
         if self.exception is not None:
             raise self.exception
+        # _FakeResponse only mimics the Response surface poll() touches (raise_for_status/json);
+        # the cast satisfies _GmailSession's Protocol return type without inheriting the real
+        # requests.Response's much larger surface (Q-65 ruling 2, no network anywhere here).
         if url.endswith("/messages"):
             assert self.list_response is not None
-            return self.list_response
+            return cast("requests.Response", self.list_response)
         message_id = url.rsplit("/", 1)[-1]
-        return self.message_responses[message_id]
+        return cast("requests.Response", self.message_responses[message_id])
 
 
 class _DedupingEnqueuer:
@@ -452,7 +455,7 @@ def test_fetch_recent_raises_on_every_condition_poll_swallows(
 ) -> None:
     session = make_session()
     poller = GmailPoller(
-        session=session, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     with pytest.raises(expected_exception):
@@ -462,7 +465,7 @@ def test_fetch_recent_raises_on_every_condition_poll_swallows(
 async def test_poll_still_degrades_to_empty_via_the_extracted_fetch_recent() -> None:
     session = _connection_error_session()
     poller = GmailPoller(
-        session=session, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     result = await poller.poll()  # MUST NOT raise, even though fetch_recent() would

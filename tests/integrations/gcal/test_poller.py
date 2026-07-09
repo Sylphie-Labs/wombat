@@ -17,7 +17,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -58,12 +58,15 @@ class _FakeSession:
     exception: Exception | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
 
-    def get(self, url: str, *, params: dict[str, str], timeout: float) -> _FakeResponse:
+    def get(self, url: str, *, params: dict[str, str], timeout: float) -> requests.Response:
         self.calls.append({"url": url, "params": params, "timeout": timeout})
         if self.exception is not None:
             raise self.exception
         assert self.response is not None
-        return self.response
+        # _FakeResponse only mimics the Response surface poll() touches (raise_for_status/json);
+        # the cast satisfies _CalendarSession's Protocol return type without inheriting the real
+        # requests.Response's much larger surface (Q-59 ruling 3, no network anywhere here).
+        return cast("requests.Response", self.response)
 
 
 class _DedupingEnqueuer:
@@ -319,7 +322,7 @@ def test_fetch_window_raises_on_every_condition_poll_swallows(
 ) -> None:
     session = make_session()
     poller = CalendarPoller(
-        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     with pytest.raises(expected_exception):
@@ -329,7 +332,7 @@ def test_fetch_window_raises_on_every_condition_poll_swallows(
 async def test_poll_still_degrades_to_empty_via_the_extracted_fetch_window() -> None:
     session = _connection_error_session()
     poller = CalendarPoller(
-        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     result = await poller.poll()  # MUST NOT raise, even though fetch_window() would
@@ -351,7 +354,7 @@ async def test_poll_still_degrades_to_empty_via_the_extracted_fetch_window() -> 
 def test_fetch_window_missing_items_key_returns_empty_no_exception() -> None:
     session = _FakeSession(response=_FakeResponse(200, {}))  # no "items" key at all
     poller = CalendarPoller(
-        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     result = poller.fetch_window()  # MUST NOT raise
@@ -367,7 +370,7 @@ async def test_poll_missing_items_key_yields_empty_calendar_not_unavailable_degr
     an empty calendar, not "Calendar is unavailable right now"."""
     session = _FakeSession(response=_FakeResponse(200, {}))
     poller = CalendarPoller(
-        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     with caplog.at_level(logging.WARNING):
@@ -394,7 +397,7 @@ def test_fetch_window_next_page_token_logs_loud_warning_naming_source(
     }
     session = _FakeSession(response=_FakeResponse(200, body))
     poller = CalendarPoller(
-        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW
     )
 
     with caplog.at_level(logging.WARNING):

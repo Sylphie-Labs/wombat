@@ -29,18 +29,22 @@ is content-INDEPENDENT precisely because nothing here ever inspects the payload 
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import psycopg
 import pytest
 from cogworx.capability.policy import StageToolPolicy, TierViolation, ToolGate
 from cogworx.capability.registry import Registry, function_capability
 from cogworx.capability.router import dispatch_one
+from cogworx.claims.provenance import Artifact, Provenance
 
 from wombat.safety.taint import (
     READ_EMAIL_BODY_CAPABILITY,
     TRUSTED_OUTPUT_TAG,
     UNTRUSTED_SOURCE_TAG,
+    BodyProvider,
     dispatch_or_refuse,
     register_read_email_body,
 )
@@ -69,7 +73,7 @@ def _gmail_message_item(message_id: str, body: str) -> dict[str, str]:
     }
 
 
-def _body_provider_factory(bodies: dict[str, str]):
+def _body_provider_factory(bodies: dict[str, str]) -> BodyProvider:
     async def _provider(message_id: str) -> str:
         return bodies[message_id]
 
@@ -179,9 +183,7 @@ class _FakeStageContextForIngest:
         self._upstream_data = upstream_data
         self._now = datetime(2026, 7, 2, 9, 0, tzinfo=UTC)
 
-    async def last_output(self, stage_name: str):
-        from cogworx.claims.provenance import Artifact, Provenance
-
+    async def last_output(self, stage_name: str) -> Artifact | None:
         from wombat.stages.ingest_email_body import EMAIL_INGEST_REQUEST
 
         if stage_name != "gmail_poller":
@@ -193,11 +195,11 @@ class _FakeStageContextForIngest:
             data=self._upstream_data,
         )
 
-    async def dispatch(self, capability: str, args: dict[str, object]):
+    async def dispatch(self, capability: str, args: dict[str, object]) -> Any:
         return await dispatch_one(self._gate, self._registry, capability, dict(args))
 
     @property
-    def clock(self):
+    def clock(self) -> Callable[[], datetime]:
         return lambda: self._now
 
 

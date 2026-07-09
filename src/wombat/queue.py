@@ -101,34 +101,40 @@ class WombatQueue:
     def enqueue(self, item: QueueItem) -> EnqueueResult:
         """Idempotently enqueue ``item``.
 
-        Capacity is checked BEFORE the insert: at/above ``max_size``, raises
-        ``QueueFullError`` and adds no row (AC2). Otherwise inserts via
-        ``INSERT ... ON CONFLICT (idempotency_key) DO NOTHING`` — a conflict (an existing row
-        for the same ``idempotency_key``) is a no-op and returns ``ALREADY_QUEUED`` (AC1);
-        a fresh row returns ``QUEUED``.
+        The ``ON CONFLICT (idempotency_key) DO NOTHING`` insert runs FIRST (TK-173, CR-16): a
+        conflict (an existing row for the same ``idempotency_key``) is a no-op and returns
+        ``ALREADY_QUEUED`` (AC1) regardless of capacity — an idempotent duplicate at capacity is
+        genuinely a no-op, not a refusal. Capacity is checked AFTER, and only when a row was
+        actually inserted: at/above ``max_size``, the just-inserted row is rolled back and
+        ``QueueFullError`` is raised, adding no row (AC2). A fresh row within capacity returns
+        ``QUEUED``.
         """
         conn = self._connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM wombat_queue")
-            row = cur.fetchone()
-            count = row[0] if row is not None else 0
-            if count >= self._max_size:
-                conn.rollback()
-                raise QueueFullError(
-                    f"wombat_queue is at capacity ({self._max_size}); enqueue refused"
-                )
-
             cur.execute(
                 """
                 INSERT INTO wombat_queue (idempotency_key, payload)
                 VALUES (%s, %s)
                 ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING id
                 """,
                 (item.idempotency_key, json.dumps(item.payload)),
             )
-            inserted = cur.rowcount
+            inserted_row = cur.fetchone()
+            if inserted_row is None:
+                conn.commit()
+                return EnqueueResult.ALREADY_QUEUED
+
+            cur.execute("SELECT count(*) FROM wombat_queue")
+            row = cur.fetchone()
+            count = row[0] if row is not None else 0
+            if count > self._max_size:
+                conn.rollback()
+                raise QueueFullError(
+                    f"wombat_queue is at capacity ({self._max_size}); enqueue refused"
+                )
         conn.commit()
-        return EnqueueResult.QUEUED if inserted else EnqueueResult.ALREADY_QUEUED
+        return EnqueueResult.QUEUED
 
     def drain(self, limit: int | None = None) -> list[QueueItem]:
         """Lease and return ready rows, FIFO, in one atomic lease-and-fetch.

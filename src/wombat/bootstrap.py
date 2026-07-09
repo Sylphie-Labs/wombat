@@ -192,15 +192,21 @@ def build_compose_stage(
     dsn: str,
     params: OperatingParams | None = None,
     tz: ZoneInfo = _UTC_ZONE,
+    daily_ledger: DailyLedger | None = None,
 ) -> ComposeStage:
     """Assemble the mouth's ``ComposeStage`` wired with TK-9 layer 2 (Q-68): a real
     ``DailySpendLedger`` (over a ``DailyLedger`` on ``dsn``) and the ``mouth_daily_token_ceiling``
     tunable from OperatingParams, so the pre-call ceiling gate and post-call token accounting are
     live — not the optional-and-disabled ``ComposeStage`` defaults.
+
+    ``daily_ledger`` (TK-173, CR-15) lets a caller (``assemble_runtime``) hand in an ALREADY
+    constructed ``DailyLedger`` so this stage shares that ONE instance/connection/close()
+    lifecycle instead of opening a second one on the same ``dsn``. Defaults to constructing a
+    fresh ``DailyLedger(dsn, tz=tz)`` for standalone callers (tests, ``scripts/demo_drain.py``).
     """
     op = params if params is not None else load_operating_params()
-    daily_ledger = DailyLedger(dsn, tz=tz)
-    spend_ledger = DailySpendLedger(daily_ledger)
+    ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
+    spend_ledger = DailySpendLedger(ledger)
     return ComposeStage(
         config=config,
         template_composer=TemplateComposer(),
@@ -215,16 +221,22 @@ def build_brief_compose_stage(
     dsn: str,
     params: OperatingParams | None = None,
     tz: ZoneInfo = _UTC_ZONE,
+    daily_ledger: DailyLedger | None = None,
 ) -> BriefComposeStage:
     """Assemble the morning brief's ``BriefComposeStage`` wired with the SAME TK-9 layer 2 budget
     plumbing as ``build_compose_stage``: a real ``DailySpendLedger`` over a ``DailyLedger`` on the
     SAME ``dsn``/``tz`` and the SAME ``"spend:tokens"`` ledger row, plus the
     ``mouth_daily_token_ceiling`` tunable from OperatingParams — so drain and brief share ONE
     daily token cap rather than each hand-rolling its own (the Q-69-lesson wiring, TK-53).
+
+    ``daily_ledger`` (TK-173, CR-15) mirrors ``build_compose_stage``'s own seam: pass the SAME
+    already constructed ``DailyLedger`` so ``assemble_runtime`` closes exactly one connection per
+    assembly, not one per compose stage. Defaults to constructing a fresh one for standalone
+    callers.
     """
     op = params if params is not None else load_operating_params()
-    daily_ledger = DailyLedger(dsn, tz=tz)
-    spend_ledger = DailySpendLedger(daily_ledger)
+    ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
+    spend_ledger = DailySpendLedger(ledger)
     return BriefComposeStage(
         config=config,
         tz=tz,
@@ -407,7 +419,13 @@ def assemble_runtime(
     )
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
-    compose_stage = build_compose_stage(config=config, dsn=dsn, params=op, tz=tz)
+    # TK-173 (CR-15): share the ONE DailyLedger constructed above (the ceiling/day-rollover
+    # instance) rather than letting build_compose_stage open a second connection on the same
+    # dsn — runtime.py's teardown only ever closed bundle.daily_ledger, so a second instance
+    # would leak its lazily-opened connection past process shutdown.
+    compose_stage = build_compose_stage(
+        config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
+    )
 
     graph = build_drain_pathway(
         drain_queue_stage,
@@ -439,7 +457,10 @@ def assemble_runtime(
         )
         # SAME composed gate as the drain pathway (never a second Gate/pending-set/ceiling).
         brief_force_flush_stage = BriefForceFlushStage(select_items=gate.select_items, tz=tz)
-        brief_compose_stage = build_brief_compose_stage(config=config, dsn=dsn, params=op, tz=tz)
+        # TK-173 (CR-15): the SAME shared DailyLedger instance, not a third connection.
+        brief_compose_stage = build_brief_compose_stage(
+            config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
+        )
         brief_deliver_stage = build_brief_deliver_stage(config=config, tz=tz)
         brief_graph = build_brief_pathway(
             brief_gather_stage, brief_force_flush_stage, brief_compose_stage, brief_deliver_stage

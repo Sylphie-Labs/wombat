@@ -15,6 +15,8 @@ Postgres is safe to reuse.
   AC3 at-least-once across restart -> drain (lease, no ack) -> fresh WombatQueue (new epoch,
       the restart) -> drain again redelivers -> ack removes exactly once, second ack a no-op.
   AC4 empty queue -> drain() returns [] immediately.
+  AC4 (TK-173, CR-16) a duplicate key enqueued at capacity is a no-op (ALREADY_QUEUED, no
+      raise); a NEW key at capacity still raises QueueFullError.
 """
 
 from __future__ import annotations
@@ -93,6 +95,31 @@ def test_ac2_enqueue_at_capacity_raises_and_adds_no_row(clean_table: None) -> No
             queue.enqueue(QueueItem(idempotency_key="cap-overflow", payload={"i": 99}))
 
         assert _count() == 3  # no row added by the refused enqueue
+    finally:
+        queue.close()
+
+
+def test_ac4_duplicate_key_at_capacity_is_a_noop_new_key_still_raises(clean_table: None) -> None:
+    """TK-173 (CR-16): a queue AT max_size already containing key K -> enqueuing K again is an
+    idempotent no-op (ALREADY_QUEUED, no raise). A genuinely NEW key at that same capacity still
+    raises QueueFullError, unchanged."""
+    assert _DSN is not None
+    queue = WombatQueue(_DSN, max_size=3)
+    try:
+        for i in range(3):
+            result = queue.enqueue(QueueItem(idempotency_key=f"cap-{i}", payload={"i": i}))
+            assert result is EnqueueResult.QUEUED
+        assert _count() == 3
+
+        # Re-enqueuing an already-queued key at capacity is a no-op, not a refusal.
+        dup = queue.enqueue(QueueItem(idempotency_key="cap-0", payload={"i": 0}))
+        assert dup is EnqueueResult.ALREADY_QUEUED
+        assert _count() == 3
+
+        # A genuinely new key at capacity still raises and adds no row.
+        with pytest.raises(QueueFullError):
+            queue.enqueue(QueueItem(idempotency_key="cap-overflow", payload={"i": 99}))
+        assert _count() == 3
     finally:
         queue.close()
 
