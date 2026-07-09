@@ -11,9 +11,21 @@ push) and either dispatches EXACTLY ONCE (approved) or cancels with ZERO dispatc
 Generic + reusable over ONE capability: a caller parameterizes ``capability`` (the name to
 dispatch), ``args_from_artifact`` (reads the propose stage's own committed proposal Artifact —
 pulled via ``ctx.last_output(propose_stage_name)``, journal-backed and cold-resume safe — into the
-capability's args mapping), the shared trail ``writer``, and ``ask_step_index`` (the propose
-stage's position in the two-stage graph; always the default ``0`` — it is the entry stage, and a
-COMMITTED ``AwaitHuman`` replays as a plain advance on every re-drive, so the index never moves).
+capability's args mapping), and the shared trail ``writer``.
+
+Locates the parked proposal step POSITION-INDEPENDENTLY (TK-179/Q-94, superseding the Q-91
+constructor's precomputed-position-index shape, ``int = 0``): a fixed step index is only safe for
+a graph driven fresh every time, and a long-lived host run (any caller sharing ONE cog-worx run
+across
+many propose/dispatch cycles, or idling on unrelated ``Wait`` steps before this pathway's proposal
+ever parks) accumulates journal steps, so the propose stage's ``AwaitHuman`` can park at an
+ever-higher ``step_index``. Instead ``run()`` loads the run's committed step history
+(``ctx.journal.load_run(ctx.run_id)``) and walks it in reverse for the LAST step whose
+``stage_name == propose_stage_name`` — that step's OWN ``step_index`` is exactly where
+``Engine.provide_human_input`` recorded the answer (``engine.py`` — ``seq =
+last_step.step_index``, and the awaiting step IS the last committed propose-stage step). This is
+the identical journal-backed pull idiom ``StageContext.last_output`` already uses. No matching step
+in the run's history (a misconstruction) is a loud refusal, never a silent no-op.
 
 Admits itself to the cog-worx external capability tier at construction time (via
 ``wombat.safety.tier_policy.bind_external_tier`` — the ONE sanctioned call site, TK-151/DEC-22):
@@ -47,11 +59,12 @@ _VALID_DECISIONS = ("approve", "reject")
 
 
 class MissingApprovalAnswer(RuntimeError):
-    """The journaled human-input answer at ``ask_step_index`` was absent or carried no valid
-    ``decision``. A structural protocol violation: this stage is only ever reached via its paired
-    ``ProposeDispatchStage``'s ``AwaitHuman``, which the engine advances past only once
-    ``Engine.provide_human_input`` has already committed an answer artifact — this should be
-    unreachable in normal operation. Refused loud (recorded + raised), never a silent no-op."""
+    """The journaled human-input answer at the located propose-stage step was absent or carried no
+    valid ``decision`` — or no propose-stage step exists at all in the run's history. A structural
+    protocol violation: this stage is only ever reached via its paired ``ProposeDispatchStage``'s
+    ``AwaitHuman``, which the engine advances past only once ``Engine.provide_human_input`` has
+    already committed an answer artifact — this should be unreachable in normal operation. Refused
+    loud (recorded + raised), never a silent no-op."""
 
 
 class ApprovalTrailWriter(Protocol):
@@ -94,23 +107,54 @@ class DispatchApprovedStage:
         propose_stage_name: str,
         args_from_artifact: ArgsFromArtifact,
         writer: ApprovalTrailWriter,
-        ask_step_index: int = 0,
     ) -> None:
         self.name = name
         self._capability = capability
         self._propose_stage_name = propose_stage_name
         self._args_from_artifact = args_from_artifact
         self._writer = writer
-        self._ask_step_index = ask_step_index
         # The ONE sanctioned admission call site (TK-151/DEC-22) — scoped to this stage instance
         # only; the engine rebinds the gate fresh before every stage, so this never leaks.
         bind_external_tier(self)
+
+    async def _locate_propose_step_index(self, ctx: StageContext) -> int | None:
+        """Walk this run's committed step history for the LAST step whose ``stage_name`` matches
+        ``propose_stage_name`` and return its own ``step_index`` — the position-independent
+        replacement for a precomputed constructor-supplied step index (TK-179/Q-94). Mirrors
+        ``StageContext.last_output`` exactly (``cogworx/runtime/context.py``): journal-backed,
+        reverse-walked, crash-correct on cold resume. ``None`` when no such step exists (a
+        misconstruction) — the caller treats this as a loud refusal, never a silent no-op.
+        """
+        run = await ctx.journal.load_run(ctx.run_id)
+        if run is None:
+            return None
+        for step in reversed(run.steps):
+            if step.stage_name == self._propose_stage_name:
+                return step.step_index
+        return None
 
     async def run(self, ctx: StageContext) -> StageResult:
         action_id = f"{ctx.run_id}:{self._propose_stage_name}"
         now = ctx.clock()
 
-        answer = await ctx.read_human_input(self._ask_step_index)
+        propose_step_index = await self._locate_propose_step_index(ctx)
+        if propose_step_index is None:
+            self._writer.record_refusal(
+                action_id=action_id,
+                human_summary=(
+                    f"dispatch refused: no {self._propose_stage_name!r} step found in this "
+                    "run's step history — cannot locate the parked approval answer"
+                ),
+                target=self._capability,
+                proposed_at=now,
+            )
+            raise MissingApprovalAnswer(
+                f"{self.name}: no {self._propose_stage_name!r} step in run {ctx.run_id!r}'s "
+                f"step history for action_id={action_id!r} — cannot locate the parked approval "
+                "answer"
+            )
+
+        answer = await ctx.read_human_input(propose_step_index)
         decision = answer.data.get("decision") if answer is not None else None
 
         if decision not in _VALID_DECISIONS:
@@ -118,14 +162,14 @@ class DispatchApprovedStage:
                 action_id=action_id,
                 human_summary=(
                     f"dispatch refused: no valid approval answer at step "
-                    f"{self._ask_step_index} (decision={decision!r})"
+                    f"{propose_step_index} (decision={decision!r})"
                 ),
                 target=self._capability,
                 proposed_at=now,
             )
             raise MissingApprovalAnswer(
                 f"{self.name}: no valid 'decision' in human input at step "
-                f"{self._ask_step_index} for action_id={action_id!r} (got {decision!r})"
+                f"{propose_step_index} for action_id={action_id!r} (got {decision!r})"
             )
 
         if decision == "reject":

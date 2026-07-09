@@ -25,11 +25,19 @@ reimplemented) plus its ``ctx.read_human_input`` PULL-based decision-read patter
 ``record_proposal`` call (``draft_composer.py:233``), so ``mark_dispatched``/``mark_cancelled``
 land on the SAME trail row.
 
-``ask_step_index`` is a REQUIRED, no-default constructor argument (Q-92/Q-93): the engine records
-the human answer at the parked step's positional index (``engine.py`` — ``seq =
-last_step.step_index``), which is graph-position-sensitive. There is no safe default; a caller
-must pass the value for its own graph (1 in this ticket's 3-stage test graph; TK-177 supplies the
-live drain graph's index at boot-wiring time).
+Locates the parked proposal step POSITION-INDEPENDENTLY (TK-179/Q-94, superseding the Q-92/Q-93
+precomputed-position-index constructor-arg shape): the drain graph is ONE long-lived cog-worx run,
+so every idle Sweeper poll commits a ``Wait`` step and ``draft_composer``'s ``AwaitHuman`` parks at
+an ever-higher ``step_index`` — a fixed, precomputed static graph position (e.g. 4) goes stale the
+moment the run idles even once before the draft item surfaces. Instead ``run()`` loads the run's
+committed step history (``ctx.journal.load_run(ctx.run_id)``) and walks it in reverse for the LAST
+step whose ``stage_name == propose_stage_name`` — that step's OWN ``step_index`` is exactly where
+``Engine.provide_human_input`` recorded the answer (``engine.py`` — ``seq = last_step.step_index``,
+and the awaiting step IS the last committed propose-stage step). This is the identical
+journal-backed pull idiom ``StageContext.last_output`` already uses (``cogworx/runtime/context.py``
+— ``last_output`` walks ``run.steps`` in reverse for a matching ``stage_name``). No matching step in
+the run's history (a misconstruction) is treated exactly like a missing/malformed answer: a loud
+refusal, never a silent no-op.
 """
 
 from __future__ import annotations
@@ -70,19 +78,34 @@ class DraftDispatchStage:
         self,
         *,
         writer: DraftApprovalTrailWriter,
-        ask_step_index: int,
         propose_stage_name: str = "draft_composer",
     ) -> None:
         self.name = "draft_dispatch"
         self._writer = writer
-        self._ask_step_index = ask_step_index
         self._propose_stage_name = propose_stage_name
 
     async def run(self, ctx: StageContext) -> StageResult:
         action_id = f"{ctx.run_id}:{self._propose_stage_name}"
         now = ctx.clock()
 
-        answer = await ctx.read_human_input(self._ask_step_index)
+        propose_step_index = await self._locate_propose_step_index(ctx)
+        if propose_step_index is None:
+            self._writer.record_refusal(
+                action_id=action_id,
+                human_summary=(
+                    f"dispatch refused: no {self._propose_stage_name!r} step found in this "
+                    "run's step history — cannot locate the parked approval answer"
+                ),
+                target=self._propose_stage_name,
+                proposed_at=now,
+            )
+            raise MissingApprovalAnswer(
+                f"{self.name}: no {self._propose_stage_name!r} step in run {ctx.run_id!r}'s "
+                f"step history for action_id={action_id!r} — cannot locate the parked approval "
+                "answer"
+            )
+
+        answer = await ctx.read_human_input(propose_step_index)
         decision = answer.data.get("decision") if answer is not None else None
 
         if decision not in _VALID_DECISIONS:
@@ -90,14 +113,14 @@ class DraftDispatchStage:
                 action_id=action_id,
                 human_summary=(
                     f"dispatch refused: no valid approval answer at step "
-                    f"{self._ask_step_index} (decision={decision!r})"
+                    f"{propose_step_index} (decision={decision!r})"
                 ),
                 target=self._propose_stage_name,
                 proposed_at=now,
             )
             raise MissingApprovalAnswer(
                 f"{self.name}: no valid 'decision' in human input at step "
-                f"{self._ask_step_index} for action_id={action_id!r} (got {decision!r})"
+                f"{propose_step_index} for action_id={action_id!r} (got {decision!r})"
             )
 
         if decision == "reject":
@@ -123,6 +146,22 @@ class DraftDispatchStage:
                 data={"action_id": action_id, "status": "dispatched"},
             )
         )
+
+    async def _locate_propose_step_index(self, ctx: StageContext) -> int | None:
+        """Walk this run's committed step history for the LAST step whose ``stage_name`` matches
+        ``propose_stage_name`` and return its own ``step_index`` — the position-independent
+        replacement for a precomputed constructor-supplied step index (TK-179/Q-94). Mirrors
+        ``StageContext.last_output`` exactly (``cogworx/runtime/context.py``): journal-backed,
+        reverse-walked, crash-correct on cold resume. ``None`` when no such step exists (a
+        misconstruction) — the caller treats this as a loud refusal, never a silent no-op.
+        """
+        run = await ctx.journal.load_run(ctx.run_id)
+        if run is None:
+            return None
+        for step in reversed(run.steps):
+            if step.stage_name == self._propose_stage_name:
+                return step.step_index
+        return None
 
 
 __all__ = [

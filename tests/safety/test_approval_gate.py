@@ -30,6 +30,7 @@ and ``tests/integration/test_brief_pathway_e2e.py``'s own construction).
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -491,13 +492,58 @@ def test_ac6_unadmitted_default_policy_excludes_external_tier_directly() -> None
 # ----------------------------------------------------------- DispatchApprovedStage refusal-loud
 
 
+@dataclass(frozen=True)
+class _FakeStepRecord:
+    """A minimal duck-typed stand-in for cog-worx's ``StepRecord`` — only the two fields
+    ``DispatchApprovedStage._locate_propose_step_index`` reads (TK-179/Q-94)."""
+
+    stage_name: str
+    step_index: int
+
+
+@dataclass(frozen=True)
+class _FakeRunState:
+    """A minimal duck-typed stand-in for cog-worx's ``RunState`` — only ``steps``, walked in
+    reverse by ``_locate_propose_step_index`` (TK-179/Q-94)."""
+
+    steps: tuple[_FakeStepRecord, ...]
+
+
+class _FakeJournal:
+    """A minimal duck-typed ``Journal`` exposing only ``load_run`` — what
+    ``DispatchApprovedStage._locate_propose_step_index`` needs to walk this run's step history by
+    stage identity instead of a precomputed index."""
+
+    def __init__(self, run_state: _FakeRunState | None) -> None:
+        self._run_state = run_state
+
+    async def load_run(self, run_id: str) -> _FakeRunState | None:
+        return self._run_state
+
+
 class _AnswerlessFakeContext:
     """A minimal duck-typed StageContext exercising only what DispatchApprovedStage.run touches
     when the journaled human-input answer is absent — proves the refuse-loud path directly rather
-    than contriving an engine-level replay that can never actually produce this state."""
+    than contriving an engine-level replay that can never actually produce this state.
 
-    def __init__(self) -> None:
+    ``propose_step_history`` defaults to a single ``(_PROPOSE_GMAIL, 0)`` step (the propose
+    stage's real park position in the 2-stage graph), so the stage-identity lookup (TK-179/Q-94)
+    succeeds and the test below exercises the missing-ANSWER refusal, not the missing-STEP one."""
+
+    def __init__(
+        self,
+        *,
+        propose_step_history: tuple[tuple[str, int], ...] = ((_PROPOSE_GMAIL, 0),),
+    ) -> None:
         self.run_id = "refuse-loud"
+        self.journal = _FakeJournal(
+            _FakeRunState(
+                steps=tuple(
+                    _FakeStepRecord(stage_name=name, step_index=idx)
+                    for name, idx in propose_step_history
+                )
+            )
+        )
 
     async def read_human_input(self, step_index: int) -> Artifact | None:
         return None
@@ -519,6 +565,29 @@ async def test_missing_human_answer_refuses_loud_and_records_a_refusal() -> None
 
     with pytest.raises(MissingApprovalAnswer):
         await stage.run(_AnswerlessFakeContext())  # type: ignore[arg-type]
+
+    assert len(writer.refusals) == 1
+    assert writer.refusals[0]["action_id"] == f"refuse-loud:{_PROPOSE_GMAIL}"
+    assert writer.dispatched == []
+    assert writer.cancelled == []
+
+
+async def test_no_propose_stage_step_refuses_loud_and_records_a_refusal() -> None:
+    """TK-179 AC4: a run whose step history contains NO propose-stage step (a misconstruction) —
+    the stage-identity lookup finds nothing, so this refuses loud exactly like a missing answer,
+    never a silent no-op and never a capability dispatch."""
+    writer = _RecordingWriter()
+    stage = DispatchApprovedStage(
+        name=_DISPATCH_GMAIL,
+        capability=_GMAIL_CAPABILITY,
+        propose_stage_name=_PROPOSE_GMAIL,
+        args_from_artifact=lambda art: dict(art.data),
+        writer=writer,
+    )
+    ctx = _AnswerlessFakeContext(propose_step_history=())
+
+    with pytest.raises(MissingApprovalAnswer):
+        await stage.run(ctx)  # type: ignore[arg-type]
 
     assert len(writer.refusals) == 1
     assert writer.refusals[0]["action_id"] == f"refuse-loud:{_PROPOSE_GMAIL}"

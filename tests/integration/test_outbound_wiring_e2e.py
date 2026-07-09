@@ -41,6 +41,7 @@ import psycopg
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.state import RunStatus
+from cogworx.substrate.journal import RunState
 from pydantic import SecretStr
 
 import wombat.integrations.gmail.session as gmail_session_module
@@ -389,6 +390,147 @@ async def test_ac2_draft_surfaces_parks_and_approve_dispatches_with_one_capabili
             rows = reader.rows()
             action_row = next(r for r in rows if r.action_id == f"{run_id}:draft_composer")
             assert action_row.status == "dispatched"
+        finally:
+            reader.close()
+    finally:
+        bundle.queue.close()
+        bundle.daily_ledger.close()
+        bundle.pending_journal.close()
+
+
+# ============================================================================================
+# TK-179 AC1/AC2 (CR2-2, Q-94) — the idled-drain repro: the register's exact failure scenario.
+# The drain is ONE long-lived cog-worx run — every idle Sweeper poll commits a Wait step, so
+# draft_composer's AwaitHuman parks at an ever-higher step_index than the fresh-run position (4)
+# proven above. DraftDispatchStage must locate the parked step by STAGE IDENTITY (walking the
+# run's committed step history for the last "draft_composer" step), not a precomputed index, or
+# the real approval reads None, writes a false refusal, and strands the run RUNNING.
+# ============================================================================================
+
+
+async def _idle_then_surface_draft(
+    bundle: bootstrap.RuntimeBundle, run_id: str, reply: ReplyIntent
+) -> RunState:
+    """Park the run WAITING on an empty queue (1 committed boot Wait), fire ONE Sweeper-style
+    ``fire_timer`` poll while STILL empty (a second committed Wait), THEN enqueue the draft item
+    and fire once more so the drain proceeds — the register's exact idled-drain repro (CR2-2):
+    draft_composer's AwaitHuman parks at step_index 6, strictly greater than the fresh-run
+    position of 4."""
+    parked = await bundle.engine.run(
+        run_id=run_id,
+        session_id=run_id,
+        pathway_id=bundle.drain_pathway_id,
+        initial=_initial_artifact(),
+    )
+    assert parked.status is RunStatus.WAITING  # the boot Wait — queue starts empty
+
+    idled_again = await bundle.engine.fire_timer(run_id)
+    assert idled_again.status is RunStatus.WAITING  # a Sweeper poll finding the queue STILL empty
+
+    bundle.queue.enqueue(_draft_queue_item(reply))
+
+    surfaced = await bundle.engine.fire_timer(run_id)
+    return surfaced
+
+
+async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_lookup(
+    clean_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _DSN is not None
+    _force_active_presence(monkeypatch)
+    fake_session = _fake_gmail_session(monkeypatch)
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(with_google=True),
+        dsn=_DSN,
+        params=op,
+        gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
+    )
+    try:
+        reply = ReplyIntent(
+            recipient="jane@example.com",
+            subject_or_thread_ref="Q3 budget",
+            reply_kind="high",
+            quoted_excerpt="Quick update on the budget.",
+            message_id="m-idled-approve",
+            matched_rules=("urgent-keyword",),
+        )
+        run_id = "tk179-ac1-run"
+
+        surfaced = await _idle_then_surface_draft(bundle, run_id, reply)
+        assert surfaced.status is RunStatus.AWAITING_HUMAN
+        assert len(fake_session.calls) == 1
+        # The park lands STRICTLY GREATER than the fresh-run position (4) proven above — the
+        # exact CR2-2 shape (idle Sweeper polls before the draft item ever surfaces).
+        park_step = next(s for s in surfaced.steps if s.stage_name == "draft_composer")
+        assert park_step.step_index > 4
+
+        final = await bundle.engine.provide_human_input(run_id, payload={"decision": "approve"})
+
+        assert final.status is RunStatus.COMPLETED
+        # ZERO further capability calls attributable to draft_dispatch — spy count stays 1.
+        assert len(fake_session.calls) == 1
+
+        reader = ActionTrailReader(_DSN)
+        try:
+            rows = reader.rows()
+            action_row = next(r for r in rows if r.action_id == f"{run_id}:draft_composer")
+            # DISPATCHED (not stuck PENDING) is the observable proof of "zero refusals": a
+            # refusal targets the SAME action_id via INSERT ... ON CONFLICT DO NOTHING, so a
+            # structural refusal here would leave this row silently stranded at PENDING forever
+            # rather than adding a second row — DISPATCHED is only reachable via mark_dispatched,
+            # which the stage calls ONLY after successfully reading the approve decision.
+            assert action_row.status == "dispatched"
+        finally:
+            reader.close()
+    finally:
+        bundle.queue.close()
+        bundle.daily_ledger.close()
+        bundle.pending_journal.close()
+
+
+async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup(
+    clean_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _DSN is not None
+    _force_active_presence(monkeypatch)
+    fake_session = _fake_gmail_session(monkeypatch)
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(with_google=True),
+        dsn=_DSN,
+        params=op,
+        gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
+    )
+    try:
+        reply = ReplyIntent(
+            recipient="jane@example.com",
+            subject_or_thread_ref="Q3 budget",
+            reply_kind="high",
+            quoted_excerpt="Quick update on the budget.",
+            message_id="m-idled-reject",
+            matched_rules=("urgent-keyword",),
+        )
+        run_id = "tk179-ac2-run"
+
+        surfaced = await _idle_then_surface_draft(bundle, run_id, reply)
+        assert surfaced.status is RunStatus.AWAITING_HUMAN
+        assert len(fake_session.calls) == 1
+        park_step = next(s for s in surfaced.steps if s.stage_name == "draft_composer")
+        assert park_step.step_index > 4
+
+        final = await bundle.engine.provide_human_input(run_id, payload={"decision": "reject"})
+
+        assert final.status is RunStatus.COMPLETED
+        assert len(fake_session.calls) == 1  # unchanged — no further dispatch
+
+        reader = ActionTrailReader(_DSN)
+        try:
+            rows = reader.rows()
+            action_row = next(r for r in rows if r.action_id == f"{run_id}:draft_composer")
+            assert action_row.status == "cancelled"
         finally:
             reader.close()
     finally:

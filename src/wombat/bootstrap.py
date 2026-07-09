@@ -677,9 +677,10 @@ def assemble_runtime(
 
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
-        # ask_step_index is COMPUTED from this exact stages list (Q-92: graph-position-sensitive,
-        # never hardcoded) — the positional index draft_composer lands at in a fresh single-item
-        # drive is the step_index the engine records the human's approve/reject answer under.
+        # TK-179/Q-94: DraftDispatchStage locates the parked draft_composer step BY STAGE IDENTITY
+        # at run time (ctx.journal.load_run + reverse-walk for stage_name == "draft_composer") —
+        # NOT a precomputed graph position, which goes stale the moment the standing drain run
+        # idles on even one Sweeper poll before the draft item surfaces. No index to compute here.
         pre_dispatch_stages = (
             drain_queue_stage,
             gate_stage,
@@ -687,14 +688,11 @@ def assemble_runtime(
             compose_dispatch_router,
             draft_composer_stage,
         )
-        draft_ask_step_index = pre_dispatch_stages.index(draft_composer_stage)
         assert action_trail_writer is not None, (
             "assemble_runtime: draft_composer_stage is only ever set alongside "
             "action_trail_writer (both assigned in the SAME wired branch above)"
         )
-        draft_dispatch_stage = DraftDispatchStage(
-            writer=action_trail_writer, ask_step_index=draft_ask_step_index
-        )
+        draft_dispatch_stage = DraftDispatchStage(writer=action_trail_writer)
         graph = build_drain_pathway(*pre_dispatch_stages, compose_stage, draft_dispatch_stage)
     else:
         graph = build_drain_pathway(

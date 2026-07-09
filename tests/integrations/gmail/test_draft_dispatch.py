@@ -1,15 +1,19 @@
-"""TK-79 — draft_dispatch acceptance criteria (EP-18, Q-92/Q-93).
+"""TK-79 — draft_dispatch acceptance criteria (EP-18, Q-92/Q-93; TK-179/Q-94 dropped the
+``ask_step_index`` ctor-arg shape in favor of a position-independent, stage-identity lookup).
 
 AC1/AC2 use a REAL cog-worx ``Engine`` over the 3-stage construction Q-93 amended in: a
 ``compose_dispatch`` trigger stub (mirrors ``test_draft_composer.py``'s ``_ComposeDispatchStub``)
 -> TK-78's REAL ``DraftComposer`` -> this ticket's REAL ``DraftDispatchStage`` (replacing TK-78's
-frozen raising terminal stub, ``ask_step_index=1`` — compose_dispatch commits at step 0,
-draft_composer parks ``AwaitHuman`` at step 1). AC3 is unit-level: a minimal duck-typed ctx in the
-``_FakeDraftContext`` style (mirrors ``test_draft_composer.py``/``test_approval_gate.py``).
+frozen raising terminal stub; compose_dispatch commits at step 0, draft_composer parks
+``AwaitHuman`` at step 1 — ``DraftDispatchStage`` now locates that step by stage identity rather
+than a passed-in index). AC3 is unit-level: a minimal duck-typed ctx in the ``_FakeDraftContext``
+style (mirrors ``test_draft_composer.py``/``test_approval_gate.py``), now carrying a fake
+``journal``/``run_id`` seam so the stage's stage-identity lookup has something to walk.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -205,11 +209,13 @@ class _ComposeDispatchStub:
 
 def _three_stage_graph(writer: _RecordingWriter, reply_intent: ReplyIntent) -> StageGraph:
     """The Q-93-amended 3-stage construction: compose_dispatch stub -> real DraftComposer -> this
-    ticket's real DraftDispatchStage. ``ask_step_index=1``: compose_dispatch commits at step 0,
-    draft_composer parks AwaitHuman at step 1 — the engine records the human answer there."""
+    ticket's real DraftDispatchStage. compose_dispatch commits at step 0, draft_composer parks
+    AwaitHuman at step 1 — DraftDispatchStage (TK-179/Q-94) locates that step itself by walking
+    the run's committed step history for the last ``stage_name == "draft_composer"`` step, so no
+    index is passed in here."""
     entry = _ComposeDispatchStub(reply_intent)
     composer = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
-    dispatch = DraftDispatchStage(writer=writer, ask_step_index=1)
+    dispatch = DraftDispatchStage(writer=writer)
     return StageGraph([entry, composer, dispatch], entry="compose_dispatch")
 
 
@@ -277,15 +283,63 @@ async def test_ac2_reject_cancels_trail_row_with_zero_calls_and_halts_cleanly() 
 # ---------------------------------------------------------------------- AC3 (bypass, unit-level)
 
 
+@dataclass(frozen=True)
+class _FakeStepRecord:
+    """A minimal duck-typed stand-in for cog-worx's ``StepRecord`` — only the two fields
+    ``_locate_propose_step_index`` reads (``stage_name``/``step_index``)."""
+
+    stage_name: str
+    step_index: int
+
+
+@dataclass(frozen=True)
+class _FakeRunState:
+    """A minimal duck-typed stand-in for cog-worx's ``RunState`` — only ``steps``, walked in
+    reverse by ``_locate_propose_step_index`` (TK-179/Q-94)."""
+
+    steps: tuple[_FakeStepRecord, ...]
+
+
+class _FakeJournal:
+    """A minimal duck-typed ``Journal`` exposing only ``load_run`` — what
+    ``DraftDispatchStage._locate_propose_step_index`` needs to walk this run's step history by
+    stage identity instead of a precomputed index."""
+
+    def __init__(self, run_state: _FakeRunState | None) -> None:
+        self._run_state = run_state
+
+    async def load_run(self, run_id: str) -> _FakeRunState | None:
+        return self._run_state
+
+
 class _FakeDraftDispatchContext:
     """A minimal duck-typed StageContext exercising only what ``DraftDispatchStage.run`` touches
     when the journaled human-input answer is absent or malformed (mirrors
     ``test_approval_gate.py``'s ``_AnswerlessFakeContext``). Carries no ``dispatch`` method at
-    all — a structural proof that this stage cannot reach for a capability even if it tried."""
+    all — a structural proof that this stage cannot reach for a capability even if it tried.
 
-    def __init__(self, answer: Artifact | None, *, run_id: str = "bypass") -> None:
+    ``propose_step_history`` defaults to a single ``("draft_composer", 1)`` step — mirroring the
+    3-stage graph's real park position — so the stage-identity lookup (TK-179/Q-94) succeeds and
+    the tests below exercise the answer-read/decision logic exactly as before. Pass an empty (or
+    non-matching) history to exercise the "no propose-stage step found" refusal path."""
+
+    def __init__(
+        self,
+        answer: Artifact | None,
+        *,
+        run_id: str = "bypass",
+        propose_step_history: tuple[tuple[str, int], ...] = (("draft_composer", 1),),
+    ) -> None:
         self._answer = answer
         self.run_id = run_id
+        self.journal = _FakeJournal(
+            _FakeRunState(
+                steps=tuple(
+                    _FakeStepRecord(stage_name=name, step_index=idx)
+                    for name, idx in propose_step_history
+                )
+            )
+        )
 
     async def read_human_input(self, step_index: int) -> Artifact | None:
         return self._answer
@@ -297,7 +351,7 @@ class _FakeDraftDispatchContext:
 
 async def test_ac3_absent_answer_refuses_loud_and_records_a_refusal() -> None:
     writer = _RecordingWriter()
-    stage = DraftDispatchStage(writer=writer, ask_step_index=1)
+    stage = DraftDispatchStage(writer=writer)
     ctx = _FakeDraftDispatchContext(answer=None, run_id="bypass-absent")
 
     with pytest.raises(MissingApprovalAnswer):
@@ -311,7 +365,7 @@ async def test_ac3_absent_answer_refuses_loud_and_records_a_refusal() -> None:
 
 async def test_ac3_malformed_decision_refuses_loud_and_records_a_refusal() -> None:
     writer = _RecordingWriter()
-    stage = DraftDispatchStage(writer=writer, ask_step_index=1)
+    stage = DraftDispatchStage(writer=writer)
     malformed_answer = Artifact(
         kind="human-input",
         produced_by="human",
@@ -325,6 +379,25 @@ async def test_ac3_malformed_decision_refuses_loud_and_records_a_refusal() -> No
 
     assert len(writer.refusals) == 1
     assert writer.refusals[0]["action_id"] == "bypass-malformed:draft_composer"
+    assert writer.dispatched == []
+    assert writer.cancelled == []
+
+
+async def test_no_propose_stage_step_refuses_loud_and_records_a_refusal() -> None:
+    """TK-179 AC4: a run whose step history contains NO ``draft_composer`` step (a misconstruction)
+    — the stage-identity lookup finds nothing, so this refuses loud exactly like a missing answer,
+    never a silent no-op and never a capability dispatch."""
+    writer = _RecordingWriter()
+    stage = DraftDispatchStage(writer=writer)
+    ctx = _FakeDraftDispatchContext(
+        answer=None, run_id="bypass-no-propose-step", propose_step_history=()
+    )
+
+    with pytest.raises(MissingApprovalAnswer):
+        await stage.run(ctx)  # type: ignore[arg-type]
+
+    assert len(writer.refusals) == 1
+    assert writer.refusals[0]["action_id"] == "bypass-no-propose-step:draft_composer"
     assert writer.dispatched == []
     assert writer.cancelled == []
 
@@ -347,7 +420,7 @@ def test_gmail_messages_send_is_never_defined_in_this_module() -> None:
 
 def test_draft_dispatch_stage_name_and_transitions_are_frozen() -> None:
     writer = _RecordingWriter()
-    stage = DraftDispatchStage(writer=writer, ask_step_index=1)
+    stage = DraftDispatchStage(writer=writer)
 
     assert stage.name == "draft_dispatch"
     assert stage.transitions == ()
@@ -357,14 +430,14 @@ def test_draft_dispatch_stage_binds_no_external_tool_policy() -> None:
     """This stage does NOT call bind_external_tier (unlike DispatchApprovedStage/DraftComposer) —
     dispatching nothing means admitting it to the external tier would be unearned surface."""
     writer = _RecordingWriter()
-    stage = DraftDispatchStage(writer=writer, ask_step_index=1)
+    stage = DraftDispatchStage(writer=writer)
 
     assert not hasattr(stage, "tool_policy")
 
 
 async def test_approve_output_artifact_kind_and_status() -> None:
     writer = _RecordingWriter()
-    stage = DraftDispatchStage(writer=writer, ask_step_index=1)
+    stage = DraftDispatchStage(writer=writer)
     answer = Artifact(
         kind="human-input",
         produced_by="human",
@@ -384,7 +457,7 @@ async def test_approve_output_artifact_kind_and_status() -> None:
 
 async def test_reject_output_artifact_kind_and_status() -> None:
     writer = _RecordingWriter()
-    stage = DraftDispatchStage(writer=writer, ask_step_index=1)
+    stage = DraftDispatchStage(writer=writer)
     answer = Artifact(
         kind="human-input",
         produced_by="human",
