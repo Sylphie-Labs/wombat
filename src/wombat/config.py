@@ -6,9 +6,7 @@ silently broken. Reads the model egress credentials only; everything determinist
 
 from __future__ import annotations
 
-import os
-
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,10 +69,19 @@ class WombatConfig(BaseSettings):
 
 
 def load_config() -> WombatConfig:
-    """Load + validate config from the environment, or raise ConfigurationError loudly."""
-    for var in REQUIRED_ENV:
-        if not os.environ.get(var):
-            raise ConfigurationError(
-                f"missing required environment variable {var}; wombat will not start"
-            )
-    return WombatConfig()  # populated from the environment by pydantic-settings
+    """Load + validate config from the environment, or raise ConfigurationError loudly.
+
+    Env vars and the repo-root ``.env`` (if present) are both read by pydantic-settings,
+    with explicit env vars taking precedence over ``.env`` values (TK-186: the pre-pydantic
+    ``os.environ`` check used to short-circuit before ``.env`` was ever consulted).
+    """
+    try:
+        return WombatConfig()  # populated from the environment (and/or .env) by pydantic-settings
+    except ValidationError as exc:
+        missing = {str(error["loc"][0]) for error in exc.errors() if error["loc"]}
+        for var in REQUIRED_ENV:
+            if var.lower() in missing:
+                raise ConfigurationError(
+                    f"missing required environment variable {var}; wombat will not start"
+                ) from exc
+        raise

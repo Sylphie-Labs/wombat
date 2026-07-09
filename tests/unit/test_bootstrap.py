@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -47,8 +48,12 @@ def test_ac1_cold_launch_returns_engine_with_all_ten_seams() -> None:
 
 
 def test_ac2_missing_api_key_raises_configuration_error_naming_it(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # TK-186: chdir off the repo root so a real developer .env (if any) can't supply the
+    # missing key out from under this test -- pydantic-settings resolves env_file=".env"
+    # relative to CWD.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     with pytest.raises(ConfigurationError, match="DEEPSEEK_API_KEY"):
@@ -56,8 +61,9 @@ def test_ac2_missing_api_key_raises_configuration_error_naming_it(
 
 
 def test_ac2_missing_base_url_raises_configuration_error_naming_it(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
     with pytest.raises(ConfigurationError, match="DEEPSEEK_BASE_URL"):
