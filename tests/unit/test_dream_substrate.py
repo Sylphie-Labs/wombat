@@ -7,11 +7,18 @@ Covers:
            before the client is ever invoked.
        (b) the model endpoint is exempt from residency — dream_substrate.py imports nothing
            from wombat.safety.local_residency (AST import-scan).
+
+TK-180 (CR2-3) adds:
+  AC1'  the register's exact repro — the budget ceiling is PER-NIGHT, not per-process-lifetime.
+        20 completes on wombat-night N exhaust the default max_calls=20 ceiling; the 21st call on
+        the SAME night N is refused, but the FIRST call on wombat-night N+1 succeeds (an injected
+        clock drives the night key deterministically — the two-successive-drives test).
 """
 
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -65,6 +72,33 @@ def _spy_client() -> MagicMock:
 
 def _params(**overrides: object) -> OperatingParams:
     return load_operating_params().model_copy(update=overrides)
+
+
+def _make_raw_response(*, prompt_tokens: int = 100, completion_tokens: int = 50) -> MagicMock:
+    """Build a MagicMock mimicking an OpenAI ``ChatCompletion`` — enough for
+    ``OpenAICompatModel`` to parse a SUCCESSFUL completion (mirrors cog-worx's own
+    ``test_openai_compat_model.py::_make_raw_response`` fixture)."""
+    raw = MagicMock()
+    raw.usage = MagicMock()
+    raw.usage.prompt_tokens = prompt_tokens
+    raw.usage.completion_tokens = completion_tokens
+    message = MagicMock()
+    message.content = "hello"
+    message.tool_calls = None
+    choice = MagicMock()
+    choice.message = message
+    choice.finish_reason = "stop"
+    raw.choices = [choice]
+    return raw
+
+
+def _success_client() -> MagicMock:
+    """A canned client whose ``chat.completions.create`` always resolves to a valid completion
+    (never raises) — the TK-180 register repro needs REAL successful calls to accumulate the
+    per-night ceiling, not just a pre-network refusal."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_make_raw_response())
+    return client
 
 
 # --- AC1 -------------------------------------------------------------------------------
@@ -139,6 +173,50 @@ async def test_ac2a_zero_max_usd_raises_before_the_client_is_invoked() -> None:
         )
 
     client.chat.completions.create.assert_not_called()
+
+
+# --- TK-180 (CR2-3) — the budget ceiling is per-night, not per-process-lifetime ----------
+
+
+async def test_ac1_prime_budget_renews_per_night_not_process_lifetime() -> None:
+    """The register's exact repro: default params (max_calls=20) over a canned SUCCESS client.
+    20 completes on wombat-night N exhaust the ceiling; the 21st call on the SAME night N is
+    refused; the FIRST call on wombat-night N+1 SUCCEEDS — the two-successive-drives test, driven
+    by an injectable clock rather than a real sleep."""
+    entity_kg = InMemoryEntityKG()
+    client = _success_client()
+    current_instant = datetime(2026, 7, 8, 3, 0, tzinfo=UTC)
+
+    def _clock() -> datetime:
+        return current_instant
+
+    substrate = build_dream_substrate(
+        entity_kg=entity_kg,
+        spec=_spec(),
+        params=_params(),
+        client=client,
+        clock=_clock,
+    )
+
+    for _ in range(20):
+        response = await substrate.model.complete(
+            messages=[ChatMessage(role="user", content="hi")], tier="flash"
+        )
+        assert response.text == "hello"
+
+    with pytest.raises(BudgetExceededError):
+        await substrate.model.complete(
+            messages=[ChatMessage(role="user", content="hi")], tier="flash"
+        )
+
+    # Advance to the next wombat-night (TK-52's once-per-night fence means one dream drive
+    # per night in production; here the injected clock stands in for the elapsed night).
+    current_instant = datetime(2026, 7, 9, 3, 0, tzinfo=UTC)
+
+    response = await substrate.model.complete(
+        messages=[ChatMessage(role="user", content="hi")], tier="flash"
+    )
+    assert response.text == "hello"
 
 
 # --- AC2(b) — the model endpoint is exempt from residency --------------------------------

@@ -17,6 +17,18 @@ BUDGET (DEC-23 bounded off-path inference, the Q-90-normalized AC2): ``build_mod
 INSIDE ``BudgetGuardedModel.complete`` BEFORE the inner adapter is ever invoked, so a ceiling
 already at/over its limit refuses the call with zero network I/O (S11 pre-call, structural).
 
+BUDGET RESET CADENCE (TK-180, CR2-3): the ceiling is PER-NIGHT, not per-process-lifetime.
+``BudgetGuard`` itself is one-shot with no reset, so ``DreamSubstrate.model`` is a thin
+wombat-owned ``_NightBudgetedModel`` wrapper keyed to the wombat NIGHT (``wombat_today``,
+DEC-21) rather than the raw ``build_model(...)`` result: the first call each wombat-night mints a
+FRESH ``BudgetGuard`` and rebuilds the inner budget-guarded model via the SAME
+``build_model(spec, guard=..., client=...)`` composition above; within one night the ceiling
+accumulates exactly as before (correct — TK-52's once-per-night fence means one dream drive per
+night). This keeps the collaborators (``CoherenceReconciler``/``ClaimExtractor`` via
+``ModelConsistencyOracle``) constructed ONCE at boot over the wrapper (TK-47's keyword-injection
+shape holds) while the ceiling itself renews every night instead of accumulating across the
+process lifetime.
+
 RESIDENCY EXEMPTION (ASMP-1/Q-87): the consolidation model's endpoint (``deepseek_base_url``) is
 the ONE allowed egress — this module imports NOTHING from ``wombat.safety.local_residency`` and
 runs no residency check of its own. Store residency (the entity-KG persistence layer, once it is
@@ -31,20 +43,41 @@ drain-side fetch-source registry). Two distinct types that happen to share a cla
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from cogworx.coherence.oracle import ConsistencyOracle, ModelConsistencyOracle
 from cogworx.cost.budget import BudgetGuard
 from cogworx.knowledge.source_registry import SourceKind, SourceRegistry
-from cogworx.model.base import Model
+from cogworx.model.base import (
+    ChatMessage,
+    Model,
+    ModelCapabilities,
+    ModelResponse,
+    ModelTier,
+    ToolSpec,
+)
 from cogworx.model.registry import ModelSpec, build_model
 from cogworx.substrate.coherence import CoherenceStore
 from cogworx.substrate.entity_kg import EntityKG
 
+from wombat.domain.daily_ledger import wombat_today
 from wombat.params import OperatingParams
 
 __all__ = ["DreamSubstrate", "build_dream_substrate"]
+
+# The default night-key clock/zone (TK-180): production boot never threads its own tz/clock
+# through build_dream_substrate (bootstrap.py is out of scope for this ticket), so the night
+# boundary is resolved in UTC off the real wall clock unless a test injects its own seam.
+_UTC_ZONE = ZoneInfo("UTC")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
 
 # wombat's own declared source for dream-time claim extraction (the ClaimExtractor consumer,
 # TK-47): a "system" source — this is wombat's own off-path inference, never a human/tool/
@@ -52,6 +85,74 @@ __all__ = ["DreamSubstrate", "build_dream_substrate"]
 _DREAM_SOURCE_KIND: SourceKind = "system"
 _DREAM_SOURCE_REF = "wombat.dream"
 _DREAM_SOURCE_AUTHORITY = 1.0
+
+
+class _NightBudgetedModel:
+    """A thin wombat-owned ``Model``-protocol wrapper that mints a FRESH ``BudgetGuard`` (and
+    rebuilds the inner ``build_model(...)`` composition) once per wombat NIGHT (TK-180, CR2-3).
+
+    ``BudgetGuard`` is one-shot with no reset, so wiring it directly into the process-lifetime
+    model (the pre-TK-180 shape) let its counters accumulate forever — after
+    ``dream_budget_max_calls`` cumulative calls (days of normal operation) every subsequent call
+    raised ``BudgetExceededError``, silently no-op'ing consolidation until restart. This wrapper
+    is constructed ONCE at boot (the TK-47 keyword-injection shape holds —
+    ``ModelConsistencyOracle``/``ClaimExtractor``/``CoherenceReconciler`` all close over this ONE
+    instance) but re-derives
+    which inner model backs it on every call: the wombat-day boundary (``wombat_today``, DEC-21) is
+    resolved fresh via the injected ``clock``/``tz`` seam, and a night key change swaps in a brand
+    new budget-guarded inner model. Within one night the ceiling accumulates exactly as before
+    (TK-52's once-per-night fence means one dream drive per night, so this is a no-op in the
+    common case — the rebuild only fires on the FIRST call of a new night).
+    """
+
+    def __init__(
+        self,
+        *,
+        spec: ModelSpec,
+        params: OperatingParams,
+        client: Any,
+        clock: Callable[[], datetime],
+        tz: ZoneInfo,
+    ) -> None:
+        self._spec = spec
+        self._params = params
+        self._client = client
+        self._clock = clock
+        self._tz = tz
+        self._night: date | None = None
+        self._inner: Model | None = None
+
+    def _current(self) -> Model:
+        """Return the inner model for TONIGHT, rebuilding (with a fresh ``BudgetGuard``) the
+        first time this is called on a new wombat-night."""
+        night = wombat_today(self._clock(), self._tz)
+        if self._inner is None or night != self._night:
+            guard = BudgetGuard(
+                max_usd=self._params.dream_budget_max_usd,
+                max_calls=self._params.dream_budget_max_calls,
+            )
+            self._inner = build_model(self._spec, guard=guard, client=self._client)
+            self._night = night
+        return self._inner
+
+    @property
+    def capabilities(self) -> ModelCapabilities:
+        return self._current().capabilities
+
+    async def complete(
+        self,
+        *,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSpec] = (),
+        tier: ModelTier = "pro",
+        json_schema: Mapping[str, Any] | None = None,
+    ) -> ModelResponse:
+        return await self._current().complete(
+            messages=messages, tools=tools, tier=tier, json_schema=json_schema
+        )
+
+    def count_tokens(self, text: str) -> int:
+        return self._current().count_tokens(text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +172,8 @@ def build_dream_substrate(
     spec: ModelSpec,
     params: OperatingParams,
     client: Any = None,
+    clock: Callable[[], datetime] = _utc_now,
+    tz: ZoneInfo = _UTC_ZONE,
 ) -> DreamSubstrate:
     """Assemble the dream substrate (TK-54).
 
@@ -79,14 +182,18 @@ def build_dream_substrate(
     rebuilt. ``spec`` is the caller-supplied ``ModelSpec`` (production callers reuse the SAME
     descriptor ``bootstrap.py`` builds for the drain-side ``"deepseek"`` profile — this module
     never constructs its own). ``params`` supplies the DEC-23 budget ceiling
-    (``dream_budget_max_usd``/``dream_budget_max_calls``). ``client`` is the injectable adapter
-    client seam ``build_model``/``OpenAICompatModel`` already expose — the zero-network test seam
-    (a canned/spy client in tests, ``None`` in production for a real SDK client).
+    (``dream_budget_max_usd``/``dream_budget_max_calls``), now resolved PER-NIGHT rather than
+    once for the process lifetime (TK-180, CR2-3 — see ``_NightBudgetedModel``). ``client`` is the
+    injectable adapter client seam ``build_model``/``OpenAICompatModel`` already expose — the
+    zero-network test seam (a canned/spy client in tests, ``None`` in production for a real SDK
+    client). ``clock``/``tz`` are the injectable wombat-night seam (mirroring ``DailyLedger``'s
+    idiom, DEC-21): ``clock`` defaults to the real UTC wall clock and ``tz`` to UTC — production
+    boot (``bootstrap.py``) does not thread its own tz through this call, only tests inject a
+    fixed clock to drive the night boundary deterministically.
     """
-    guard = BudgetGuard(
-        max_usd=params.dream_budget_max_usd, max_calls=params.dream_budget_max_calls
+    model: Model = _NightBudgetedModel(
+        spec=spec, params=params, client=client, clock=clock, tz=tz
     )
-    model = build_model(spec, guard=guard, client=client)
     oracle = ModelConsistencyOracle(model, tier="flash")
 
     source_registry = SourceRegistry()

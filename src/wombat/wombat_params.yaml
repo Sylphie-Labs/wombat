@@ -99,13 +99,14 @@ sweeper_interval_seconds: 5.0
 #   fire/exactly-once-advance guarantee this backs).
 sweeper_lease_ttl_seconds: 60.0
 
-# --- Dream substrate budget (TK-54) ------------------------------------------------------
+# --- Dream substrate budget (TK-54, per-night cadence fixed by TK-180/CR2-3) ------------
 # CHOSEN-HERE — the DEC-23 bounded off-path-inference posture: the dream-only model (TK-47's
-# CoherenceReconciler/ClaimExtractor sweepers) gets a modest, structural per-drive-segment
-# BudgetGuard ceiling (wombat.pathways.dream_substrate.build_dream_substrate), never an unbounded
-# guard. Off-path and low-frequency (nightly cadence), so these ceilings are deliberately small.
-# dream_budget_max_usd: the per-drive-segment USD ceiling; a call at/over this raises
+# CoherenceReconciler/ClaimExtractor sweepers) gets a modest, structural per-night BudgetGuard
+# ceiling (wombat.pathways.dream_substrate.build_dream_substrate mints a FRESH guard each wombat
+# night), never an unbounded guard. Off-path and low-frequency (nightly cadence), so these
+# ceilings are deliberately small.
+# dream_budget_max_usd: the per-night USD ceiling; a call at/over this raises
 #   BudgetExceededError BEFORE any network call (S11 pre-call, structural).
 dream_budget_max_usd: 0.10
-# dream_budget_max_calls: the per-drive-segment call-count ceiling.
+# dream_budget_max_calls: the per-night call-count ceiling.
 dream_budget_max_calls: 20
