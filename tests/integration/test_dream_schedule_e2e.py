@@ -120,11 +120,32 @@ class _PassthroughConsolidateStage:
 
 @dataclass
 class _PassthroughOutcomeStage:
-    """TK-175 mechanical reshape: ``wombat.dream``'s middle stage — always transitions straight
+    """TK-175 mechanical reshape: ``wombat.dream``'s second stage — always transitions straight
     onward; it carries none of ``DreamOutcomeStage``'s collect/infer/label behavior (TK-175 owns
     that, out of scope for the TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_outcome"
+    transitions: tuple[str, ...] = ("dream_tune",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_tune",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughTuneStage:
+    """TK-49 mechanical reshape: ``wombat.dream``'s third stage — always transitions straight
+    onward; it carries none of ``DreamTuneStage``'s ``RatingTuner`` invocation (TK-49 owns that,
+    out of scope for the TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_tune"
     transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -198,7 +219,12 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
     pathways = PathwayRegistry()
     pathways.register(
         DREAM_PATHWAY_ID,
-        build_dream_pathway(_PassthroughConsolidateStage(), _PassthroughOutcomeStage(), stage),
+        build_dream_pathway(
+            _PassthroughConsolidateStage(),
+            _PassthroughOutcomeStage(),
+            _PassthroughTuneStage(),
+            stage,
+        ),
     )
 
     journal = InMemoryJournal()

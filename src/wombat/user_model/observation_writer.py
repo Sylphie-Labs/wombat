@@ -101,7 +101,13 @@ class ObservationWriter:
             )
             raise
 
-    async def record_rating_params(self, event_class: EventClass, params: RatingParams) -> str:
+    async def record_rating_params(
+        self,
+        event_class: EventClass,
+        params: RatingParams,
+        *,
+        source: SourceDeclaration | None = None,
+    ) -> str:
         """Write ``params`` under the BINDING Q-41 wire (ruling 4). Returns the canonical claim id.
 
         MUST write through ``wombat.rating.params``'s helpers —
@@ -110,6 +116,12 @@ class ObservationWriter:
         ``UserModel.ratings_for`` (the as-built read seam) reads back EXACTLY what was written
         (AC1b). On an entity-KG write failure the error is
         logged and RE-RAISED, never silently dropped (AC3).
+
+        ``source`` (TK-49, additive/keyword-only) lets a caller other than this writer's own
+        default owner (e.g. ``RatingTuner``) stamp its OWN provenance on the write — ``None`` (the
+        default) preserves the exact prior behavior, writing under ``self._source``. The Q-41
+        payload wire (``to_claim_payload``) stays CLOSED either way: provenance rides the claim's
+        ``SourceDeclaration`` only, never the payload.
         """
         try:
             return await self._scoped_kg.assert_fact(
@@ -117,7 +129,7 @@ class ObservationWriter:
                 predicate=RATING_CLAIM_PREDICATE,
                 obj=to_claim_payload(params),
                 epistemic_type="observation",
-                source=self._source,
+                source=source if source is not None else self._source,
                 created_by=_OWNER,
             )
         except Exception:

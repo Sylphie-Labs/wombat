@@ -1,11 +1,12 @@
 """build_dream_pathway — the wombat.dream pathway (TK-46 scaffold, TK-175 outcome pass, TK-47
-consolidation sweep, Q-33/Q-85/Q-90, DEC-12/DEC-23).
+consolidation sweep, TK-49 tuner pass, Q-33/Q-85/Q-90/Q-91, DEC-12/DEC-23).
 
 MIRRORS ``brief_pathway.py``'s posture: pure graph assembly, no bootstrap import (avoids an import
-cycle — ``bootstrap.py`` imports this module, not the reverse). Q-90 RULES the dream graph's
-end-state: ``dream_consolidate`` (entry, TK-47) -> ``dream_outcome`` (TK-175) -> ``dream_run``
-(terminal) — TK-52's later recurrence/fence inserts UPSTREAM of ``dream_consolidate`` so
-``dream_run`` stays the ONE reachable terminal and TK-46's isolation proofs keep passing.
+cycle — ``bootstrap.py`` imports this module, not the reverse). Q-91 RULES the dream graph's
+end-state: ``dream_consolidate`` (entry, TK-47) -> ``dream_outcome`` (TK-175) -> ``dream_tune``
+(TK-49) -> ``dream_run`` (terminal) — TK-52's later recurrence/fence inserts UPSTREAM of
+``dream_consolidate`` so ``dream_run`` stays the ONE reachable terminal and TK-46's isolation
+proofs keep passing.
 
 ``DreamConsolidationStage`` (TK-47, EP-13) is the nightly consolidation sweep: it drives
 cog-worx's ``CoherenceReconciler`` + ``ClaimExtractor`` sweepers to drain, off-path (S1) model
@@ -21,8 +22,16 @@ as ``UserModel`` does — no ``ScopedKG``/write-token minting here), folds them 
 invalidate-then-assert supersede). It NEVER touches ``ctx.journal`` and makes NO model call — a
 per-item failure is caught, logged LOUD, and skipped so one bad item never kills the night's pass.
 
-``DreamScaffoldStage`` remains the reachable terminal, off-path (S1/S11), no-op stage — no tuner
-(TK-49), no recurrence/fence (TK-52), no model call.
+``DreamTuneStage`` (TK-49, EP-14) is the nightly bounded rating-parameter tuner pass: it drives
+``wombat.rating.rating_tuner.RatingTuner`` (already fully wired over the shared user-scope entity
+KG/``ObservationWriter``/``OperatingParams``, injected here — this stage NEVER constructs a
+``RatingTuner``) over ``ctx.clock()``. Deterministic, model-free (NG-4 intact) — no LLM call, no
+``ctx.journal`` touch. A tuning failure is caught, logged LOUD, and the stage still transitions on
+(mirrors ``DreamOutcomeStage``'s own per-pass error posture): one bad night's tuning pass must
+never block the reachable terminal.
+
+``DreamScaffoldStage`` remains the reachable terminal, off-path (S1/S11), no-op stage — no
+recurrence/fence (TK-52), no model call.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from cogworx.runtime.claim_extractor import ClaimExtractor
 from cogworx.substrate.entity_kg import EntityKG
 
 from wombat.rating.params import EventClass
+from wombat.rating.rating_tuner import RatingTuner
 from wombat.user_model.claims import ClaimPredicate
 from wombat.user_model.feedback_source import FeedbackSignal
 from wombat.user_model.outcome_inference import ItemResolution, infer_outcomes
@@ -60,6 +70,12 @@ DREAM_REPORT_KIND = "wombat.dream_report"
 # following DREAM_REPORT_KIND's own contentless-proof idiom: no claim payloads ride this artifact,
 # only counts (the claims themselves are the durable record, written straight to the entity KG).
 DREAM_OUTCOME_REPORT_KIND = "wombat.dream_outcome_report"
+
+# DreamTuneStage's committed output kind (TK-49) — a contentless, system-provenance proof that the
+# night's tuning pass ran, mirroring DREAM_REPORT_KIND/DREAM_OUTCOME_REPORT_KIND's own
+# contentless-proof idiom: the durable record is the rating_params claims RatingTuner wrote (or
+# didn't, for a no-corpus class), never repeated onto this artifact.
+DREAM_TUNE_REPORT_KIND = "wombat.dream_tune_report"
 
 # DreamConsolidationStage's committed output kind (TK-47) — a system-provenance summary artifact:
 # accumulated ReconcilerStats counters, claims extracted, ticks driven, and the stall flag. No
@@ -242,12 +258,12 @@ class DreamOutcomeStage:
     never kills the night's pass.
 
     NEVER touches ``ctx.journal`` and makes NO model call (mirrors ``DreamScaffoldStage``'s own
-    off-path posture). ``run()`` always ``Transition``s onward to ``dream_run`` — even an entirely
-    empty corpus (AC2) completes cleanly with zero claim writes.
+    off-path posture). ``run()`` always ``Transition``s onward to ``dream_tune`` — even an
+    entirely empty corpus (AC2) completes cleanly with zero claim writes.
     """
 
     name: str = "dream_outcome"
-    transitions: tuple[str, ...] = ("dream_run",)
+    transitions: tuple[str, ...] = ("dream_tune",)
 
     def __init__(self, *, entity_kg: EntityKG, labeler: OutcomeLabeler, user_id: str) -> None:
         self._entity_kg = entity_kg
@@ -372,12 +388,54 @@ class DreamOutcomeStage:
                 errors += 1
 
         return Transition(
-            to="dream_run",
+            to="dream_tune",
             output=Artifact(
                 kind=DREAM_OUTCOME_REPORT_KIND,
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=now),
                 data={"items_collected": len(resolutions), "labeled": labeled, "errors": errors},
+            ),
+        )
+
+
+class DreamTuneStage:
+    """The nightly bounded rating-parameter tuner pass (TK-49, EP-14, Q-91).
+
+    Keyword-injected collaborator only (TK-42/TK-44/TK-45/TK-175/TK-47 precedent): ``tuner`` is
+    ``wombat.rating.rating_tuner.RatingTuner``, already fully wired over the SAME shared user-scope
+    entity KG/``ObservationWriter`` and the loaded ``OperatingParams`` (``bootstrap.
+    assemble_runtime``) — this stage NEVER constructs a ``RatingTuner`` itself.
+
+    ``run()`` calls ``tuner.tune(ctx.clock())`` — deterministic, model-free (NG-4 intact): no LLM
+    call, no ``ctx.journal`` touch (mirrors ``DreamOutcomeStage``'s own off-path posture). A
+    tuning-pass failure is caught, logged LOUD, and the stage STILL transitions onward to
+    ``dream_run`` — a bad night's tuning pass must never block the reachable terminal.
+    """
+
+    name: str = "dream_tune"
+    transitions: tuple[str, ...] = ("dream_run",)
+
+    def __init__(self, *, tuner: RatingTuner) -> None:
+        self._tuner = tuner
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        now = ctx.clock()
+        try:
+            await self._tuner.tune(now)
+        except Exception:
+            logger.error(
+                "dream_tune: RatingTuner.tune failed; tonight's tuning pass is skipped — rating "
+                "params stay unchanged until the next successful run",
+                exc_info=True,
+            )
+
+        return Transition(
+            to="dream_run",
+            output=Artifact(
+                kind=DREAM_TUNE_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=now),
+                data={},
             ),
         )
 
@@ -406,23 +464,25 @@ class DreamScaffoldStage:
 
 
 def build_dream_pathway(
-    consolidate: Stage, outcome: Stage, terminal: Stage | None = None
+    consolidate: Stage, outcome: Stage, tune: Stage, terminal: Stage | None = None
 ) -> StageGraph:
-    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (Q-90
-    end-state: ``dream_consolidate`` -> ``dream_outcome`` -> ``dream_run``, TK-47/TK-175).
+    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (Q-91
+    end-state: ``dream_consolidate`` -> ``dream_outcome`` -> ``dream_tune`` -> ``dream_run``,
+    TK-47/TK-175/TK-49).
 
-    ``consolidate`` and ``outcome`` are BOTH REQUIRED and supplied by the caller (mirrors
+    ``consolidate``, ``outcome``, and ``tune`` are ALL REQUIRED and supplied by the caller (mirrors
     ``build_brief_pathway``'s all-stages-injected convention) — production callers pass a
     ``DreamConsolidationStage`` built with its real ``reconciler``/``extractor`` collaborators
-    (TK-54's ``build_dream_substrate``) and a ``DreamOutcomeStage`` built with its real
-    ``entity_kg``/``labeler``/``user_id`` collaborators; this module never constructs those (no
-    bootstrap import, pure graph assembly). ``terminal`` KEEPS the TK-46 injectable-stage seam: it
-    defaults to ``DreamScaffoldStage()`` — since ``DreamOutcomeStage.transitions`` names the
-    literal ``"dream_run"`` target, a substituted terminal double (e.g. an always-raising stage,
-    AC2's off-path error-isolation proof) must keep that SAME name to be reachable.
+    (TK-54's ``build_dream_substrate``), a ``DreamOutcomeStage`` built with its real
+    ``entity_kg``/``labeler``/``user_id`` collaborators, and a ``DreamTuneStage`` built with its
+    real ``RatingTuner``; this module never constructs those (no bootstrap import, pure graph
+    assembly). ``terminal`` KEEPS the TK-46 injectable-stage seam: it defaults to
+    ``DreamScaffoldStage()`` — since ``DreamTuneStage.transitions`` names the literal
+    ``"dream_run"`` target, a substituted terminal double (e.g. an always-raising stage, AC2's
+    off-path error-isolation proof) must keep that SAME name to be reachable.
     """
     dream_terminal = terminal if terminal is not None else DreamScaffoldStage()
-    return StageGraph([consolidate, outcome, dream_terminal], entry=consolidate.name)
+    return StageGraph([consolidate, outcome, tune, dream_terminal], entry=consolidate.name)
 
 
 def dream_trigger_artifact(now: datetime) -> Artifact:
@@ -444,10 +504,12 @@ __all__ = [
     "DREAM_PATHWAY_ID",
     "DREAM_REPORT_KIND",
     "DREAM_TRIGGER_KIND",
+    "DREAM_TUNE_REPORT_KIND",
     "MAX_TICKS",
     "DreamConsolidationStage",
     "DreamOutcomeStage",
     "DreamScaffoldStage",
+    "DreamTuneStage",
     "build_dream_pathway",
     "dream_trigger_artifact",
 ]

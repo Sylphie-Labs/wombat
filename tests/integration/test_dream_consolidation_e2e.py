@@ -45,14 +45,17 @@ from cogworx.testing.fake_model import ReplayModel
 from cogworx.testing.fake_oracle import TableOracle
 
 from tests.support.stage_context_fake import FakeModel
+from wombat.params import load_operating_params
 from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
     MAX_TICKS,
     DreamConsolidationStage,
     DreamOutcomeStage,
+    DreamTuneStage,
     build_dream_pathway,
     dream_trigger_artifact,
 )
+from wombat.rating.rating_tuner import RatingTuner
 from wombat.substrate import SubstrateBundle, cold_boot_bundle
 from wombat.user_model.observation_writer import ObservationWriter
 from wombat.user_model.outcome_labeler import OutcomeLabeler
@@ -127,6 +130,25 @@ def _outcome_stage(entity_kg: InMemoryEntityKG) -> DreamOutcomeStage:
         ),
         user_id=_USER_ID,
     )
+
+
+def _tune_stage(entity_kg: InMemoryEntityKG) -> DreamTuneStage:
+    """TK-49 mechanical reshape (flagged per the ticket's own sanction): ``build_dream_pathway``
+    now requires a ``tune`` stage too — this suite's own AC1-AC3 witnesses are all about
+    ``DreamConsolidationStage``, so a trivially-constructed real ``DreamTuneStage`` (over a
+    throwaway ``RatingTuner`` on the SAME ``entity_kg``) merely satisfies the shape without
+    asserting anything about it."""
+    writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id=_USER_ID
+    )
+    tuner = RatingTuner(
+        entity_kg=entity_kg,
+        writer=writer,
+        params=load_operating_params(),
+        user_id=_USER_ID,
+        clock=lambda: _NOW,
+    )
+    return DreamTuneStage(tuner=tuner)
 
 
 def _never_called_model(guard: BudgetGuard) -> Model:
@@ -208,7 +230,9 @@ async def test_ac1_drain_with_work_reflects_reconciler_merges_and_terminates() -
     )
 
     consolidate_stage = DreamConsolidationStage(reconciler=reconciler, extractor=extractor)
-    dream_graph = build_dream_pathway(consolidate_stage, _outcome_stage(entity_kg))
+    dream_graph = build_dream_pathway(
+        consolidate_stage, _outcome_stage(entity_kg), _tune_stage(entity_kg)
+    )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     run_id = "run-dream-ac1"
@@ -220,6 +244,7 @@ async def test_ac1_drain_with_work_reflects_reconciler_merges_and_terminates() -
     stage_names = [s.stage_name for s in run_state.steps]
     assert "dream_consolidate" in stage_names
     assert "dream_outcome" in stage_names
+    assert "dream_tune" in stage_names
     assert "dream_run" in stage_names
 
     consolidate_step = next(s for s in run_state.steps if s.stage_name == "dream_consolidate")
@@ -264,7 +289,9 @@ async def test_ac2_clean_night_terminates_in_one_pass_with_zero_model_calls(
     )
 
     consolidate_stage = DreamConsolidationStage(reconciler=reconciler, extractor=extractor)
-    dream_graph = build_dream_pathway(consolidate_stage, _outcome_stage(entity_kg))
+    dream_graph = build_dream_pathway(
+        consolidate_stage, _outcome_stage(entity_kg), _tune_stage(entity_kg)
+    )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     run_id = "run-dream-ac2"
@@ -313,7 +340,9 @@ async def test_ac3_extractor_stall_still_transitions_and_run_completes(
     )
 
     consolidate_stage = DreamConsolidationStage(reconciler=reconciler, extractor=extractor)
-    dream_graph = build_dream_pathway(consolidate_stage, _outcome_stage(entity_kg))
+    dream_graph = build_dream_pathway(
+        consolidate_stage, _outcome_stage(entity_kg), _tune_stage(entity_kg)
+    )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     run_id = "run-dream-ac3"
@@ -326,6 +355,7 @@ async def test_ac3_extractor_stall_still_transitions_and_run_completes(
     stage_names = [s.stage_name for s in run_state.steps]
     assert "dream_consolidate" in stage_names
     assert "dream_outcome" in stage_names
+    assert "dream_tune" in stage_names
     assert "dream_run" in stage_names
 
     consolidate_step = next(s for s in run_state.steps if s.stage_name == "dream_consolidate")

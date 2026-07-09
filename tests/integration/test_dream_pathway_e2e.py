@@ -49,11 +49,13 @@ from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
     DreamOutcomeStage,
+    DreamTuneStage,
     build_dream_pathway,
     dream_trigger_artifact,
 )
 from wombat.queue import WombatQueue
 from wombat.queue import ensure_schema as ensure_queue_schema
+from wombat.rating.rating_tuner import RatingTuner
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
@@ -139,6 +141,14 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
+        # TK-49 (Q-91): the graph AC — the run walked all four stages, in order, ending COMPLETED.
+        assert [step.stage_name for step in dream_state.steps] == [
+            "dream_consolidate",
+            "dream_outcome",
+            "dream_tune",
+            "dream_run",
+        ]
+
         # A drain drive fired AFTER the dream run completes is clean and unaffected — the
         # heartbeat continues (an empty queue self-parks WAITING, mirrors the drain e2e's own
         # idle scenario).
@@ -179,6 +189,10 @@ class _RaisingDreamStage:
 
     name: str = "dream_run_raising"
     transitions: tuple[str, ...] = ("dream_outcome",)
+    # TK-49 reshape note: this stage stands in as the graph's ENTRY (``consolidate``) and always
+    # raises before ever reaching ``dream_outcome``/``dream_tune`` — the two real stages built
+    # alongside it in ``_build_stack_with_raising_dream`` merely satisfy ``build_dream_pathway``'s
+    # now-three-required-stages shape.
 
     async def run(self, ctx: StageContext) -> StageResult:
         raise RuntimeError("simulated dream failure — injected for AC2 isolation proof")
@@ -218,21 +232,27 @@ def _build_stack_with_raising_dream(
         compose_stage,
     )
 
-    # Never reached (the entry always raises first) — a throwaway stub outcome stage merely
-    # satisfies build_dream_pathway's now-required outcome arg (TK-47 reshape).
+    # Never reached (the entry always raises first) — throwaway stub outcome/tune stages merely
+    # satisfy build_dream_pathway's now-required outcome/tune args (TK-47/TK-49 reshape).
     stub_entity_kg = InMemoryEntityKG()
+    stub_writer = ObservationWriter(
+        entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
     stub_outcome_stage = DreamOutcomeStage(
         entity_kg=stub_entity_kg,
-        labeler=OutcomeLabeler(
-            writer=ObservationWriter(
-                entity_kg=stub_entity_kg,
-                scope_registry=ScopeRegistry(),
-                user_id="test-user",
-            )
-        ),
+        labeler=OutcomeLabeler(writer=stub_writer),
         user_id="test-user",
     )
-    dream_graph = build_dream_pathway(_RaisingDreamStage(), stub_outcome_stage)
+    stub_tune_stage = DreamTuneStage(
+        tuner=RatingTuner(
+            entity_kg=stub_entity_kg,
+            writer=stub_writer,
+            params=load_operating_params(),
+            user_id="test-user",
+            clock=lambda: _FIXED_NOW,
+        )
+    )
+    dream_graph = build_dream_pathway(_RaisingDreamStage(), stub_outcome_stage, stub_tune_stage)
 
     bundle = cold_boot_bundle()
     bundle.pathways.register(_LOCAL_DRAIN_PATHWAY_ID, drain_graph)

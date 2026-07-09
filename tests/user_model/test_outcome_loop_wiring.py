@@ -1,14 +1,22 @@
 """TK-175 — outcome-loop dream-side wiring acceptance criteria (Q-90 split of TK-175, EP-12).
 
-``DreamOutcomeStage`` is the ``wombat.dream`` graph's SECOND stage, transitioning onward to the
-TK-46 terminal scaffold (Q-90 end-state: ``dream_consolidate`` -> ``dream_outcome`` -> ``dream_
-run``). Both ACs drive a REAL cog-worx ``Engine`` (in-memory substrate — no Postgres needed) over
-``build_dream_pathway``, mirroring ``tests/integration/test_dream_pathway_e2e.py``'s
-hand-built-``Engine`` idiom. TK-47 (mechanical update, flagged per the ticket's own sanction):
-``build_dream_pathway`` now also requires a ``consolidate`` (entry) stage — ``_build_engine``
-below wires a zero-work ``DreamConsolidationStage`` (empty KG, empty journal, so its own sweepers
-never do anything) purely to satisfy the graph shape; this module's ACs are about the outcome
-pass, not consolidation.
+``DreamOutcomeStage`` is the ``wombat.dream`` graph's SECOND stage, transitioning onward to
+``dream_tune`` then the TK-46 terminal scaffold (Q-91 end-state: ``dream_consolidate`` ->
+``dream_outcome`` -> ``dream_tune`` -> ``dream_run``). Both ACs drive a REAL cog-worx ``Engine``
+(in-memory substrate — no Postgres needed) over ``build_dream_pathway``, mirroring ``tests/
+integration/test_dream_pathway_e2e.py``'s hand-built-``Engine`` idiom. TK-47 (mechanical update,
+flagged per the ticket's own sanction): ``build_dream_pathway`` now also requires a
+``consolidate`` (entry) stage — ``_build_engine`` below wires a zero-work
+``DreamConsolidationStage`` (empty KG, empty journal, so its own sweepers never do anything)
+purely to satisfy the graph shape; this module's ACs are about the outcome pass, not
+consolidation.
+
+TK-49 (mechanical update, flagged per the ticket's own sanction): ``build_dream_pathway`` now
+also requires a ``tune`` stage. A REAL ``RatingTuner`` would react to the OUTCOME_* corpus AC1
+seeds (it would write its OWN ``rating_params`` claim onto the SAME event-class subjects AC1's
+own ``claims_about`` assertions enumerate), so ``_build_engine`` wires a trivial always-
+transitions-onward double instead — this module's ACs are about the outcome pass, not tuning
+(TK-49 owns its own acceptance criteria in ``tests/unit/test_rating_tuner.py``).
 
   AC1 (e2e): seed the shared KG (via ``OutcomeLabeler``) with PENDING claims for two items across
       two event classes, plus a ``BEHAVIOR_OBSERVED`` 'useful' feedback claim for one of them.
@@ -27,11 +35,15 @@ functions run directly — no manual ``asyncio.run()`` driving needed.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.coherence.reconciler import CoherenceReconciler
 from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.knowledge.source_registry import SourceRegistry
+from cogworx.loop.result import StageResult, Transition
+from cogworx.loop.stage import StageContext
 from cogworx.loop.state import RunStatus
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.claim_extractor import ClaimExtractor
@@ -57,6 +69,28 @@ from wombat.user_model.outcome_labeler import OutcomeLabeler
 _FIXED_NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=UTC)
 _USER_ID = "alice"
 _SCOPE = f"user:{_USER_ID}"
+
+
+@dataclass
+class _PassthroughTuneStage:
+    """TK-49 mechanical reshape (flagged per the ticket's own sanction): a trivial
+    always-transitions-onward double standing in for ``DreamTuneStage`` — this module's ACs are
+    about the outcome pass, never touching the KG here (a real ``RatingTuner`` would react to the
+    OUTCOME_* corpus AC1 seeds; see the module docstring)."""
+
+    name: str = "dream_tune"
+    transitions: tuple[str, ...] = ("dream_run",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_run",
+            output=Artifact(
+                kind="wombat.dream_tune_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
 
 
 def _never_called_model(guard: object) -> FakeModel:
@@ -89,7 +123,9 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
         reconciler=dream_reconciler, extractor=dream_extractor
     )
     dream_outcome_stage = DreamOutcomeStage(entity_kg=entity_kg, labeler=labeler, user_id=_USER_ID)
-    dream_graph = build_dream_pathway(dream_consolidation_stage, dream_outcome_stage)
+    dream_graph = build_dream_pathway(
+        dream_consolidation_stage, dream_outcome_stage, _PassthroughTuneStage()
+    )
 
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 

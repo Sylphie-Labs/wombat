@@ -73,6 +73,14 @@ acks the item off the SAME ``WombatQueue.ack`` call ``ReviewOrSpeakStage`` uses 
 resolution`` stamps an ``OUTCOME_PENDING`` claim per gate-decided item (AC2) — Q-22 BINDS: never a
 terminal ``OUTCOME_*`` on this hot path. V1 honesty (Q-36/TK-14): the in-memory KG resets per
 process — no persistence is added here.
+
+TK-49 (Q-91, EP-14): the dream graph's new ``dream_tune`` stage — ``DreamTuneStage``
+(``build_dream_pathway``'s ``tune`` arg) — composes ``wombat.rating.rating_tuner.RatingTuner``
+over the SAME shared ``entity_kg``/``observation_writer`` instances TK-176 built above, plus the
+SAME loaded ``OperatingParams`` (the LOCKED TK-48 bound block lives at ``op.rating_tuner``); it
+transitions onward to ``DreamScaffoldStage`` (still the reachable terminal). No gate/pipeline
+change here — the gate re-reads a tuned parameter on its next drive via the as-built
+``UserModel.ratings_for`` seam.
 """
 
 from __future__ import annotations
@@ -129,6 +137,7 @@ from .pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
     DreamConsolidationStage,
     DreamOutcomeStage,
+    DreamTuneStage,
     build_dream_pathway,
     dream_trigger_artifact,
 )
@@ -140,6 +149,7 @@ from .pathways.dream_trigger import (
     build_dream_schedule_pathway,
 )
 from .queue import QueueItem, WombatQueue
+from .rating.rating_tuner import RatingTuner
 from .sources.bootstrap import build_brief_fetches, build_source_registry
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
@@ -610,7 +620,20 @@ def assemble_runtime(
     dream_outcome_stage = DreamOutcomeStage(
         entity_kg=entity_kg, labeler=outcome_labeler, user_id=_RUNTIME_USER_ID
     )
-    dream_graph = build_dream_pathway(dream_consolidation_stage, dream_outcome_stage)
+    # TK-49 (Q-91, EP-14): RatingTuner composed over the SAME shared user-scope entity_kg/
+    # observation_writer trio TK-176 built above, plus the SAME loaded OperatingParams — the gate
+    # never gets a second writer/reader onto this scope.
+    rating_tuner = RatingTuner(
+        entity_kg=entity_kg,
+        writer=observation_writer,
+        params=op,
+        user_id=_RUNTIME_USER_ID,
+        clock=_utc_now,
+    )
+    dream_tune_stage = DreamTuneStage(tuner=rating_tuner)
+    dream_graph = build_dream_pathway(
+        dream_consolidation_stage, dream_outcome_stage, dream_tune_stage
+    )
     substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     # TK-96: register wombat.brief off the SAME composed Gate/substrate/dsn — CONDITIONAL on a
