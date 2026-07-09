@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 5
+version: 6
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -98,3 +98,14 @@ sweeper_interval_seconds: 5.0
 #   later poll reclaims it (crash safety — see Sweeper's own docstring for the at-least-once-
 #   fire/exactly-once-advance guarantee this backs).
 sweeper_lease_ttl_seconds: 60.0
+
+# --- Dream substrate budget (TK-54) ------------------------------------------------------
+# CHOSEN-HERE — the DEC-23 bounded off-path-inference posture: the dream-only model (TK-47's
+# CoherenceReconciler/ClaimExtractor sweepers) gets a modest, structural per-drive-segment
+# BudgetGuard ceiling (wombat.pathways.dream_substrate.build_dream_substrate), never an unbounded
+# guard. Off-path and low-frequency (nightly cadence), so these ceilings are deliberately small.
+# dream_budget_max_usd: the per-drive-segment USD ceiling; a call at/over this raises
+#   BudgetExceededError BEFORE any network call (S11 pre-call, structural).
+dream_budget_max_usd: 0.10
+# dream_budget_max_calls: the per-drive-segment call-count ceiling.
+dream_budget_max_calls: 20

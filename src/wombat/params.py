@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Bump in lock-step with wombat_params.yaml's ``version`` whenever a field is added, removed,
 # or renamed, so a persisted file can be reconciled against the code's expectation.
-OPERATING_PARAMS_VERSION = 5
+OPERATING_PARAMS_VERSION = 6
 
 _PARAMS_FILENAME = "wombat_params.yaml"
 
@@ -108,6 +108,11 @@ class OperatingParams(BaseModel):
     # --- Sweeper cadence (TK-53) — the standing runtime's durable-timer poll loop ---
     sweeper_interval_seconds: float
     sweeper_lease_ttl_seconds: float
+
+    # --- Dream substrate budget (TK-54) — DEC-23 bounded off-path inference; the per-drive-
+    # segment BudgetGuard ceiling wombat.pathways.dream_substrate.build_dream_substrate wires ---
+    dream_budget_max_usd: float
+    dream_budget_max_calls: int
 
 
 def _default_params_path() -> Path:

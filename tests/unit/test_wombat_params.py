@@ -32,7 +32,7 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "wombat"
 def _valid_mapping() -> dict[str, object]:
     """A complete, well-typed parameter mapping (mirrors the shipped wombat_params.yaml)."""
     return {
-        "version": 5,
+        "version": 6,
         "urgency_threshold": 0.75,
         "load_flush_threshold": 1.0,
         "per_class_daily_ceiling": 3,
@@ -56,6 +56,8 @@ def _valid_mapping() -> dict[str, object]:
         "presence_idle_threshold_seconds": 60.0,
         "sweeper_interval_seconds": 5.0,
         "sweeper_lease_ttl_seconds": 60.0,
+        "dream_budget_max_usd": 0.10,
+        "dream_budget_max_calls": 20,
     }
 
 
@@ -92,6 +94,8 @@ def test_shipped_params_load_with_every_field_typed() -> None:
     assert isinstance(params.presence_idle_threshold_seconds, float)
     assert isinstance(params.sweeper_interval_seconds, float)
     assert isinstance(params.sweeper_lease_ttl_seconds, float)
+    assert isinstance(params.dream_budget_max_usd, float)
+    assert isinstance(params.dream_budget_max_calls, int)
 
 
 def test_file_carries_a_version_field() -> None:
@@ -181,6 +185,20 @@ def test_sweeper_cadence_fields_load_are_typed_and_equal_shipped_values() -> Non
 
     assert isinstance(params.sweeper_lease_ttl_seconds, float)
     assert params.sweeper_lease_ttl_seconds == 60.0
+
+
+# --- Dream substrate budget (TK-54) — the 2 dream-budget tunables load, typed, shipped values ---
+
+
+def test_dream_budget_fields_load_are_typed_and_equal_shipped_values() -> None:
+    """The TK-54 DEC-23 dream-budget ceilings load as the documented shipped YAML values."""
+    params = load_operating_params()
+
+    assert isinstance(params.dream_budget_max_usd, float)
+    assert params.dream_budget_max_usd == 0.10
+
+    assert isinstance(params.dream_budget_max_calls, int)
+    assert params.dream_budget_max_calls == 20
 
 
 # --- Spend ledger (TK-9) — the 3 mouth-budget tunables load, are typed, equal shipped values ---
