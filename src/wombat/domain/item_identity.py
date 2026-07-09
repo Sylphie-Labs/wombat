@@ -34,6 +34,15 @@ Design:
     total. It is impure (``uuid4``) by design — production code may call it freely, but
     tests must inject/pass an explicit natural id rather than asserting on its output
     (nondeterminism belongs in production, never in a test assertion).
+  * ``split_idempotency_key`` (TK-111, Q-98) is the pure INVERSE of ``idempotency_key``:
+    ``key -> (source_id, source_natural_id)``. It exists because ``idempotency_key`` is a
+    length-prefixed (netstring-style) encoding, not a plain delimiter join, so recovering
+    ``source_id`` requires reading that length prefix rather than a naive ``str.split``.
+    The nightly behavioral event log (TK-111) is the first consumer: it stores the
+    canonical ``idempotency_key`` as its primary key but also needs ``source_id`` as its
+    own column, so it inverts the key rather than persisting a second copy of the pair.
+    Raises ``ValueError`` on any key not built by ``idempotency_key`` — a caller writing a
+    durable row must skip (never guess at) a malformed key.
 """
 
 from __future__ import annotations
@@ -62,6 +71,37 @@ def idempotency_key(source_id: str, source_natural_id: str) -> str:
     ``f"{source_id}:{source_natural_id}"`` join would not guarantee.
     """
     return f"{len(source_id)}{_SEPARATOR}{source_id}{_SEPARATOR}{source_natural_id}"
+
+
+def split_idempotency_key(key: str) -> tuple[str, str]:
+    """THE pure inverse: ``idempotency_key -> (source_id, source_natural_id)`` (TK-111, Q-98).
+
+    Reads the length prefix ``idempotency_key`` writes (``f"{len(source_id)}:{source_id}:
+    {source_natural_id}"``) rather than a naive split on ``_SEPARATOR`` — ``source_id`` or
+    ``source_natural_id`` may itself contain the separator character, and the length prefix is
+    exactly what makes the encoding unambiguous despite that (see ``idempotency_key``'s own
+    docstring). Round-trips: ``split_idempotency_key(idempotency_key(a, b)) == (a, b)`` for any
+    two strings ``a``/``b``, including adversarial ones containing ``_SEPARATOR``.
+
+    Raises ``ValueError`` (never guesses) if ``key`` was not built by ``idempotency_key`` —
+    missing/non-digit length prefix, or the byte at the length offset isn't the separator.
+    """
+    prefix, found_separator, rest = key.partition(_SEPARATOR)
+    if not found_separator or not prefix.isdigit():
+        raise ValueError(
+            f"split_idempotency_key: {key!r} has no valid length-prefix header "
+            f"(expected '<len>{_SEPARATOR}<source_id>{_SEPARATOR}<source_natural_id>')"
+        )
+    length = int(prefix)
+    if len(rest) < length + 1 or rest[length] != _SEPARATOR:
+        raise ValueError(
+            f"split_idempotency_key: {key!r} declares source_id length {length} but the "
+            f"remainder does not have a {_SEPARATOR!r} at that offset — not a key produced by "
+            f"idempotency_key()"
+        )
+    source_id = rest[:length]
+    source_natural_id = rest[length + 1 :]
+    return source_id, source_natural_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,4 +160,5 @@ __all__ = [
     "idempotency_key",
     "new_ephemeral_natural_id",
     "parent_natural_id_of_task",
+    "split_idempotency_key",
 ]

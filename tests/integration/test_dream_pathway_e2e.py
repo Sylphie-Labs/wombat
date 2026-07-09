@@ -39,6 +39,8 @@ from cogworx.testing.doubles import InMemoryEntityKG
 
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
+from wombat.behavior.event_log import BehaviorEventLog
+from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
 from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
@@ -48,6 +50,7 @@ from wombat.params import load_operating_params
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
+    DreamBehaviorLogStage,
     DreamOutcomeStage,
     DreamTuneStage,
     build_dream_pathway,
@@ -111,10 +114,12 @@ def clean_tables() -> None:
         ensure_queue_schema(conn)
         ensure_daily_ledger_schema(conn)
         ensure_pending_journal_schema(conn)
+        ensure_behavior_event_log_schema(conn)
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE wombat_queue")
             cur.execute("TRUNCATE TABLE daily_ledger")
             cur.execute("TRUNCATE TABLE pending_journal")
+            cur.execute("TRUNCATE TABLE wombat_behavior_events")
         conn.commit()
 
 
@@ -142,11 +147,12 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
-        # TK-49 (Q-91): the graph AC — the run walked all four stages, in order, ending COMPLETED.
+        # TK-111 (Q-98): the graph AC — the run walked all five stages, in order, ending COMPLETED.
         assert [step.stage_name for step in dream_state.steps] == [
             "dream_consolidate",
             "dream_outcome",
             "dream_tune",
+            "dream_behavior_log",
             "dream_run",
         ]
 
@@ -165,6 +171,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
         bundle.queue.close()
         bundle.daily_ledger.close()
         bundle.pending_journal.close()
+        bundle.behavior_event_log.close()
 
 
 # --- AC2: an injected raising dream stage errors in its OWN run; drain stays clean afterward ------
@@ -237,8 +244,8 @@ def _build_stack_with_raising_dream(
         speak_stage,
     )
 
-    # Never reached (the entry always raises first) — throwaway stub outcome/tune stages merely
-    # satisfy build_dream_pathway's now-required outcome/tune args (TK-47/TK-49 reshape).
+    # Never reached (the entry always raises first) — throwaway stub outcome/tune/behavior_log
+    # stages merely satisfy build_dream_pathway's now-required args (TK-47/TK-49/TK-111 reshape).
     stub_entity_kg = InMemoryEntityKG()
     stub_writer = ObservationWriter(
         entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
@@ -257,7 +264,12 @@ def _build_stack_with_raising_dream(
             clock=lambda: _FIXED_NOW,
         )
     )
-    dream_graph = build_dream_pathway(_RaisingDreamStage(), stub_outcome_stage, stub_tune_stage)
+    stub_behavior_log_stage = DreamBehaviorLogStage(
+        store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
+    )
+    dream_graph = build_dream_pathway(
+        _RaisingDreamStage(), stub_outcome_stage, stub_tune_stage, stub_behavior_log_stage
+    )
 
     bundle = cold_boot_bundle()
     bundle.pathways.register(_LOCAL_DRAIN_PATHWAY_ID, drain_graph)

@@ -28,6 +28,7 @@ from wombat.domain.item_identity import (
     idempotency_key,
     new_ephemeral_natural_id,
     parent_natural_id_of_task,
+    split_idempotency_key,
 )
 
 # ---------------------------------------------------------------------------
@@ -160,3 +161,54 @@ def test_ephemeral_natural_id_is_injected_not_asserted_in_tests() -> None:
     fixed_natural_id = "presence-fixture-1"
     ref = ItemRef(source_id="presence", source_natural_id=fixed_natural_id)
     assert ref.idempotency_key() == idempotency_key("presence", fixed_natural_id)
+
+
+# ---------------------------------------------------------------------------
+# split_idempotency_key (TK-111, Q-98) — the pure inverse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source_id", "source_natural_id"),
+    [
+        ("calendar", "evt_abc"),
+        ("gmail", "msg_xyz"),
+        ("", ""),
+        ("", "x"),
+        ("x", ""),
+        # Adversarial: separators embedded in either field must still round-trip, since the
+        # length prefix (not the separator) is what makes the encoding unambiguous.
+        ("a:b", "c"),
+        ("a", "b:c"),
+        ("a:b:c", "d:e:f"),
+        (":::", ":::"),
+        ("3", "3:x"),  # a source_id that itself looks like a length-prefix header
+    ],
+)
+def test_split_idempotency_key_round_trips(source_id: str, source_natural_id: str) -> None:
+    key = idempotency_key(source_id, source_natural_id)
+    assert split_idempotency_key(key) == (source_id, source_natural_id)
+
+
+def test_split_idempotency_key_round_trips_via_item_ref() -> None:
+    ref = ItemRef(source_id="gmail", source_natural_id="msg_1")
+    assert split_idempotency_key(ref.idempotency_key()) == (
+        ref.source_id,
+        ref.source_natural_id,
+    )
+
+
+@pytest.mark.parametrize(
+    "malformed_key",
+    [
+        "",
+        "not-a-key-at-all",
+        "no-separator-anywhere",
+        "abc:def",  # non-digit prefix
+        "10:short:tooshort",  # declared length longer than what's actually present
+        "3:ab:missing-colon-at-offset",  # prefix says 3 but no separator lands there
+    ],
+)
+def test_split_idempotency_key_raises_value_error_on_a_malformed_key(malformed_key: str) -> None:
+    with pytest.raises(ValueError):
+        split_idempotency_key(malformed_key)

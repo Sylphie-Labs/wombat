@@ -146,6 +146,28 @@ class _PassthroughTuneStage:
     out of scope for the TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_tune"
+    transitions: tuple[str, ...] = ("dream_behavior_log",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_behavior_log",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughBehaviorLogStage:
+    """TK-111 mechanical reshape (flagged per the ticket's own sanction, Q-98): ``wombat.dream``'s
+    fourth stage — always transitions straight onward; it carries none of
+    ``DreamBehaviorLogStage``'s ``BehaviorEventLog`` write behavior (TK-111 owns that, out of
+    scope for the TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_behavior_log"
     transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -223,6 +245,7 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
             _PassthroughConsolidateStage(),
             _PassthroughOutcomeStage(),
             _PassthroughTuneStage(),
+            _PassthroughBehaviorLogStage(),
             stage,
         ),
     )

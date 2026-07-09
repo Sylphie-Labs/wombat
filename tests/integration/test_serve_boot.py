@@ -108,6 +108,7 @@ def test_assemble_runtime_against_real_postgres_carries_the_real_composition(
         bundle.queue.close()
         bundle.daily_ledger.close()
         bundle.pending_journal.close()
+        bundle.behavior_event_log.close()
 
 
 # --- AC5: the ONE full standing-loop cycle -----------------------------------------------------
@@ -162,3 +163,4 @@ async def test_ac5_full_standing_loop_cycle_enqueue_park_wake_drain(clean_tables
         bundle.queue.close()
         bundle.daily_ledger.close()
         bundle.pending_journal.close()
+        bundle.behavior_event_log.close()

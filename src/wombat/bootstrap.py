@@ -78,9 +78,17 @@ TK-49 (Q-91, EP-14): the dream graph's new ``dream_tune`` stage — ``DreamTuneS
 (``build_dream_pathway``'s ``tune`` arg) — composes ``wombat.rating.rating_tuner.RatingTuner``
 over the SAME shared ``entity_kg``/``observation_writer`` instances TK-176 built above, plus the
 SAME loaded ``OperatingParams`` (the LOCKED TK-48 bound block lives at ``op.rating_tuner``); it
-transitions onward to ``DreamScaffoldStage`` (still the reachable terminal). No gate/pipeline
-change here — the gate re-reads a tuned parameter on its next drive via the as-built
+transitions onward to ``dream_behavior_log`` (Q-98 superseded Q-91's end-state; TK-111 below). No
+gate/pipeline change here — the gate re-reads a tuned parameter on its next drive via the as-built
 ``UserModel.ratings_for`` seam.
+
+TK-111 (Q-98, EP-21): the dream graph's new ``dream_behavior_log`` stage — ``DreamBehaviorLogStage``
+(``build_dream_pathway``'s new ``behavior_log`` arg), inserted between ``dream_tune`` and the
+reachable terminal — composes a ``BehaviorEventLog`` over the SAME runtime ``dsn`` every other
+Postgres-touching seam here uses, and the SAME shared ``entity_kg``/``_RUNTIME_USER_ID`` TK-176
+built above (never a second KG instance). Exposed on ``RuntimeBundle.behavior_event_log`` so
+``runtime.py``'s teardown can close it (the SAME TK-184 lifecycle pattern as ``action_trail_
+writer``/``daily_ledger``/``pending_journal``/``queue``).
 """
 
 from __future__ import annotations
@@ -111,6 +119,7 @@ from cogworx.substrate.entity_kg import EntityKG
 from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
+from .behavior.event_log import BehaviorEventLog
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
@@ -144,6 +153,7 @@ from .pathways.brief_pathway import (
 from .pathways.drain_pathway import build_drain_pathway
 from .pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
+    DreamBehaviorLogStage,
     DreamConsolidationStage,
     DreamOutcomeStage,
     DreamTuneStage,
@@ -522,6 +532,12 @@ class RuntimeBundle:
     # TK-176: the ONE ObservationWriter over entity_kg (S7) — the write seam both the hot-path
     # feedback-absorb closure and OutcomeLabeler (via stamp_resolution) go through.
     observation_writer: ObservationWriter
+    # TK-111 (Q-98): the ONE BehaviorEventLog instance the nightly DreamBehaviorLogStage writes
+    # through, over the SAME runtime dsn every other Postgres seam here uses. UNCONDITIONAL
+    # (mirrors dream_pathway_id — no external deps beyond the shared entity_kg), so unlike
+    # action_trail_writer below this is never None; runtime.py's teardown closes it via the SAME
+    # TK-184 finally pattern.
+    behavior_event_log: BehaviorEventLog
     # TK-184 (CR2-10): the ActionTrailWriter constructed only when Google client creds + a stored
     # Gmail token are both present (WIRE 2/3 below), shared by draft_composer_stage/draft_dispatch_
     # stage — was previously constructed here but never exposed, so runtime's teardown never
@@ -804,8 +820,16 @@ def assemble_runtime(
         clock=_utc_now,
     )
     dream_tune_stage = DreamTuneStage(tuner=rating_tuner)
+    # TK-111 (Q-98): BehaviorEventLog over the SAME runtime dsn every other Postgres seam here
+    # uses, and DreamBehaviorLogStage over the SAME shared entity_kg/_RUNTIME_USER_ID (never a
+    # second KG instance). UNCONDITIONAL (mirrors dream_pathway_id's own posture) — no external
+    # deps beyond what this composition already builds.
+    behavior_event_log = BehaviorEventLog(dsn)
+    dream_behavior_log_stage = DreamBehaviorLogStage(
+        store=behavior_event_log, entity_kg=entity_kg, user_id=_RUNTIME_USER_ID
+    )
     dream_graph = build_dream_pathway(
-        dream_consolidation_stage, dream_outcome_stage, dream_tune_stage
+        dream_consolidation_stage, dream_outcome_stage, dream_tune_stage, dream_behavior_log_stage
     )
     substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -930,5 +954,6 @@ def assemble_runtime(
         brief_schedule_pathway_id=brief_schedule_pathway_id,
         entity_kg=entity_kg,
         observation_writer=observation_writer,
+        behavior_event_log=behavior_event_log,
         action_trail_writer=action_trail_writer,
     )

@@ -18,6 +18,12 @@ own ``claims_about`` assertions enumerate), so ``_build_engine`` wires a trivial
 transitions-onward double instead — this module's ACs are about the outcome pass, not tuning
 (TK-49 owns its own acceptance criteria in ``tests/unit/test_rating_tuner.py``).
 
+TK-111 (mechanical update, flagged per the ticket's own sanction, Q-98): ``build_dream_pathway``
+now also requires a ``behavior_log`` stage. A REAL ``DreamBehaviorLogStage`` needs a Postgres-
+backed ``BehaviorEventLog`` this module has no DSN for, so ``_build_engine`` wires a second
+trivial always-transitions-onward double instead (TK-111 owns its own acceptance criteria in
+``tests/behavior/test_event_log.py``).
+
   AC1 (e2e): seed the shared KG (via ``OutcomeLabeler``) with PENDING claims for two items across
       two event classes, plus a ``BEHAVIOR_OBSERVED`` 'useful' feedback claim for one of them.
       Drive one ``wombat.dream`` run: the run walks ``dream_outcome`` AND ``dream_run``
@@ -79,13 +85,36 @@ class _PassthroughTuneStage:
     OUTCOME_* corpus AC1 seeds; see the module docstring)."""
 
     name: str = "dream_tune"
+    transitions: tuple[str, ...] = ("dream_behavior_log",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_behavior_log",
+            output=Artifact(
+                kind="wombat.dream_tune_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughBehaviorLogStage:
+    """TK-111 mechanical reshape (flagged per the ticket's own sanction, Q-98): a trivial
+    always-transitions-onward double standing in for ``DreamBehaviorLogStage`` — this module's
+    ACs are about the outcome pass, never touching the KG or a Postgres store here (a real
+    ``DreamBehaviorLogStage`` needs a ``BehaviorEventLog`` this module has no DSN for; see the
+    module docstring)."""
+
+    name: str = "dream_behavior_log"
     transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_run",
             output=Artifact(
-                kind="wombat.dream_tune_report",
+                kind="wombat.dream_behavior_log_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={},
@@ -124,7 +153,10 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
     )
     dream_outcome_stage = DreamOutcomeStage(entity_kg=entity_kg, labeler=labeler, user_id=_USER_ID)
     dream_graph = build_dream_pathway(
-        dream_consolidation_stage, dream_outcome_stage, _PassthroughTuneStage()
+        dream_consolidation_stage,
+        dream_outcome_stage,
+        _PassthroughTuneStage(),
+        _PassthroughBehaviorLogStage(),
     )
 
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)

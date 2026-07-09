@@ -33,7 +33,8 @@ from cogworx.knowledge.evidence import EvidenceEvent, make_evidence
 from cogworx.knowledge.identity import claim_id_for
 from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.knowledge.source_registry import SourceRegistry
-from cogworx.loop.result import Done, Transition
+from cogworx.loop.result import Done, StageResult, Transition
+from cogworx.loop.stage import StageContext
 from cogworx.loop.state import RunStatus
 from cogworx.model.base import Model, ModelResponse
 from cogworx.model.registry import ModelRegistry
@@ -151,6 +152,29 @@ def _tune_stage(entity_kg: InMemoryEntityKG) -> DreamTuneStage:
     return DreamTuneStage(tuner=tuner)
 
 
+class _PassthroughBehaviorLogStage:
+    """TK-111 mechanical reshape (flagged per the ticket's own sanction, Q-98):
+    ``build_dream_pathway`` now also requires a ``behavior_log`` stage too — this suite's own
+    AC1-AC3 witnesses are all about ``DreamConsolidationStage``, so a trivial always-
+    transitions-onward double merely satisfies the shape without asserting anything about it (a
+    real ``DreamBehaviorLogStage`` needs a Postgres-backed ``BehaviorEventLog`` this module has
+    no DSN for)."""
+
+    name: str = "dream_behavior_log"
+    transitions: tuple[str, ...] = ("dream_run",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_run",
+            output=Artifact(
+                kind="wombat.dream_behavior_log_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
 def _never_called_model(guard: BudgetGuard) -> Model:
     """The Engine's own ``ctx.model`` factory — NEVER actually invoked, because neither
     ``DreamConsolidationStage`` nor ``DreamOutcomeStage``/``DreamScaffoldStage`` calls
@@ -231,7 +255,10 @@ async def test_ac1_drain_with_work_reflects_reconciler_merges_and_terminates() -
 
     consolidate_stage = DreamConsolidationStage(reconciler=reconciler, extractor=extractor)
     dream_graph = build_dream_pathway(
-        consolidate_stage, _outcome_stage(entity_kg), _tune_stage(entity_kg)
+        consolidate_stage,
+        _outcome_stage(entity_kg),
+        _tune_stage(entity_kg),
+        _PassthroughBehaviorLogStage(),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -290,7 +317,10 @@ async def test_ac2_clean_night_terminates_in_one_pass_with_zero_model_calls(
 
     consolidate_stage = DreamConsolidationStage(reconciler=reconciler, extractor=extractor)
     dream_graph = build_dream_pathway(
-        consolidate_stage, _outcome_stage(entity_kg), _tune_stage(entity_kg)
+        consolidate_stage,
+        _outcome_stage(entity_kg),
+        _tune_stage(entity_kg),
+        _PassthroughBehaviorLogStage(),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -341,7 +371,10 @@ async def test_ac3_extractor_stall_still_transitions_and_run_completes(
 
     consolidate_stage = DreamConsolidationStage(reconciler=reconciler, extractor=extractor)
     dream_graph = build_dream_pathway(
-        consolidate_stage, _outcome_stage(entity_kg), _tune_stage(entity_kg)
+        consolidate_stage,
+        _outcome_stage(entity_kg),
+        _tune_stage(entity_kg),
+        _PassthroughBehaviorLogStage(),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 

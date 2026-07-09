@@ -51,6 +51,7 @@ from pydantic import SecretStr
 import wombat.integrations.gmail.session as gmail_session_module
 from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat import bootstrap, runtime
+from wombat.behavior.event_log import BehaviorEventLog
 from wombat.bootstrap import RuntimeBundle
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
@@ -600,6 +601,7 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         brief_schedule_pathway_id=None,
         entity_kg=entity_kg,
         observation_writer=observation_writer,
+        behavior_event_log=BehaviorEventLog(_FAKE_DSN),
     )
     op = load_operating_params().model_copy(
         update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
@@ -712,6 +714,7 @@ def _serve_bundle(
         brief_schedule_pathway_id=schedule_pathway_id,
         entity_kg=entity_kg,
         observation_writer=observation_writer,
+        behavior_event_log=BehaviorEventLog(_FAKE_DSN),
     )
     return bundle, registry
 
@@ -966,6 +969,7 @@ async def test_action_trail_writer_closed_on_teardown_when_present(
         brief_schedule_pathway_id=None,
         entity_kg=entity_kg,
         observation_writer=observation_writer,
+        behavior_event_log=BehaviorEventLog(_FAKE_DSN),
         action_trail_writer=writer,
     )
     op = load_operating_params().model_copy(
@@ -981,3 +985,83 @@ async def test_action_trail_writer_closed_on_teardown_when_present(
         await task
 
     assert close_calls == [writer]
+
+
+# --- TK-111 (Q-98): RuntimeBundle.behavior_event_log is closed on teardown ----------------------
+
+
+async def test_behavior_event_log_closed_on_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_drive_and_serve``'s teardown closes ``RuntimeBundle.behavior_event_log`` — the SAME
+    TK-184 lifecycle pattern as ``action_trail_writer``/``daily_ledger``/``pending_journal``/
+    ``queue``, but UNCONDITIONAL (this field is never ``None``). Mirrors the AC4 shutdown test's
+    hand-rolled bundle construction and the ActionTrailWriter lifecycle test's tracking-``close``
+    pattern."""
+    close_calls: list[BehaviorEventLog] = []
+    real_close = BehaviorEventLog.close
+
+    def _tracking_close(self: BehaviorEventLog) -> None:
+        close_calls.append(self)
+        real_close(self)
+
+    monkeypatch.setattr(BehaviorEventLog, "close", _tracking_close)
+
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    pathways.register("only", StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only"))
+
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
+    )
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+    )
+
+    registry = _RecordingSourceRegistry()
+    queue = WombatQueue(_FAKE_DSN, max_size=10)
+    daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
+    pending_journal = PgPendingJournal(_FAKE_DSN)
+    compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    entity_kg = InMemoryEntityKG()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
+    behavior_event_log = BehaviorEventLog(_FAKE_DSN)  # lazy -- no connection at construction
+
+    bundle = RuntimeBundle(
+        engine=engine,
+        pathways=pathways,
+        journal=journal,
+        drain_pathway_id="only",
+        dream_pathway_id="only",
+        dream_schedule_pathway_id=None,
+        source_registry=registry,
+        pending_journal=pending_journal,
+        queue=queue,
+        daily_ledger=daily_ledger,
+        compose_stage=compose_stage,
+        brief_pathway_id=None,
+        brief_schedule_pathway_id=None,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
+        behavior_event_log=behavior_event_log,
+    )
+    op = load_operating_params().model_copy(
+        update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
+    )
+
+    task: asyncio.Task[None] = asyncio.ensure_future(runtime._drive_and_serve(bundle, params=op))
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert close_calls == [behavior_event_log]
