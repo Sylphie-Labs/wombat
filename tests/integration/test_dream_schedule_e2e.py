@@ -41,7 +41,7 @@ import psycopg
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.pathway import PathwayRegistry
-from cogworx.loop.result import Done, StageResult, Wait
+from cogworx.loop.result import Done, StageResult, Transition, Wait
 from cogworx.loop.stage import Stage, StageContext
 from cogworx.loop.state import RunStatus
 from cogworx.model.registry import ModelRegistry
@@ -91,6 +91,30 @@ def _at(day: tuple[int, int, int], hour: int, minute: int = 0) -> datetime:
 
 def _night_keyed_run_id(now: datetime) -> str:
     return f"wombat-dream-{wombat_today(now, _TZ).isoformat()}"
+
+
+@dataclass
+class _PassthroughOutcomeStage:
+    """TK-175 mechanical reshape: ``wombat.dream``'s entry is now ``dream_outcome`` ->
+    ``dream_run``, so this suite's own doubles (below) — which stand in for the TERMINAL
+    ``DreamScaffoldStage``, the ONLY stage this suite's fire-count witnesses care about — need a
+    real entry stage ahead of them. This trivial double always transitions straight onward; it
+    carries none of ``DreamOutcomeStage``'s collect/infer/label behavior (TK-175 owns that, out of
+    scope for the TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_outcome"
+    transitions: tuple[str, ...] = ("dream_run",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_run",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
 
 
 @dataclass
@@ -150,7 +174,7 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
 
     stage: Stage = dream_stage if dream_stage is not None else _CountingDreamStage()
     pathways = PathwayRegistry()
-    pathways.register(DREAM_PATHWAY_ID, build_dream_pathway(stage))
+    pathways.register(DREAM_PATHWAY_ID, build_dream_pathway(_PassthroughOutcomeStage(), stage))
 
     journal = InMemoryJournal()
     models = ModelRegistry()

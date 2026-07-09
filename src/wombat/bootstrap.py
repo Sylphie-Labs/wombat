@@ -32,11 +32,17 @@ sink-less boot still starts): blank/absent -> a loud warning and the pathway is 
 registered (``RuntimeBundle.brief_pathway_id`` stays ``None``); TK-97's timer/fence wires against
 that field once it exists, never a hardcoded pathway id.
 
-TK-46 (Q-85): ``assemble_runtime`` ALSO registers the ``wombat.dream`` pathway — the off-path
-no-op scaffold (``build_dream_pathway``), UNCONDITIONALLY (unlike ``wombat.brief``): the scaffold
-has no external deps, so a no-op dream run is harmless even on a Google-less/sink-less boot.
-Additive ``RuntimeBundle.dream_pathway_id`` mirrors ``brief_pathway_id``'s field shape; TK-52's
-nightly trigger/fence wires against that field once it exists, never a hardcoded pathway id.
+TK-46 (Q-85): ``assemble_runtime`` ALSO registers the ``wombat.dream`` pathway, UNCONDITIONALLY
+(unlike ``wombat.brief``): no external deps beyond the shared entity KG this composition already
+builds, so a dream run is harmless even on a Google-less/sink-less boot. Additive
+``RuntimeBundle.dream_pathway_id`` mirrors ``brief_pathway_id``'s field shape; TK-52's nightly
+trigger/fence wires against that field once it exists, never a hardcoded pathway id.
+
+TK-175 (Q-90 split, EP-12): the dream graph's entry is now ``DreamOutcomeStage`` (``build_dream_
+pathway``'s ``outcome`` arg) — the nightly collect/infer/label pass — constructed over the SAME
+shared ``entity_kg``/``outcome_labeler`` instances TK-176 also threads into the drain-side wiring
+(both built once, below); it transitions onward to ``DreamScaffoldStage`` (still the reachable
+terminal, TK-46's own isolation proofs unaffected).
 
 TK-52 (Q-85): ``assemble_runtime`` ALSO registers ``wombat.dream_schedule`` — the once-nightly
 dream timer, mirroring TK-97's ``wombat.brief_schedule`` wiring VERBATIM: built AFTER
@@ -107,7 +113,12 @@ from .pathways.brief_pathway import (
     build_brief_schedule_pathway,
 )
 from .pathways.drain_pathway import build_drain_pathway
-from .pathways.dream_pathway import DREAM_PATHWAY_ID, build_dream_pathway, dream_trigger_artifact
+from .pathways.dream_pathway import (
+    DREAM_PATHWAY_ID,
+    DreamOutcomeStage,
+    build_dream_pathway,
+    dream_trigger_artifact,
+)
 from .pathways.dream_trigger import (
     DREAM_SCHEDULE_PATHWAY_ID,
     DreamRunLedger,
@@ -554,9 +565,13 @@ def assemble_runtime(
     )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
-    # TK-46 (Q-85): register wombat.dream UNCONDITIONALLY — the off-path scaffold has no external
-    # deps, so a no-op dream run is harmless on any boot (unlike wombat.brief's conditional path).
-    dream_graph = build_dream_pathway()
+    # TK-46/TK-175 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — DreamOutcomeStage's own
+    # entity-KG reads are as harmless on a Google-less/sink-less boot as the terminal scaffold was
+    # (no external deps beyond the SAME shared entity_kg/outcome_labeler constructed above).
+    dream_outcome_stage = DreamOutcomeStage(
+        entity_kg=entity_kg, labeler=outcome_labeler, user_id=_RUNTIME_USER_ID
+    )
+    dream_graph = build_dream_pathway(dream_outcome_stage)
     substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     # TK-96: register wombat.brief off the SAME composed Gate/substrate/dsn — CONDITIONAL on a

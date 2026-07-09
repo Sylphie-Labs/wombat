@@ -157,6 +157,11 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
 class _RaisingDreamStage:
     """A ``Stage`` double whose ``run()`` ALWAYS raises — the AC2 injection seam.
 
+    Substituted as ``build_dream_pathway``'s ``outcome`` (entry) arg (TK-175 reshape): declaring
+    ``transitions=("dream_run",)`` keeps the two-stage graph's static shape valid (``dream_run`` —
+    the default ``DreamScaffoldStage`` terminal — is a real, reachable edge) even though ``run()``
+    always raises before ever returning a ``Transition`` that would take it.
+
     An un-classified exception (not in ``DEFAULT_RETRY_POLICY.retryable``, not a ``TimeoutError``)
     propagates loud out of ``Engine.run`` (cog-worx S9: uncaught is a bug, never a silent FAILED),
     so the dream run's journaled status stays ``RUNNING`` — it is proof the error stayed inside the
@@ -164,7 +169,7 @@ class _RaisingDreamStage:
     """
 
     name: str = "dream_run_raising"
-    transitions: tuple[str, ...] = ()
+    transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         raise RuntimeError("simulated dream failure — injected for AC2 isolation proof")
