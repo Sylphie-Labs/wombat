@@ -173,6 +173,101 @@ async def test_ac3_malformed_lines_skipped_with_warning_valid_neighbors_still_ca
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# TK-182 (CR2-5 + CR2-7) — bad-byte tolerance + truncation/rotation survival
+# ---------------------------------------------------------------------------
+
+
+async def test_tk182_ac1_bad_byte_and_pushed_event_both_survive_no_raise(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The register's exact repro: a valid line, a raw non-UTF-8 byte sequence, another valid
+    line, plus one pushed event in the buffer. poll() run twice must never raise, must warn +
+    skip only the bad-byte line, and must emit both valid lines and the pushed event exactly
+    once total (the offset advances so the second poll sees nothing new)."""
+    feedback_file = tmp_path / "feedback.txt"
+    feedback_file.write_bytes(b"item-1 y\n\xff\xfe\xfd\nitem-2 n\n")
+    source = FeedbackInputSource(poll_interval_seconds=1.0, feedback_file=feedback_file)
+
+    pushed_signal = FeedbackSignal(item_ref="item-pushed", response="useful")
+    source.push(
+        SourceEvent(event_key=pushed_signal.event_key(), payload=pushed_signal.to_payload())
+    )
+
+    with caplog.at_level(logging.WARNING):
+        first_events = await source.poll()
+        second_events = await source.poll()
+
+    assert [e.event_key for e in first_events] == [
+        pushed_signal.event_key(),
+        FeedbackSignal(item_ref="item-1", response="useful").event_key(),
+        FeedbackSignal(item_ref="item-2", response="not_useful").event_key(),
+    ]
+    assert second_events == []
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+async def test_tk182_ac2_truncation_then_append_re_reads_from_start(tmp_path: Path) -> None:
+    """A file truncated/rotated to fewer lines and then appended before the next poll must
+    have its new lines emitted (re-read from 0 on detected shrinkage), not silently dropped;
+    any re-emitted duplicate carries the same event_key as before (idempotency-dedupable)."""
+    feedback_file = tmp_path / "feedback.txt"
+    feedback_file.write_text("item-1 y\nitem-2 n\nitem-3 y\n", encoding="utf-8")
+    source = FeedbackInputSource(poll_interval_seconds=1.0, feedback_file=feedback_file)
+
+    first_events = await source.poll()
+    assert [e.event_key for e in first_events] == [
+        FeedbackSignal(item_ref="item-1", response="useful").event_key(),
+        FeedbackSignal(item_ref="item-2", response="not_useful").event_key(),
+        FeedbackSignal(item_ref="item-3", response="useful").event_key(),
+    ]
+
+    # Truncate/rotate to a single line, then append a new one before the next poll.
+    feedback_file.write_text("item-4 n\nitem-5 y\n", encoding="utf-8")
+
+    second_events = await source.poll()
+    second_keys = [e.event_key for e in second_events]
+
+    # The newly-written line must be present (the CR2-7 repro: it must never be silently
+    # dropped by an offset that slices past the end of the shrunk file).
+    assert FeedbackSignal(item_ref="item-5", response="useful").event_key() in second_keys
+    # Any re-emitted duplicate carries the same event_key as its original emission.
+    for key in second_keys:
+        assert key in {
+            FeedbackSignal(item_ref="item-4", response="not_useful").event_key(),
+            FeedbackSignal(item_ref="item-5", response="useful").event_key(),
+        }
+
+
+async def test_tk182_oserror_reading_file_preserves_drained_push_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A file-read failure for a reason OTHER than the tolerated missing-file no-op (e.g. an
+    OSError) must log loud and contribute no file events, but must NEVER discard pushed
+    events already drained by the same poll() call."""
+    feedback_file = tmp_path / "feedback.txt"
+    feedback_file.write_text("item-1 y\n", encoding="utf-8")
+    source = FeedbackInputSource(poll_interval_seconds=1.0, feedback_file=feedback_file)
+
+    pushed_signal = FeedbackSignal(item_ref="item-pushed", response="useful")
+    source.push(
+        SourceEvent(event_key=pushed_signal.event_key(), payload=pushed_signal.to_payload())
+    )
+
+    def _boom(self: Path) -> bytes:
+        raise OSError("simulated read failure")
+
+    monkeypatch.setattr(Path, "read_bytes", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        events = await source.poll()
+
+    assert [e.event_key for e in events] == [pushed_signal.event_key()]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
 async def test_ac4_no_file_no_pushes_poll_returns_empty_no_error() -> None:
     source = FeedbackInputSource(poll_interval_seconds=1.0)
 

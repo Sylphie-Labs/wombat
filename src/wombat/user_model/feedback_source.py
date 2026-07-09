@@ -27,7 +27,13 @@ Three pieces:
     appended to that file since the previous poll, parsing each with the deterministic
     grammar ``"<item_ref> y|n"`` (also accepts ``yes``/``no``, case-insensitive). A
     malformed line is logged as a warning and skipped — it never raises, so one bad line
-    can never kill the poll loop.
+    can never kill the poll loop. TK-182 (CR2-5 + CR2-7): the file is decoded tolerantly
+    (``errors="replace"``) so a stray non-UTF-8 byte becomes a malformed line, not a raised
+    ``UnicodeDecodeError``; a read failure for any other reason (``OSError``) is logged loud
+    and contributes no file events for that poll WITHOUT discarding already-drained pushed
+    events; and a truncated/rotated file (detected via a shrunk byte size) is re-read from
+    the start, accepting bounded, idempotency-deduped duplicates rather than silently
+    dropping the lines written after the truncation.
 """
 
 from __future__ import annotations
@@ -140,9 +146,15 @@ class FeedbackInputSource(PushSource):
     grammar above. A malformed line is a warning + skip, never a raise (CON-3: poll() must
     never kill the source's loop). ``feedback_file=None`` (the default) makes the file
     channel a pure no-op — the channel is purely additive.
+
+    TK-182 (CR2-5 + CR2-7): the file is decoded with ``errors="replace"`` — a stray
+    non-UTF-8 byte can never raise out of ``poll()`` — and a shrunk file size (truncation or
+    rotation) resets the line offset to 0 so lines written after the truncation are never
+    silently skipped; the re-read tail may re-emit lines already seen, but those carry the
+    same ``event_key`` and dedup via queue idempotency downstream.
     """
 
-    __slots__ = ("_feedback_file", "_lines_read")
+    __slots__ = ("_feedback_file", "_last_size", "_lines_read")
 
     def __init__(
         self,
@@ -152,21 +164,51 @@ class FeedbackInputSource(PushSource):
         super().__init__(id="feedback", poll_interval_seconds=poll_interval_seconds)
         self._feedback_file = Path(feedback_file) if feedback_file is not None else None
         self._lines_read = 0
+        self._last_size = 0
 
     async def poll(self) -> list[SourceEvent]:
         """Drain pushed events (``PushSource.poll()``), then append any newly-parsed events
         from the feedback file (if configured). Absence of both is fine (AC4, CON-3): returns
-        ``[]``, never raises."""
+        ``[]``, never raises. TK-182: the file read is isolated behind a try/except — an
+        ``OSError`` reading the file (other than the tolerated missing-file no-op) is logged
+        loud and contributes no file events for this poll, but the pushed events already
+        drained above are still returned, never discarded."""
         events = await super().poll()
-        events.extend(self._poll_file())
+        try:
+            events.extend(self._poll_file())
+        except OSError:
+            _log.warning(
+                "feedback source: failed to read feedback file %s; skipping file events this poll",
+                self._feedback_file,
+                exc_info=True,
+            )
         return events
 
     def _poll_file(self) -> list[SourceEvent]:
         """Read and parse only the lines appended to ``_feedback_file`` since the previous
-        call. No file configured, or the file not (yet) existing, is a no-op (CON-3)."""
+        call. No file configured, or the file not (yet) existing, is a no-op (CON-3).
+
+        TK-182: reads raw bytes and decodes with ``errors="replace"`` (CR2-5) — a non-UTF-8
+        byte becomes a replacement character inside whatever line it falls on, which then
+        fails the line grammar and is warned + skipped like any other malformed line, never
+        raising. A file size smaller than the last observed size (CR2-7) means the file was
+        truncated or rotated out from under us: the line offset resets to 0 so the poll
+        re-reads from the start rather than slicing past the end and silently dropping the
+        lines written after the truncation.
+        """
         if self._feedback_file is None or not self._feedback_file.exists():
             return []
-        lines = self._feedback_file.read_text(encoding="utf-8").splitlines()
+        raw = self._feedback_file.read_bytes()
+        if len(raw) < self._last_size:
+            _log.warning(
+                "feedback source: feedback file %s shrank (truncated or rotated); re-reading "
+                "from start",
+                self._feedback_file,
+            )
+            self._lines_read = 0
+        self._last_size = len(raw)
+
+        lines = raw.decode("utf-8", errors="replace").splitlines()
         new_lines = lines[self._lines_read :]
         self._lines_read = len(lines)
 
