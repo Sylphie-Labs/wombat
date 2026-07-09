@@ -33,6 +33,21 @@ TK-176: ``_maybe_register_feedback`` registers TK-51's ``FeedbackInputSource`` u
 ``_maybe_register_gmail`` above — iff ``config.wombat_feedback_file`` is non-blank; otherwise ONE
 loud log naming ``WOMBAT_FEEDBACK_FILE`` and the source is skipped (never raised). Registration-
 not-rewrite (DEC-5/TK-161): ``SourceRegistry`` itself is untouched.
+
+TK-177 (EP-18, Q-92): ``GmailWithReplyIntents`` is the live reply-intent EMISSION point — a thin
+``InputSource`` wrapper that REPLACES the bare ``GmailPoller`` in ``_maybe_register_gmail`` (same
+id ``"gmail"``, same Q-67 construction guards + loud-skip; ``build_brief_fetches`` is untouched —
+it keeps reading the RAW, unwrapped poller via ``_build_gmail_poller``). Its ``poll()`` delegates
+to the wrapped poller, then for EACH returned event: ``GmailMessageItem.from_payload`` ->
+``triage_message`` (metadata-only, TK-76) -> ``reply_intent.build`` (TK-80; ``None`` for a
+NORMAL-band message) -> a SECOND ``SourceEvent`` keyed ``f"reply:{message_id}"`` carrying the
+sanitized ``ReplyIntent``'s payload (``item_kind="draft"``). No registry/queue change: ``sources.
+registry.SourceRegistry`` already enqueues every polled event under
+``idempotency_key(source.id, event.event_key)`` (TK-12), so the draft item's key
+(``idempotency_key("gmail", "reply:<message_id>")``) is deterministic and distinct from the
+message item's own key — a re-poll of the same message is ``ALREADY_QUEUED`` on both events. The
+triage rule set is loaded ONCE (``load_triage_rules()``, at source-construction time in
+``_maybe_register_gmail``), never per poll.
 """
 
 from __future__ import annotations
@@ -51,12 +66,15 @@ from wombat.integrations.gcal.poller import CalendarPoller
 from wombat.integrations.gcal.session import make_calendar_session
 from wombat.integrations.gcal.token_store import KeyringTokenStore as GcalKeyringTokenStore
 from wombat.integrations.gcal.token_store import TokenStore as GcalTokenStore
+from wombat.integrations.gmail import reply_intent
 from wombat.integrations.gmail.models import GmailMessageItem
 from wombat.integrations.gmail.poller import GmailPoller
 from wombat.integrations.gmail.session import make_gmail_session
 from wombat.integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
+from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
+from wombat.sources.base import InputSource, SourceEvent
 from wombat.sources.registry import Enqueuer, SourceRegistry
 from wombat.user_model.feedback_source import FeedbackInputSource
 
@@ -161,6 +179,46 @@ def _build_gmail_poller(
     )
 
 
+class GmailWithReplyIntents:
+    """Wraps an ``InputSource`` (production: a wired ``GmailPoller``) and additionally emits a
+    sanitized ``ReplyIntent`` draft-item ``SourceEvent`` for each HIGH-triage message (TK-177,
+    EP-18, Q-92) — the live reply-intent EMISSION point at the Gmail source seam. See the module
+    docstring for the full design. ``id``/``poll_interval_seconds`` mirror the wrapped source
+    exactly, so this is a drop-in replacement wherever a bare ``GmailPoller`` was registered.
+    """
+
+    id: str = "gmail"
+
+    def __init__(self, *, wrapped: InputSource, rules: TriageRules) -> None:
+        self._wrapped = wrapped
+        self._rules = rules
+        self.poll_interval_seconds = wrapped.poll_interval_seconds
+
+    async def start(self) -> None:
+        await self._wrapped.start()
+
+    async def stop(self) -> None:
+        await self._wrapped.stop()
+
+    async def poll(self) -> list[SourceEvent]:
+        """Delegate to the wrapped source, then append ONE additional draft-item ``SourceEvent``
+        per HIGH-triage message (``reply_intent.build`` returns ``None`` for a NORMAL-band
+        message, emitting nothing for it)."""
+        events = await self._wrapped.poll()
+        emitted = list(events)
+        for event in events:
+            item = GmailMessageItem.from_payload(event.payload)
+            triage = triage_message(item, self._rules)
+            intent = reply_intent.build(item, triage)
+            if intent is not None:
+                emitted.append(
+                    SourceEvent(
+                        event_key=f"reply:{item.message_id}", payload=intent.to_payload()
+                    )
+                )
+        return emitted
+
+
 def _maybe_register_gcal(
     registry: SourceRegistry,
     config: WombatConfig,
@@ -196,7 +254,9 @@ def _maybe_register_gmail(
         token_store=token_store,
     )
     if poller is not None:
-        registry.register(poller)
+        # TK-177: wrap the wired poller so reply-intent emission rides the SAME registration —
+        # never a second poll loop, never a registry/queue change (Q-92).
+        registry.register(GmailWithReplyIntents(wrapped=poller, rules=load_triage_rules()))
 
 
 def _maybe_register_feedback(
@@ -364,6 +424,7 @@ __all__ = [
     "DEFAULT_GCAL_POLL_INTERVAL_SECONDS",
     "DEFAULT_GMAIL_POLL_INTERVAL_SECONDS",
     "BriefFetches",
+    "GmailWithReplyIntents",
     "build_brief_fetches",
     "build_source_registry",
 ]

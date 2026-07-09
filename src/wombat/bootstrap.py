@@ -123,6 +123,15 @@ from .gate.models import GateAction, GateDecision, ItemKind
 from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
+from .integrations.gmail.draft_composer import (
+    DraftComposer,
+    DraftTrailWriter,
+    make_drafts_create_capability,
+)
+from .integrations.gmail.session import make_gmail_session
+from .integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
+from .integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
+from .integrations.gmail.token_store import TokenStore as GmailTokenStore
 from .integrations.gmail.triage import load_triage_rules
 from .params import OperatingParams, load_operating_params
 from .pathways.brief_pathway import (
@@ -150,7 +159,11 @@ from .pathways.dream_trigger import (
 )
 from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
-from .sources.bootstrap import build_brief_fetches, build_source_registry
+from .sources.bootstrap import (
+    _has_google_client_credentials,
+    build_brief_fetches,
+    build_source_registry,
+)
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
 from .stages.brief_compose_stage import BriefComposeStage
@@ -160,10 +173,12 @@ from .stages.brief_gather_stage import BriefGatherStage
 from .stages.brief_timer_stage import BriefTimerStage
 from .stages.compose import ComposeStage
 from .stages.compose_dispatch_router import ComposeDispatchRouter
+from .stages.draft_dispatch import DraftDispatchStage
 from .stages.drain_queue import DrainQueueStage
 from .stages.gate_stage import GateStage, make_gate_evaluator
 from .stages.review_or_speak import ReviewOrSpeakStage
 from .substrate import SubstrateBundle, build_substrate
+from .trail.writer import ActionTrailWriter
 from .user_model.claims import Claim, ClaimPredicate
 from .user_model.feedback_source import FeedbackSignal
 from .user_model.observation_writer import ObservationWriter
@@ -234,16 +249,25 @@ def build_engine(
     *,
     config: WombatConfig | None = None,
     params: OperatingParams | None = None,
+    capability_registry: Registry | None = None,
 ) -> Engine:
     """Assemble (once) and return the wombat Engine. Idempotent: a second call returns the same
     instance — never a silent duplicate (AC3). ``bundle``/``config``/``params`` default to the
-    cold-boot substrate, env config, and the packaged ``wombat_params.yaml`` respectively."""
+    cold-boot substrate, env config, and the packaged ``wombat_params.yaml`` respectively.
+
+    ``capability_registry`` (TK-177, EP-18) lets a caller (``assemble_runtime``) hand in an
+    ALREADY assembled ``Registry`` (e.g. carrying the Q-67-gated ``gmail.drafts.create``
+    capability) so this is the ONE ``Registry`` the engine ever dispatches through — never a
+    second, empty one. Defaults to a bare ``Registry()`` (behavior-preserving for every existing
+    caller that never passes this).
+    """
     global _engine
     with _lock:
         if _engine is None:
             cfg = config if config is not None else load_config()
             sub = bundle if bundle is not None else build_substrate()
             op = params if params is not None else load_operating_params()
+            registry = capability_registry if capability_registry is not None else Registry()
             _engine = Engine(
                 models=_deepseek_registry(cfg),
                 journal=sub.journal,
@@ -257,7 +281,7 @@ def build_engine(
                     max_usd_per_drive=op.mouth_max_usd_per_drive,
                     max_calls_per_drive=op.mouth_max_calls_per_drive,
                 ),
-                registry=Registry(),
+                registry=registry,
                 recall_stack=RecallStack(channels=[]),
                 personality=_personality(),
                 rules=RuleSet(),
@@ -372,6 +396,20 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def build_draft_composer_stage(
+    *,
+    writer: DraftTrailWriter,
+    clock: Callable[[], datetime] = _utc_now,
+) -> DraftComposer:
+    """Assemble TK-78's ``DraftComposer`` via a small bootstrap factory (TK-177, the Q-69
+    assemble-via-factory lesson) — a thin, directly-testable wrapper mirroring
+    ``build_compose_stage``/``build_brief_compose_stage`` above, rather than ``assemble_runtime``
+    constructing the stage inline. ``DraftComposer.__init__`` already self-binds the TK-151
+    external tier policy (``bind_external_tier``) — nothing further to wire here.
+    """
+    return DraftComposer(writer=writer, clock=clock)
+
+
 def _guard_drain_batch_size(batch_size: int) -> None:
     """Loud guard (TK-172, CR-10) at the ONE place the drain batch size is consumed.
 
@@ -442,8 +480,16 @@ def assemble_runtime(
     params: OperatingParams | None = None,
     tz: ZoneInfo = _UTC_ZONE,
     replay_pending: bool = True,
+    gmail_token_store: GmailTokenStore | None = None,
 ) -> RuntimeBundle:
     """Compose the ONE standing wombat process (TK-53, Q-71).
+
+    ``gmail_token_store`` (TK-177, EP-18) lets a caller/test override the real OS-keyring token
+    store the outbound Gmail wiring (WIRE 2/3 below) reads its Q-67 presence check against —
+    mirrors ``build_source_registry``'s own ``gmail_token_store`` seam; it is threaded into
+    BOTH that call and the outbound wiring's own check below, so the source-side read wiring and
+    the draft-side write wiring always agree on the SAME stored credential. Defaults to ``None``
+    (the real ``GmailKeyringTokenStore``), behavior-preserving for every existing caller.
 
     Registers the TK-7 drain pathway (id ``DRAIN_PATHWAY_ID``) and wires the REAL production
     ``Gate`` (TK-27) — a durable ``PendingSet`` backed by the TK-29 Postgres ``PendingJournal``
@@ -580,7 +626,47 @@ def assemble_runtime(
         stamp_resolution=stamp_resolution,
     )
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
-    compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
+
+    # TK-177 (EP-18, Q-92): the outbound Gmail-reply wiring — gated on the SAME Q-67 presence
+    # checks sources/bootstrap.py's own gmail construction uses (client creds + a stored token),
+    # decided ONCE here so the capability registration below and the DRAFT route/dispatch-edge
+    # additions to the drain graph are an all-or-nothing pair (the LOUD-SKIP contract, TK-16
+    # pattern): a Google-less/capability-less boot registers neither, and the drain graph stays
+    # BYTE-IDENTICAL to the pre-TK-177 5-stage construction.
+    capability_registry = Registry()
+    composer_by_kind = {ItemKind.GENERIC: "compose"}
+    draft_composer_stage: DraftComposer | None = None
+    action_trail_writer: ActionTrailWriter | None = None
+    if _has_google_client_credentials(config):
+        gmail_store = (
+            gmail_token_store
+            if gmail_token_store is not None
+            else GmailKeyringTokenStore(account=GMAIL_KEYRING_ACCOUNT)
+        )
+        if gmail_store.load() is None:
+            logger.warning(
+                "assemble_runtime: gmail outbound wiring not wired (drafts.create capability + "
+                "DRAFT route/dispatch-edge skipped together): no stored Gmail credential — run "
+                "`python -m wombat.integrations.gmail.auth` once to grant consent, then restart"
+            )
+        else:
+            gmail_session = make_gmail_session(config, token_store=gmail_store)
+            capability_registry.register(make_drafts_create_capability(gmail_session))
+            # ActionTrailWriter (TK-146) has no other boot composition site yet (TK-177) — one
+            # instance over this SAME dsn, shared by draft_composer and draft_dispatch below.
+            action_trail_writer = ActionTrailWriter(dsn)
+            draft_composer_stage = build_draft_composer_stage(
+                writer=action_trail_writer, clock=_utc_now
+            )
+            composer_by_kind[ItemKind.DRAFT] = "draft_composer"
+    else:
+        logger.warning(
+            "assemble_runtime: gmail outbound wiring not wired (drafts.create capability + "
+            "DRAFT route/dispatch-edge skipped together): GOOGLE_OAUTH_CLIENT_ID/"
+            "GOOGLE_OAUTH_CLIENT_SECRET not configured (boot continues Google-less)"
+        )
+
+    compose_dispatch_router = ComposeDispatchRouter(composer_by_kind=composer_by_kind)
     # TK-173 (CR-15): share the ONE DailyLedger constructed above (the ceiling/day-rollover
     # instance) rather than letting build_compose_stage open a second connection on the same
     # dsn — runtime.py's teardown only ever closed bundle.daily_ledger, so a second instance
@@ -589,13 +675,35 @@ def assemble_runtime(
         config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
     )
 
-    graph = build_drain_pathway(
-        drain_queue_stage,
-        gate_stage,
-        review_or_speak_stage,
-        compose_dispatch_router,
-        compose_stage,
-    )
+    if draft_composer_stage is not None:
+        # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
+        # ask_step_index is COMPUTED from this exact stages list (Q-92: graph-position-sensitive,
+        # never hardcoded) — the positional index draft_composer lands at in a fresh single-item
+        # drive is the step_index the engine records the human's approve/reject answer under.
+        pre_dispatch_stages = (
+            drain_queue_stage,
+            gate_stage,
+            review_or_speak_stage,
+            compose_dispatch_router,
+            draft_composer_stage,
+        )
+        draft_ask_step_index = pre_dispatch_stages.index(draft_composer_stage)
+        assert action_trail_writer is not None, (
+            "assemble_runtime: draft_composer_stage is only ever set alongside "
+            "action_trail_writer (both assigned in the SAME wired branch above)"
+        )
+        draft_dispatch_stage = DraftDispatchStage(
+            writer=action_trail_writer, ask_step_index=draft_ask_step_index
+        )
+        graph = build_drain_pathway(*pre_dispatch_stages, compose_stage, draft_dispatch_stage)
+    else:
+        graph = build_drain_pathway(
+            drain_queue_stage,
+            gate_stage,
+            review_or_speak_stage,
+            compose_dispatch_router,
+            compose_stage,
+        )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both
@@ -668,8 +776,12 @@ def assemble_runtime(
         substrate.pathways.register(BRIEF_PATHWAY_ID, brief_graph)
         brief_pathway_id = BRIEF_PATHWAY_ID
 
-    engine = build_engine(substrate, config=config, params=op)
-    source_registry = build_source_registry(config, queue, tz=tz)
+    engine = build_engine(
+        substrate, config=config, params=op, capability_registry=capability_registry
+    )
+    source_registry = build_source_registry(
+        config, queue, tz=tz, gmail_token_store=gmail_token_store
+    )
 
     # TK-97 (Q-80): register wombat.brief_schedule — the once-daily brief timer — inside the SAME
     # brief-path conditional (blank brief path already loud-skipped BOTH above, leaving
