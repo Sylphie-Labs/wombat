@@ -32,7 +32,7 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "wombat"
 def _valid_mapping() -> dict[str, object]:
     """A complete, well-typed parameter mapping (mirrors the shipped wombat_params.yaml)."""
     return {
-        "version": 4,
+        "version": 5,
         "urgency_threshold": 0.75,
         "load_flush_threshold": 1.0,
         "per_class_daily_ceiling": 3,
@@ -43,6 +43,7 @@ def _valid_mapping() -> dict[str, object]:
         "mouth_max_usd_per_drive": 0.50,
         "mouth_max_calls_per_drive": 3,
         "morning_brief_time": "07:00:00",
+        "nightly_dream_time": "02:00:00",
         "rating_tuner": {
             "clamp_floor": 0.35,
             "clamp_ceiling": 0.65,
@@ -84,6 +85,7 @@ def test_shipped_params_load_with_every_field_typed() -> None:
     assert isinstance(params.mouth_max_usd_per_drive, float)
     assert isinstance(params.mouth_max_calls_per_drive, int)
     assert isinstance(params.morning_brief_time, time)
+    assert isinstance(params.nightly_dream_time, time)
     assert isinstance(params.rating_tuner, RatingTunerBounds)
     assert isinstance(params.presence_staleness_ceiling_seconds, float)
     assert isinstance(params.presence_confidence_floor, float)

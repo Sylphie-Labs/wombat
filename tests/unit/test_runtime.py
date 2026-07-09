@@ -520,6 +520,7 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         journal=journal,
         drain_pathway_id="only",
         dream_pathway_id="only",
+        dream_schedule_pathway_id=None,
         source_registry=registry,
         pending_journal=pending_journal,
         queue=queue,
@@ -623,6 +624,7 @@ def _serve_bundle(
         journal=journal,
         drain_pathway_id="only",
         dream_pathway_id="only",
+        dream_schedule_pathway_id=None,
         source_registry=registry,
         pending_journal=PgPendingJournal(_FAKE_DSN),
         queue=WombatQueue(_FAKE_DSN, max_size=10),
@@ -732,6 +734,7 @@ async def test_daily_ledger_lifecycle_every_constructed_instance_closed_after_te
         drain_pathway_id="only",
         source_registry=registry,
         brief_schedule_pathway_id=None,  # skip the second initial drive (its own pathway/engine)
+        dream_schedule_pathway_id=None,  # skip the third initial drive (its own pathway/engine)
     )
 
     run_op = op.model_copy(

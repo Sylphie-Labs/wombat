@@ -37,6 +37,14 @@ no-op scaffold (``build_dream_pathway``), UNCONDITIONALLY (unlike ``wombat.brief
 has no external deps, so a no-op dream run is harmless even on a Google-less/sink-less boot.
 Additive ``RuntimeBundle.dream_pathway_id`` mirrors ``brief_pathway_id``'s field shape; TK-52's
 nightly trigger/fence wires against that field once it exists, never a hardcoded pathway id.
+
+TK-52 (Q-85): ``assemble_runtime`` ALSO registers ``wombat.dream_schedule`` — the once-nightly
+dream timer, mirroring TK-97's ``wombat.brief_schedule`` wiring VERBATIM: built AFTER
+``build_engine`` (the ``fire_dream`` closure captures the live ``Engine``), night-keyed
+``run_id``, the SAME shared ``DailyLedger`` instance (a distinct ``"dream:run"`` row). UNLIKE
+``wombat.brief_schedule``, registration is UNCONDITIONAL (mirrors ``wombat.dream``'s own
+unconditional registration above — the dream scaffold needs no external config). Additive
+``RuntimeBundle.dream_schedule_pathway_id`` is therefore never ``None``.
 """
 
 from __future__ import annotations
@@ -83,7 +91,13 @@ from .pathways.brief_pathway import (
     build_brief_schedule_pathway,
 )
 from .pathways.drain_pathway import build_drain_pathway
-from .pathways.dream_pathway import DREAM_PATHWAY_ID, build_dream_pathway
+from .pathways.dream_pathway import DREAM_PATHWAY_ID, build_dream_pathway, dream_trigger_artifact
+from .pathways.dream_trigger import (
+    DREAM_SCHEDULE_PATHWAY_ID,
+    DreamRunLedger,
+    DreamTimerStage,
+    build_dream_schedule_pathway,
+)
 from .queue import WombatQueue
 from .sources.bootstrap import build_brief_fetches, build_source_registry
 from .sources.presence import make_presence_provider
@@ -329,6 +343,12 @@ class RuntimeBundle:
     # UNCONDITIONAL (the scaffold has no external deps), so unlike ``brief_pathway_id`` this is
     # never ``None``. TK-52's nightly trigger/fence wires against this field.
     dream_pathway_id: str
+    # TK-52 (Q-85): the registered ``wombat.dream_schedule`` pathway id (the once-nightly dream
+    # timer) — registration is UNCONDITIONAL (mirrors ``dream_pathway_id`` above; the dream
+    # scaffold needs no external config), but the field stays ``str | None`` to mirror ``brief_
+    # schedule_pathway_id``'s shape (``runtime.serve()`` gates its third boot drive on it being
+    # non-None regardless).
+    dream_schedule_pathway_id: str | None
     source_registry: SourceRegistry
     pending_journal: PgPendingJournal
     queue: WombatQueue
@@ -518,12 +538,42 @@ def assemble_runtime(
         substrate.pathways.register(BRIEF_SCHEDULE_PATHWAY_ID, schedule_graph)
         brief_schedule_pathway_id = BRIEF_SCHEDULE_PATHWAY_ID
 
+    # TK-52 (Q-85): register wombat.dream_schedule — the once-nightly dream timer — mirroring
+    # TK-97's fire_brief wiring VERBATIM. UNCONDITIONAL (unlike wombat.brief_schedule above): the
+    # dream scaffold has no external deps, so this always registers regardless of the brief path.
+    # Built AFTER build_engine so fire_dream can capture the live Engine. fire_dream drives
+    # wombat.dream under a NIGHT-KEYED run_id: same wombat-night -> same run_id -> the Engine's
+    # own run_id double-drive guard (verified as-built at TK-53) is the second idempotency layer.
+    async def fire_dream(now: datetime) -> RunState:
+        run_id = f"wombat-dream-{wombat_today(now, tz).isoformat()}"
+        return await engine.run(
+            run_id=run_id,
+            session_id=run_id,
+            pathway_id=DREAM_PATHWAY_ID,
+            initial=dream_trigger_artifact(now),
+        )
+
+    # The exactly-once fence rides the SAME DailyLedger instance as the ceiling/spend/brief-run
+    # ledgers (a distinct "dream:run" row — no collision), so the runtime shares ONE row lifecycle.
+    dream_run_ledger = DreamRunLedger(daily_ledger)
+    dream_timer_stage = DreamTimerStage(
+        fire_dream=fire_dream,
+        ran_tonight=dream_run_ledger.ran_tonight,
+        mark_ran=dream_run_ledger.mark_ran,
+        tz=tz,
+        dream_time=op.nightly_dream_time,
+    )
+    dream_schedule_graph = build_dream_schedule_pathway(dream_timer_stage)
+    substrate.pathways.register(DREAM_SCHEDULE_PATHWAY_ID, dream_schedule_graph)
+    dream_schedule_pathway_id: str | None = DREAM_SCHEDULE_PATHWAY_ID
+
     return RuntimeBundle(
         engine=engine,
         pathways=substrate.pathways,
         journal=substrate.journal,
         drain_pathway_id=DRAIN_PATHWAY_ID,
         dream_pathway_id=DREAM_PATHWAY_ID,
+        dream_schedule_pathway_id=dream_schedule_pathway_id,
         source_registry=source_registry,
         pending_journal=pending_journal,
         queue=queue,

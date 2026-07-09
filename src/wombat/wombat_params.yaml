@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 4
+version: 5
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -52,6 +52,13 @@ mouth_max_calls_per_drive: 3
 #   the value; TK-13 fixes the single value here. 07:00 local. Changing it is a human edit
 #   to THIS file (a version bump), never a runtime knob (TK-97 non_goal upheld).
 morning_brief_time: "07:00:00"
+
+# --- Nightly dream (TK-52) --------------------------------------------------------------
+# nightly_dream_time: CHOSEN-HERE — TK-52 FORBIDS runtime configurability beyond this single
+#   constant (mirrors morning_brief_time above). 02:00 local — well off the morning-brief
+#   window, a quiet off-path hour. Changing it is a human edit to THIS file (a version bump),
+#   never a runtime knob.
+nightly_dream_time: "02:00:00"
 
 # --- RatingTuner bounded-update block (TK-48 spike, RISK-4 RETIRED) ---------------------
 # LOCKED. These FIVE values are ONE coherent block and MUST move together. The TK-48

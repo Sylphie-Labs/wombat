@@ -38,12 +38,16 @@ from wombat.bootstrap import RuntimeBundle, assemble_runtime
 from wombat.config import ConfigurationError, load_config
 from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
+from wombat.pathways.dream_trigger import dream_timer_tick_artifact
 
 _HEARTBEAT_ARTIFACT_KIND = "drain-tick"
 _RUNTIME_RUN_ID_PREFIX = "wombat-drain"
 # TK-97: the schedule pathway's initial-drive run-id prefix — arms the brief timer at boot (which
 # is also the crash-miss catch: a boot after this morning's brief_time fires the missed brief once).
 _SCHEDULE_RUN_ID_PREFIX = "wombat-brief-schedule"
+# TK-52: the dream schedule pathway's initial-drive run-id prefix — arms the nightly dream timer
+# at boot (also the crash-miss catch, mirrors _SCHEDULE_RUN_ID_PREFIX above).
+_DREAM_SCHEDULE_RUN_ID_PREFIX = "wombat-dream-schedule"
 
 
 def _heartbeat_artifact() -> Artifact:
@@ -84,6 +88,19 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
                 session_id=schedule_run_id,
                 pathway_id=bundle.brief_schedule_pathway_id,
                 initial=brief_timer_tick_artifact(datetime.now(UTC)),
+            )
+        # TK-52: a THIRD initial drive arms the once-nightly dream timer (and catches a dream run
+        # missed while the process was down: a boot past tonight's dream_time fires it once).
+        # Mirrors the brief schedule drive above exactly. Only when the dream schedule pathway was
+        # registered — None -> skip, never crashes (registration is unconditional per Q-85, so
+        # this is expected to always fire, but the field stays checked to mirror the brief shape).
+        if bundle.dream_schedule_pathway_id is not None:
+            dream_schedule_run_id = f"{_DREAM_SCHEDULE_RUN_ID_PREFIX}-{uuid4()}"
+            await bundle.engine.run(
+                run_id=dream_schedule_run_id,
+                session_id=dream_schedule_run_id,
+                pathway_id=bundle.dream_schedule_pathway_id,
+                initial=dream_timer_tick_artifact(datetime.now(UTC)),
             )
         sweeper = Sweeper(
             journal=bundle.journal,

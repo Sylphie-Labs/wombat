@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Bump in lock-step with wombat_params.yaml's ``version`` whenever a field is added, removed,
 # or renamed, so a persisted file can be reconciled against the code's expectation.
-OPERATING_PARAMS_VERSION = 4
+OPERATING_PARAMS_VERSION = 5
 
 _PARAMS_FILENAME = "wombat_params.yaml"
 
@@ -92,6 +92,10 @@ class OperatingParams(BaseModel):
 
     # --- Morning brief (TK-97) — the single fixed value; no runtime knob ---
     morning_brief_time: time
+
+    # --- Nightly dream (TK-52) — the single fixed value; no runtime knob (mirrors morning_
+    # brief_time above; TK-52's non_goal caps configurability at this one constant) ---
+    nightly_dream_time: time
 
     # --- RatingTuner bounded-update block (TK-48, LOCKED) ---
     rating_tuner: RatingTunerBounds
