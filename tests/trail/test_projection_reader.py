@@ -22,10 +22,17 @@ write -> read -> render wire, not a mocked slice of it.
       is never truncated (existing content survives construction).
   AC5 record_refusal -> render() -> exactly one '[BLOCKED ...]' line; a subsequent render()
       adds nothing.
+
+CR2-8 (2026-07-09 review): a corrupt/truncated sidecar next to an existing trail log does NOT
+raise out of render() -- it warns loud and falls back to the documented Q-89 duplicate-on-loss
+mode (treated as an absent sidecar); and the sidecar's save path is atomic (temp file in the
+SAME directory + os.replace), proven directly against the private write path -- no real
+Postgres needed since ``_save_sidecar``/``_load_sidecar`` never touch the reader/DB.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -296,3 +303,94 @@ def test_ac5_refusal_renders_one_blocked_line_once(clean_table: None, tmp_path: 
             renderer.close()
     finally:
         writer.close()
+
+
+# ------------------------------------------------------------------------------------- CR2-8
+
+
+@_requires_pg
+def test_cr2_8_corrupt_sidecar_does_not_raise_and_falls_back_to_duplicate_on_loss_mode(
+    clean_table: None, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A corrupt/truncated sidecar next to an existing trail log does NOT raise out of
+    render() -- it warns loud and falls back to the documented Q-89 duplicate-on-loss mode
+    (treated exactly as an absent sidecar), so the row's PROPOSED line re-renders once more."""
+    assert _DSN is not None
+    log_path = tmp_path / "wombat-trail.log"
+    sidecar_path = log_path.with_name(log_path.name + ".sidecar.json")
+    writer = ActionTrailWriter(_DSN)
+    proposed_at = datetime(2026, 7, 2, 15, 0, tzinfo=UTC)
+    try:
+        writer.record_proposal(
+            action_id="draft-corrupt-1",
+            action_type=ActionType.DRAFT_EMAIL,
+            human_summary="Draft a reply to Jane about the Q3 budget",
+            target="jane@example.com",
+            proposed_at=proposed_at,
+        )
+
+        renderer = ActionTrailRenderer(_DSN, log_path)
+        try:
+            renderer.render()
+            expected_line = (
+                f"[PROPOSED {proposed_at.isoformat()}] draft_email: "
+                "Draft a reply to Jane about the Q3 budget"
+            )
+            assert _lines(log_path) == [expected_line]
+
+            # Simulate a crash mid-write: a truncated, unparseable JSON blob in place of the
+            # sidecar render() just wrote.
+            sidecar_path.write_text('{"draft-corrupt-1": "pen', encoding="utf-8")
+
+            with caplog.at_level("WARNING"):
+                renderer.render()  # must NOT raise JSONDecodeError
+
+            assert "sidecar" in caplog.text
+            assert "unparseable" in caplog.text
+
+            # Duplicate-on-loss (Q-89 ruling 2): the corrupt sidecar was treated as EMPTY, so
+            # the row looked never-before-rendered and its PROPOSED line was appended again.
+            assert _lines(log_path) == [expected_line, expected_line]
+        finally:
+            renderer.close()
+    finally:
+        writer.close()
+
+
+def test_cr2_8_save_sidecar_writes_atomically_via_temp_file_and_os_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_save_sidecar`` writes a temp file in the SAME directory as the sidecar, then
+    ``os.replace``s it into place -- never a truncate-in-place write. No real Postgres needed:
+    this drives the private write path directly (it never touches the reader/DB)."""
+    log_path = tmp_path / "wombat-trail.log"
+    # An unreachable DSN is safe: ActionTrailReader/Writer connections are lazy, and
+    # _save_sidecar never touches the reader.
+    renderer = ActionTrailRenderer("postgresql://unreachable-host/fake-db", log_path)
+    try:
+        sidecar_path = renderer._sidecar_path
+
+        replace_calls: list[tuple[Path, Path]] = []
+        real_replace = os.replace
+
+        def _tracking_replace(src: str | Path, dst: str | Path) -> None:
+            src_path, dst_path = Path(src), Path(dst)
+            # The source is a DIFFERENT file, in the SAME directory as the destination, and
+            # ALREADY fully written before the swap -- proof this is temp-write-then-rename,
+            # never an in-place truncation of the sidecar itself.
+            assert src_path != sidecar_path
+            assert src_path.parent == sidecar_path.parent
+            assert json.loads(src_path.read_text(encoding="utf-8")) == {"draft-1": "pending"}
+            replace_calls.append((src_path, dst_path))
+            real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", _tracking_replace)
+
+        renderer._save_sidecar({"draft-1": "pending"})
+
+        assert len(replace_calls) == 1
+        assert json.loads(sidecar_path.read_text(encoding="utf-8")) == {"draft-1": "pending"}
+        # No leftover temp files after a successful save.
+        assert list(tmp_path.glob("*.tmp")) == []
+    finally:
+        renderer.close()

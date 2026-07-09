@@ -19,7 +19,12 @@ tainted — but harmlessly: ``record_proposal`` already landed durably, the ONE 
 call already happened, and any FURTHER external dispatch on this drive is refused by the very
 latch this call just set (proven by AC1(e)'s post-condition probe). "Fresh, untainted drive" is
 therefore a PRE-dispatch property, not a post-dispatch one — the park is what makes the resulting
-taint harmless, not an absence of taint.
+taint harmless, not an absence of taint. RE-CREATE WINDOW (CR2-9, accepted at RISK-10): a crash
+between the ``drafts.create`` dispatch above and the ``AwaitHuman`` step actually COMMITTING can,
+on a resume from a DIFFERENT ``Engine`` instance, re-run this stage and re-create the draft (the
+cog-worx at-least-once contract, not a bug here) — ASMP-2 (exactly one draining ``WombatQueue``
+process-wide) is this codebase's single-process fence against that, not a guarantee that closes
+the window (no run-lease/reaper exists yet).
 
 REPLY-BODY SANITIZATION BOUNDARY (Q-91/TK-80): the ONLY upstream data this stage ever reads is a
 ``ReplyIntent`` (via the shared ``wombat.compose_request`` wire, the same seam ``ComposeStage``

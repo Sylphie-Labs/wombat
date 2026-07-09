@@ -471,6 +471,12 @@ class RuntimeBundle:
     # TK-176: the ONE ObservationWriter over entity_kg (S7) — the write seam both the hot-path
     # feedback-absorb closure and OutcomeLabeler (via stamp_resolution) go through.
     observation_writer: ObservationWriter
+    # TK-184 (CR2-10): the ActionTrailWriter constructed only when Google client creds + a stored
+    # Gmail token are both present (WIRE 2/3 below), shared by draft_composer_stage/draft_dispatch_
+    # stage — was previously constructed here but never exposed, so runtime's teardown never
+    # closed it (the exact leak class TK-173/CR-15 closed for DailyLedger). ``None`` on a
+    # Google-less/token-less boot; ``runtime.py``'s teardown closes it only when non-None.
+    action_trail_writer: ActionTrailWriter | None = None
 
 
 def assemble_runtime(
@@ -652,8 +658,10 @@ def assemble_runtime(
         else:
             gmail_session = make_gmail_session(config, token_store=gmail_store)
             capability_registry.register(make_drafts_create_capability(gmail_session))
-            # ActionTrailWriter (TK-146) has no other boot composition site yet (TK-177) — one
-            # instance over this SAME dsn, shared by draft_composer and draft_dispatch below.
+            # ActionTrailWriter (TK-146) has no other boot composition site (TK-177) — ONE
+            # instance over this SAME dsn, shared by draft_composer and draft_dispatch below, and
+            # exposed on RuntimeBundle.action_trail_writer (TK-184) so runtime's teardown can
+            # close it.
             action_trail_writer = ActionTrailWriter(dsn)
             draft_composer_stage = build_draft_composer_stage(
                 writer=action_trail_writer, clock=_utc_now
@@ -857,4 +865,5 @@ def assemble_runtime(
         brief_schedule_pathway_id=brief_schedule_pathway_id,
         entity_kg=entity_kg,
         observation_writer=observation_writer,
+        action_trail_writer=action_trail_writer,
     )

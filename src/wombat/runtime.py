@@ -21,9 +21,9 @@ journal adapter is first wired.
 
 SHUTDOWN is minimal by ruling (Q-71): a cooperative cancellation (``asyncio.CancelledError``) or
 a ``KeyboardInterrupt`` stops the ``SourceRegistry`` and closes the queue/daily-ledger/pending-
-journal connections best-effort via a ``finally`` — there is no signal-handler machinery here.
-Terminate-before-restart is the OPERATOR's obligation (ASMP-2): this process assumes at most one
-live instance runs against a given Postgres at a time.
+journal/action-trail-writer (TK-184, when present) connections best-effort via a ``finally`` —
+there is no signal-handler machinery here. Terminate-before-restart is the OPERATOR's obligation
+(ASMP-2): this process assumes at most one live instance runs against a given Postgres at a time.
 """
 
 from __future__ import annotations
@@ -117,6 +117,11 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
         bundle.queue.close()
         bundle.daily_ledger.close()
         bundle.pending_journal.close()
+        # TK-184 (CR2-10): closes the SAME leak class TK-173/CR-15 closed for DailyLedger — the
+        # ActionTrailWriter assemble_runtime constructs only on a Google-creds-and-token boot
+        # (WIRE 2/3) is None on a Google-less boot, so this is a no-op there.
+        if bundle.action_trail_writer is not None:
+            bundle.action_trail_writer.close()
 
 
 async def serve() -> None:

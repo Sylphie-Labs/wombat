@@ -46,7 +46,9 @@ from cogworx.testing.doubles import (
     InMemoryJournal,
     InMemoryLatentStore,
 )
+from pydantic import SecretStr
 
+import wombat.integrations.gmail.session as gmail_session_module
 from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat import bootstrap, runtime
 from wombat.bootstrap import RuntimeBundle
@@ -65,6 +67,7 @@ from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
 from wombat.stages.gate_stage import GateStage, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
+from wombat.trail.writer import ActionTrailWriter
 from wombat.user_model.observation_writer import ObservationWriter
 
 _PATHWAY_ID = "wombat.drain"
@@ -774,3 +777,153 @@ async def test_daily_ledger_lifecycle_every_constructed_instance_closed_after_te
         await task
 
     assert {id(x) for x in constructed} == {id(x) for x in closed}
+
+
+# --- TK-184 (CR2-10): RuntimeBundle.action_trail_writer is closed on teardown when present -----
+
+
+class _FakeGmailCredentials:
+    """A sentinel standing in for a real ``google.oauth2.credentials.Credentials`` (mirrors
+    ``tests/integration/test_outbound_wiring_e2e.py``'s own fake)."""
+
+
+class _FakeGmailAuth:
+    def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+        pass
+
+    def get_credentials(self) -> _FakeGmailCredentials:
+        return _FakeGmailCredentials()
+
+
+class _FakeGmailTokenStore:
+    def __init__(self, *, initial: str | None = None) -> None:
+        self._value = initial
+
+    def load(self) -> str | None:
+        return self._value
+
+    def save(self, token: str) -> None:
+        self._value = token
+
+    def clear(self) -> None:
+        self._value = None
+
+
+def _config_with_google() -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        google_oauth_client_id="test-client-id",
+        google_oauth_client_secret=SecretStr("test-client-secret"),
+    )
+
+
+def test_assemble_runtime_with_google_creds_and_token_exposes_action_trail_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``assemble_runtime``'s ActionTrailWriter (constructed only when Google client creds AND a
+    stored Gmail token are both present, WIRE 2/3) is exposed on ``RuntimeBundle`` (CR2-10) --
+    previously constructed but never returned, so nothing could ever close it."""
+    monkeypatch.setattr(gmail_session_module, "GmailAuth", _FakeGmailAuth)
+    monkeypatch.setattr(gmail_session_module, "AuthorizedSession", lambda creds: object())
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config_with_google(),
+        dsn=_FAKE_DSN,
+        params=op,
+        replay_pending=False,
+        gmail_token_store=_FakeGmailTokenStore(initial="fake-stored-token"),
+    )
+
+    assert bundle.action_trail_writer is not None
+    assert isinstance(bundle.action_trail_writer, ActionTrailWriter)
+
+
+def test_assemble_runtime_google_less_boot_action_trail_writer_is_none() -> None:
+    """A Google-less boot (no client creds) never constructs the writer -- the field stays None
+    (CR2-10's other half: runtime's teardown must be a no-op for this seam in that case)."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
+
+    assert bundle.action_trail_writer is None
+
+
+async def test_action_trail_writer_closed_on_teardown_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_drive_and_serve``'s teardown closes ``RuntimeBundle.action_trail_writer`` when present
+    -- the exact leak class TK-173/CR-15 closed for ``DailyLedger`` (CR2-10). Mirrors the AC4
+    shutdown test's hand-rolled bundle construction (self-parking pathway, in-memory journal) and
+    the TK-173 lifecycle test's tracking-``close`` pattern."""
+    close_calls: list[ActionTrailWriter] = []
+    real_close = ActionTrailWriter.close
+
+    def _tracking_close(self: ActionTrailWriter) -> None:
+        close_calls.append(self)
+        real_close(self)
+
+    monkeypatch.setattr(ActionTrailWriter, "close", _tracking_close)
+
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    pathways.register("only", StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only"))
+
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
+    )
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+    )
+
+    registry = _RecordingSourceRegistry()
+    queue = WombatQueue(_FAKE_DSN, max_size=10)
+    daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
+    pending_journal = PgPendingJournal(_FAKE_DSN)
+    compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    entity_kg = InMemoryEntityKG()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
+    writer = ActionTrailWriter(_FAKE_DSN)  # lazy -- no connection at construction
+
+    bundle = RuntimeBundle(
+        engine=engine,
+        pathways=pathways,
+        journal=journal,
+        drain_pathway_id="only",
+        dream_pathway_id="only",
+        dream_schedule_pathway_id=None,
+        source_registry=registry,
+        pending_journal=pending_journal,
+        queue=queue,
+        daily_ledger=daily_ledger,
+        compose_stage=compose_stage,
+        brief_pathway_id=None,
+        brief_schedule_pathway_id=None,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
+        action_trail_writer=writer,
+    )
+    op = load_operating_params().model_copy(
+        update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
+    )
+
+    task: asyncio.Task[None] = asyncio.ensure_future(runtime._drive_and_serve(bundle, params=op))
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert close_calls == [writer]

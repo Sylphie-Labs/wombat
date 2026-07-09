@@ -30,12 +30,21 @@ transition line are appended together in one pass, so no history is silently los
 any already-terminal (DISPATCHED/CANCELLED) row never emits again — the writer enforces these
 statuses as absorbing (``wombat.trail.writer``), so this renderer never re-checks them.
 
+Sidecar durability (CR2-8): ``_save_sidecar`` writes a temp file in the SAME directory then
+``os.replace``s it into place — atomic, so a crash mid-write never leaves a truncated/corrupt
+sidecar on disk. If one is ever found anyway (e.g. carried over from before this fix, or a
+non-atomic external write), ``_load_sidecar`` treats it as EMPTY with a loud warning rather than
+raising — falling back to the SAME documented Q-89 duplicate-on-loss mode as an absent sidecar.
+
 NO polling loop, NO daemon — a later consumer drives ``render()`` (Q-89 ruling 3).
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +52,8 @@ import psycopg
 
 from wombat.trail.reader import ActionTrailReader
 from wombat.trail.schema import TrailRow
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["ActionTrailRenderer"]
 
@@ -96,15 +107,48 @@ class ActionTrailRenderer:
         self._reader.close()
 
     def _load_sidecar(self) -> dict[str, str]:
+        """Load the dedup cursor, or treat an unparseable sidecar as EMPTY (CR2-8).
+
+        A crash mid-write (before ``_save_sidecar``'s atomic swap below existed) could leave a
+        truncated/corrupt sidecar behind; a bare ``json.load`` would then raise
+        ``JSONDecodeError`` out of every future ``render()`` call, forever. Instead this warns
+        LOUD and falls back to the documented Q-89 duplicate-on-loss mode (the SAME behavior as
+        an absent sidecar) — a re-rendered duplicate line is an honest, recoverable failure; a
+        permanently wedged renderer is not.
+        """
         if not self._sidecar_path.exists():
             return {}
-        with self._sidecar_path.open(encoding="utf-8") as fh:
-            data: dict[str, str] = json.load(fh)
+        try:
+            with self._sidecar_path.open(encoding="utf-8") as fh:
+                data: dict[str, str] = json.load(fh)
+        except json.JSONDecodeError:
+            logger.warning(
+                "ActionTrailRenderer: sidecar at %s is unparseable (corrupt/truncated); "
+                "treating it as EMPTY and falling back to the documented Q-89 "
+                "duplicate-on-loss mode",
+                self._sidecar_path,
+            )
+            return {}
         return data
 
     def _save_sidecar(self, sidecar: dict[str, str]) -> None:
-        with self._sidecar_path.open("w", encoding="utf-8") as fh:
-            json.dump(sidecar, fh)
+        """Persist the dedup cursor ATOMICALLY (CR2-8): write to a temp file in the SAME
+        directory as the sidecar, then ``os.replace`` it into place. A crash mid-write leaves
+        either the OLD sidecar (or none, on the very first save) behind — never a truncated,
+        half-written one — because ``os.replace`` is a single atomic filesystem rename.
+        """
+        fd, tmp_name = tempfile.mkstemp(
+            dir=self._sidecar_path.parent,
+            prefix=self._sidecar_path.name + ".",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(sidecar, fh)
+            os.replace(tmp_name, self._sidecar_path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
 
     def render(self) -> None:
         """One render pass: read rows by ``seq``, diff against the sidecar, append new lines.
