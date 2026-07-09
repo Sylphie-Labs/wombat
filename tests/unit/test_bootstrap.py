@@ -170,3 +170,18 @@ def test_assemble_runtime_replay_pending_false_never_calls_rebuild_from_journal(
 
     assert calls == []  # never called -- the opted-out path stays connection-free
     assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
+
+
+# --- TK-46 (Q-85): wombat.dream registers UNCONDITIONALLY, connection-free -----------------------
+
+
+def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:
+    """The TK-166 connection-free assembly pattern (``replay_pending=False``, a fake DSN) proves
+    ``wombat.dream`` is registered on the SAME resolvable pathway registry the drain pathway is —
+    no ``WOMBAT_BRIEF_PATH``-style conditional gates it (Q-85)."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+    )
+    assert bundle.dream_pathway_id == "wombat.dream"
+    assert bundle.pathways.get(bundle.dream_pathway_id) is not None

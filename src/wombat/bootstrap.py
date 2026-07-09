@@ -31,6 +31,12 @@ own fail-loud-at-construction posture, but at the composition-root level so a Go
 sink-less boot still starts): blank/absent -> a loud warning and the pathway is simply not
 registered (``RuntimeBundle.brief_pathway_id`` stays ``None``); TK-97's timer/fence wires against
 that field once it exists, never a hardcoded pathway id.
+
+TK-46 (Q-85): ``assemble_runtime`` ALSO registers the ``wombat.dream`` pathway — the off-path
+no-op scaffold (``build_dream_pathway``), UNCONDITIONALLY (unlike ``wombat.brief``): the scaffold
+has no external deps, so a no-op dream run is harmless even on a Google-less/sink-less boot.
+Additive ``RuntimeBundle.dream_pathway_id`` mirrors ``brief_pathway_id``'s field shape; TK-52's
+nightly trigger/fence wires against that field once it exists, never a hardcoded pathway id.
 """
 
 from __future__ import annotations
@@ -77,6 +83,7 @@ from .pathways.brief_pathway import (
     build_brief_schedule_pathway,
 )
 from .pathways.drain_pathway import build_drain_pathway
+from .pathways.dream_pathway import DREAM_PATHWAY_ID, build_dream_pathway
 from .queue import WombatQueue
 from .sources.bootstrap import build_brief_fetches, build_source_registry
 from .sources.presence import make_presence_provider
@@ -318,6 +325,10 @@ class RuntimeBundle:
     pathways: PathwayRegistry
     journal: Journal
     drain_pathway_id: str
+    # TK-46 (Q-85): the registered ``wombat.dream`` off-path scaffold pathway id — registration is
+    # UNCONDITIONAL (the scaffold has no external deps), so unlike ``brief_pathway_id`` this is
+    # never ``None``. TK-52's nightly trigger/fence wires against this field.
+    dream_pathway_id: str
     source_registry: SourceRegistry
     pending_journal: PgPendingJournal
     queue: WombatQueue
@@ -436,6 +447,11 @@ def assemble_runtime(
     )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
+    # TK-46 (Q-85): register wombat.dream UNCONDITIONALLY — the off-path scaffold has no external
+    # deps, so a no-op dream run is harmless on any boot (unlike wombat.brief's conditional path).
+    dream_graph = build_dream_pathway()
+    substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
+
     # TK-96: register wombat.brief off the SAME composed Gate/substrate/dsn — CONDITIONAL on a
     # non-blank brief sink path (mirrors build_brief_deliver_stage's own fail-loud-at-construction
     # posture, but decided HERE so a Google-less/sink-less boot still starts rather than raising).
@@ -507,6 +523,7 @@ def assemble_runtime(
         pathways=substrate.pathways,
         journal=substrate.journal,
         drain_pathway_id=DRAIN_PATHWAY_ID,
+        dream_pathway_id=DREAM_PATHWAY_ID,
         source_registry=source_registry,
         pending_journal=pending_journal,
         queue=queue,
