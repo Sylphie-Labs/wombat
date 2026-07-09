@@ -32,6 +32,19 @@ ZERO journal records (no add, no remove) since nothing durable changes, and ``ad
 ``CapacityEviction`` naming the incoming item so observability is preserved. Otherwise the
 Remove-before-Add ordering above runs unchanged.
 
+IDEMPOTENT RE-ADD OF AN ALREADY-HELD ITEM (TK-181, CR2-4): the crash window this class exists
+for (a ``PendingSetAdd`` commits, then a kill lands before the caller's queue ack) means the
+TK-2 at-least-once queue can redeliver an item whose ``add`` already committed. TK-27 recorded
+that redelivery as "a harmless idempotent re-add" — true only in the non-full branch, since the
+old capacity/eviction branch had no membership check and treated a redelivered, already-held
+item as a brand-new contender: at capacity it could evict a DIFFERENT, unrelated held item,
+losing a durably-committed notification. ``add`` therefore checks membership FIRST, before the
+capacity/eviction branch: a redelivered ``item_id`` already held never competes for eviction. If
+its scored fields are unchanged from the held entry it is a true no-op (no journal append, no
+mutation); if they changed, the held entry is refreshed and exactly one ``PendingSetAdd`` is
+journaled (replay is last-write-wins per ``item_id``, so this stays replay-safe). Either way
+``add`` returns ``None`` — never a ``CapacityEviction`` — for an already-held item.
+
 ``CapacityEviction`` is defined here (not ``models.py``) mirroring how ``Gate.decay()`` returns
 ``DecayEvent`` — TK-21's canonical decision vocabulary is not touched.
 """
@@ -140,15 +153,40 @@ class PendingSet:
         """Write-ahead the add; if at capacity, evict the minimum-urgency item across
         held-plus-incoming (Q-82, TK-174).
 
-        If the incoming item is no more urgent than the lowest held item (ties go to the
-        incumbent), the incoming item itself is dropped instead — no journal records, no
-        mutation — and a ``CapacityEviction`` naming it is still returned. Otherwise the
-        lowest held item is evicted, journaled Remove-BEFORE-Add (Q-45).
+        MEMBERSHIP GUARD (TK-181, CR2-4) runs FIRST, before the capacity/eviction branch: if
+        ``item.item_id`` is already held, this is an idempotent re-add — most commonly an
+        at-least-once queue redelivery of an item whose ``PendingSetAdd`` already committed
+        before a crash — never a new contender for capacity eviction. The held entry is
+        refreshed in place; a ``PendingSetAdd`` is journaled only if the scored fields actually
+        changed (a true no-op redelivery appends nothing, keeping replay last-write-wins per
+        ``item_id``). This path always returns ``None``, never a ``CapacityEviction``.
+
+        If the incoming item is a genuinely new id and the set is at capacity: when it is no
+        more urgent than the lowest held item (ties go to the incumbent), the incoming item
+        itself is dropped instead — no journal records, no mutation — and a ``CapacityEviction``
+        naming it is still returned. Otherwise the lowest held item is evicted, journaled
+        Remove-BEFORE-Add (Q-45).
 
         ``added_at`` (epoch seconds, TK-27 rider) is journaled on the ``PendingSetAdd`` record
         alongside the canonical ``ScoredItem`` fields, and tracked in memory so
         ``oldest_added_at()`` can answer the flush arm's min-age guard.
         """
+        existing = self._items.get(item.item_id)
+        if existing is not None:
+            if existing != item:
+                self._journal.append(
+                    PendingSetAdd(
+                        item_id=item.item_id,
+                        item_kind=item.item_kind,
+                        urgency=item.urgency,
+                        load=item.load,
+                        added_at=added_at,
+                    )
+                )
+                self._items[item.item_id] = item
+                self._added_at[item.item_id] = added_at
+            return None
+
         if len(self._items) < self._max_pending:
             self._journal.append(
                 PendingSetAdd(

@@ -292,6 +292,83 @@ def test_tk174_ac4_drop_incoming_rebuild_parity_matches_live_set() -> None:
     assert rebuilt.cumulative_load() == 0.6  # a + b + c, d never landed
 
 
+# --- TK-181 (CR2-4): idempotent re-add of an already-held item never evicts a DIFFERENT item --
+
+
+def test_tk181_ac1_redelivered_already_held_item_never_evicts_a_different_item() -> None:
+    """The register's exact repro: cap-3 {a(u=5), b(u=1), c(u=3)}. Redelivering ``c`` (already
+    held, unchanged) must NOT be treated as a new contender for eviction — b stays held, size
+    stays 3, no Remove is journaled, and add() returns None (never a CapacityEviction)."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=5), added_at=0.0)
+    pending.add(_item("b", urgency=1), added_at=0.0)
+    pending.add(_item("c", urgency=3), added_at=0.0)
+
+    result = pending.add(_item("c", urgency=3), added_at=0.0)  # redelivery of already-held c
+
+    assert result is None
+    assert {item.item_id for item in pending.list()} == {"a", "b", "c"}
+    assert len(pending) == 3
+    assert not any(isinstance(record, PendingSetRemove) for record in journal.replay())
+
+
+def test_tk181_ac2_redelivery_then_rebuild_from_journal_keeps_all_three_items() -> None:
+    """Same redelivery as AC1; replaying the journal as written yields all three items."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=5), added_at=0.0)
+    pending.add(_item("b", urgency=1), added_at=0.0)
+    pending.add(_item("c", urgency=3), added_at=0.0)
+    pending.add(_item("c", urgency=3), added_at=0.0)
+
+    rebuilt = PendingSet.rebuild_from_journal(journal, max_pending=3)
+
+    assert {item.item_id for item in rebuilt.list()} == {"a", "b", "c"}
+    assert len(rebuilt) == 3
+
+
+def test_tk181_ac3_readd_with_changed_urgency_refreshes_entry_and_journals_once() -> None:
+    """A re-add of an already-held item whose urgency CHANGED: the held entry reflects the new
+    score, exactly one additional PendingSetAdd is journaled, and still no eviction occurs."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=5), added_at=0.0)
+    pending.add(_item("b", urgency=1), added_at=0.0)
+    pending.add(_item("c", urgency=3), added_at=0.0)
+    records_before = journal.replay()
+
+    result = pending.add(_item("c", urgency=9), added_at=1.0)  # same id, urgency changed
+
+    assert result is None
+    assert len(pending) == 3
+    assert {item.item_id for item in pending.list()} == {"a", "b", "c"}
+    refreshed = next(item for item in pending.list() if item.item_id == "c")
+    assert refreshed.urgency == 9
+    new_records = journal.replay()
+    assert len(new_records) == len(records_before) + 1
+    added = new_records[-1]
+    assert isinstance(added, PendingSetAdd)
+    assert added.item_id == "c"
+    assert added.urgency == 9
+
+
+def test_tk181_readd_unchanged_below_capacity_is_a_true_no_op() -> None:
+    """Below capacity, redelivering an already-held item with unchanged fields appends nothing
+    and does not disturb ``added_at``."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=10)
+    pending.add(_item("a", urgency=0.5), added_at=10.0)
+    records_before = journal.replay()
+
+    result = pending.add(_item("a", urgency=0.5), added_at=999.0)
+
+    assert result is None
+    assert len(pending) == 1
+    assert journal.replay() == records_before
+    assert pending.oldest_added_at() == 10.0  # unchanged re-add never updates added_at
+
+
 # --- AC4: mid-drain kill-and-restart — the 10 ported TK-24 kill scenarios --------------------
 
 
