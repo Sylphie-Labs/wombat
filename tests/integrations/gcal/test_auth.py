@@ -166,6 +166,48 @@ def test_scope_guard_rejects_write_scoped_token() -> None:
     assert_readonly_scopes(list(GCAL_SCOPES))
 
 
+def test_stored_token_with_broader_scope_is_rejected_before_credential_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-168 (CR-3): ``Credentials.from_authorized_user_info(..., scopes=list(GCAL_SCOPES))``
+    overwrites ``creds.scopes`` with the passed constant, so a post-construction check of
+    ``creds.scopes`` against ``GCAL_SCOPES`` checks the constant against itself and can never
+    catch a vaulted token that actually granted a broader scope (older consent, manual edit,
+    future scope change without re-consent). A stored token carrying the write/manage scope
+    MUST be rejected before its credential is ever constructed/refreshed/returned."""
+    stored = {
+        "token": "stale-access-token",
+        "refresh_token": "refresh-token-xyz",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "test-client-id",
+        "client_secret": "test-client-secret",
+        "scopes": [*GCAL_SCOPES, _WRITE_SCOPE],
+        "expiry": "2020-01-01T00:00:00Z",
+    }
+    token_store = _FakeTokenStore(initial=json.dumps(stored))
+    auth = CalendarAuth(config=_make_config(), token_store=token_store)
+
+    # neither the refresh transport nor the interactive flow may be reached
+    refresh_calls: list[object] = []
+    monkeypatch.setattr(
+        auth_module, "GoogleAuthRequest", lambda: refresh_calls.append(None)
+    )
+    interactive_calls: list[object] = []
+    monkeypatch.setattr(
+        InstalledAppFlow,
+        "from_client_config",
+        lambda *a, **kw: interactive_calls.append((a, kw)),
+    )
+
+    with pytest.raises(ScopeViolationError):
+        auth.get_credentials()
+
+    assert refresh_calls == []
+    assert interactive_calls == []
+    # the vaulted token is untouched — no overwrite was attempted
+    assert token_store.load() == json.dumps(stored)
+
+
 # ------------------------------------------------------------------------------------------ AC2
 
 

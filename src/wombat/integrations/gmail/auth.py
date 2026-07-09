@@ -142,8 +142,16 @@ class GmailAuth:
         if stored is None:
             creds = self._run_interactive_consent()
         else:
+            stored_info = json.loads(stored)
+            # TK-168: assert the STORED token's own scopes BEFORE constructing Credentials —
+            # ``from_authorized_user_info(..., scopes=list(GMAIL_SCOPES))`` below overwrites
+            # ``creds.scopes`` with the passed constant, so checking ``creds.scopes`` afterward
+            # checks the constant against itself and can never catch a vaulted token that
+            # actually granted a broader scope (older consent, manual edit, future scope change
+            # without re-consent).
+            assert_gmail_readonly_scopes(stored_info.get("scopes"))
             creds = Credentials.from_authorized_user_info(  # type: ignore[no-untyped-call]
-                json.loads(stored), scopes=list(GMAIL_SCOPES)
+                stored_info, scopes=list(GMAIL_SCOPES)
             )
             if creds.expired and creds.refresh_token:
                 logger.info("gmail: stored access token expired — refreshing non-interactively")
