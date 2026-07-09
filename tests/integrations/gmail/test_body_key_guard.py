@@ -28,6 +28,10 @@ modules, ``safety/taint.py`` (the docstring mention, matching the briefing liter
 ``stages/ingest_email_body.py`` (the real, already-built consumer the briefing meant to name).
 This discrepancy is called out explicitly in TK-75's completion report for a contract/
 architect-ruling follow-up — this test file does not edit ``planning/contract.yaml``.
+
+Q-84 (2026-07-09) sanctions a FIFTH path: ``integrations/gmail/task_extractor.py`` (TK-77) —
+``extract_tasks`` reads ``item.body_text`` directly to do its regex/keyword extraction, so it is
+added to the allowlist below as the ticket's own sanctioned in-scope guard edit.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ _SANCTIONED_PATHS = (
     _SRC_ROOT / "integrations" / "gmail" / "models.py",
     _SRC_ROOT / "safety" / "taint.py",
     _SRC_ROOT / "stages" / "ingest_email_body.py",
+    _SRC_ROOT / "integrations" / "gmail" / "task_extractor.py",
 )
 
 
