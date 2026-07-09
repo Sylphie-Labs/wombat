@@ -2136,6 +2136,260 @@ nodes:
       - src/wombat/bootstrap.py
       - src/wombat/sources/bootstrap.py
       - tests/integration/test_outbound_wiring_e2e.py
+  # --- Tickets routed from the 2026-07-09 code review (planning/code-review-2026-07-09.md, CR2-1..CR2-11) by the architect, 2026-07-09 (Q-94/Q-95/RISK-10). Sequential build order for this run - TK-179 -> TK-178 -> TK-183 -> TK-180 -> TK-181 -> TK-182 -> TK-184 -> TK-185. ---
+  - id: TK-179
+    kind: ticket
+    parent: EP-18
+    title: 'Position-independent draft-approval answer read - locate the parked step by stage identity, not a precomputed index (CR2-2, Q-94)'
+    intent: "As the user approving a Gmail draft in the STANDING runtime, my approve/reject actually finalizes the trail - today the answer is read at a precomputed graph index (4) while the long-lived drain run's park lands at an ever-higher step_index (idle Sweeper Waits accumulate), so every real approval reads None, writes a false BLOCKED refusal, raises, and strands the sole drain run RUNNING - halting ALL draining. The review P1 (CR2-2)."
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: production
+    complexity_budget: "The Q-94 as-ruled shape, superseding the Q-92/Q-93 ask_step_index ctor arg. DraftDispatchStage AND the generic DispatchApprovedStage (same latent defect - fix the reusable pattern once) DROP ask_step_index entirely; run() locates the parked proposal step POSITION-INDEPENDENTLY - await ctx.journal.load_run(ctx.run_id), walk reversed(run.steps) for the LAST step whose stage_name == self._propose_stage_name, then ctx.read_human_input(that step's step_index). This is the exact journal-backed pattern StageContext.last_output already embodies (cogworx runtime/context.py:242-256; ctx.journal is a public property, StepRecord carries stage_name + step_index; engine.provide_human_input records the answer at the PARKED step's step_index, engine.py:696 - which IS the last committed propose-stage step). No proposal step found -> record_refusal + loud raise (fail closed). bootstrap.py drops draft_ask_step_index = pre_dispatch_stages.index(...) and its FALSE fresh-run-premise comment (bootstrap.py:680-690); test constructions drop the arg (mechanical). Approve/reject/refusal semantics UNCHANGED (approve -> mark_dispatched, reject -> mark_cancelled, absent/malformed -> record_refusal + loud MissingApprovalAnswer). NO cog-worx change. RESIDUAL recorded at Q-94 - a GENUINE absent/malformed answer still raises on resume and parks the drain run, the deliberate loud bypass posture."
+    acceptance_criteria:
+      - given: "the register's exact failure scenario - the real drain graph on a real Engine, the run parked idle at least once (1 committed boot Wait + at least one Sweeper fire_timer poll) BEFORE a DRAFT item is enqueued, so draft_composer's AwaitHuman parks at a step_index strictly greater than its graph position 4"
+        when: "the operator approves via provide_human_input and the run resumes"
+        then: "draft_dispatch reads the approve decision (not None), the trail row for the DraftComposer action_id is DISPATCHED, ZERO refusal rows are written, no gmail.messages.send ever appears, and the run is NOT left stranded RUNNING - the CR2-2 repro turned into a pinned idled-drain e2e test in tests/integration/test_outbound_wiring_e2e.py."
+      - given: "the same idled-drain construction"
+        when: "the operator rejects"
+        then: "the trail row is CANCELLED, zero capability dispatches, clean completion."
+      - given: "the existing TK-79 suite's 3-stage stub construction and the TK-149 approval-gate suite, both with NO ask_step_index arg"
+        when: "the suites run"
+        then: "all TK-79 and TK-149 ACs still pass (approve / reject / bypass incl. exactly-one refusal row + loud raise on an absent answer) - the stage-identity lookup works in the smallest graph too, and grep proves no ask_step_index remains anywhere under src/."
+      - given: "a run whose step history contains NO propose-stage step (misconstruction)"
+        when: "the dispatch stage runs"
+        then: "record_refusal + loud raise - never a silent no-op, never a capability dispatch."
+    non_goals:
+      - "No cog-worx engine change (the ctx.journal + read_human_input seams suffice as-built)."
+      - "No send path ever (CON-5/NG-5); DraftComposer untouched."
+      - "No retry/re-park on a genuinely absent answer - the loud bypass posture stands (residual at Q-94)."
+    depends_on:
+      - TK-79
+      - TK-149
+      - TK-177
+    files_in_scope:
+      - src/wombat/stages/draft_dispatch.py
+      - src/wombat/stages/dispatch_approved.py
+      - src/wombat/bootstrap.py
+      - tests/integrations/gmail/test_draft_dispatch.py
+      - tests/safety/test_approval_gate.py
+      - tests/integration/test_outbound_wiring_e2e.py
+  - id: TK-178
+    kind: ticket
+    parent: EP-28
+    title: 'Residency guard checks libpq hostaddr= - the actual TCP connection target cannot bypass CON-7 (CR2-1)'
+    intent: "As the local-data posture (CON-7/NG-7), a DSN carrying the documented libpq hostaddr= keyword cannot silently persist wombat data off-host - today _extract_host never surfaces hostaddr, so postgresql://localhost/wombat?hostaddr=8.8.8.8 (and the keyword forms) passes the ONE structural residency guard while libpq dials 8.8.8.8 (review CR2-1, S2)."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One parsing extension + test-table rows. _extract_host (safety/local_residency.py:81-104) additionally surfaces hostaddr from ALL the DSN forms it already parses (URL query key, keyword token) - including the bare 'hostaddr=... dbname=...' form with no host= at all (today mis-read as an inherently-local unix socket); when BOTH host and hostaddr are present the residency check runs against hostaddr (the address libpq actually dials - host is then only auth/TLS SNI); hostaddr absent -> behavior byte-identical. The same shared predicate serves substrate.build_substrate, so both call sites are covered by the one fix. No resolver change (the multi-A any-vs-all fix is TK-183/CR2-6)."
+    acceptance_criteria:
+      - given: "local_addrs excluding 8.8.8.8 and the register's three exact repro DSNs - postgresql://localhost/wombat?hostaddr=8.8.8.8, the keyword form 'host=localhost hostaddr=8.8.8.8 dbname=wombat', and bare 'hostaddr=8.8.8.8 dbname=wombat'"
+        when: "check_config / residency_check runs"
+        then: "ALL THREE are REFUSED with RemoteStorageConfigError naming wombat_pg_dsn - the CR2-1 bypass closed and pinned in tests/safety/test_local_residency.py."
+      - given: "a DSN with hostaddr=127.0.0.1 (or a this-host interface address), with or without host="
+        when: "the check runs"
+        then: "accepted - no false refusal for a genuinely local hostaddr."
+      - given: "the existing AC1/AC3 test tables (URL, keyword, unix-socket, literal-IP, localhost, userinfo forms)"
+        when: "the suite runs"
+        then: "green unchanged - hostaddr-free DSNs take the exact prior path."
+    non_goals:
+      - "No multi-A-record / any-vs-all resolver change (TK-183 owns CR2-6)."
+      - "No deepseek_base_url residency (the ASMP-1 egress exemption stands)."
+    depends_on:
+      - TK-150
+    files_in_scope:
+      - src/wombat/safety/local_residency.py
+      - tests/safety/test_local_residency.py
+  - id: TK-183
+    kind: ticket
+    parent: EP-28
+    title: 'Residency guard requires ALL resolved addresses local - a co-resolved loopback record cannot smuggle a remote endpoint (CR2-6)'
+    intent: "As the local-data posture, a hostname resolving to [8.8.8.8, 127.0.0.1] must be REFUSED - today the any() predicate accepts it while libpq tries resolved addresses in order and may dial the remote record (multi-A / DNS-rebinding false accept, review CR2-6)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One predicate change + test rows - local_residency.py:147 any(...) becomes 'resolved AND all(_addr_is_local(addr, locals_now) for addr in resolved)'; an EMPTY resolution also refuses (fail closed). Literal-IP / unix-socket / localhost fast paths untouched. Builds AFTER TK-178 (same file)."
+    acceptance_criteria:
+      - given: "a resolver returning ['8.8.8.8','127.0.0.1'] (and the remote-first variant ['203.0.113.9','127.0.0.1']) for a hostname DSN, local_addrs=['127.0.0.1','::1']"
+        when: "residency_check runs"
+        then: "REFUSED - the register's exact false-accept repro pinned in the test table."
+      - given: "a resolver returning an empty list"
+        when: "the check runs"
+        then: "REFUSED (fail closed), naming the key."
+      - given: "a resolver returning only local addresses (single or multiple), plus the whole existing suite"
+        when: "the suite runs"
+        then: "accepted / green - the Docker-bridge-to-self and same-host cases of the Q-25 definition still pass."
+    non_goals:
+      - "No connect-time DNS re-resolution pinning (the guard stays a boot-time defense-in-depth boundary; revisit rides any future connection-pinning work)."
+    depends_on:
+      - TK-150
+      - TK-178
+    files_in_scope:
+      - src/wombat/safety/local_residency.py
+      - tests/safety/test_local_residency.py
+  - id: TK-180
+    kind: ticket
+    parent: EP-13
+    title: 'Dream budget guard is per-night, not process-lifetime - consolidation inference no longer silently dies after 20 cumulative calls (CR2-3)'
+    intent: "As the DEC-23 bounded dream pathway, each night's consolidation gets the documented budget ceiling (dream_budget_max_usd / dream_budget_max_calls) - today ONE BudgetGuard is baked at boot and accumulates across every nightly re-drive, so after 20 cumulative calls (days of normal operation) the extractor/oracle raise forever and are swallowed as STALL/subjects_failed, silently degrading consolidation to a no-op until process restart (review CR2-3, S2)."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "Contained to dream_substrate.py - the substrate's model becomes a thin wombat-owned Model-protocol wrapper that keys the budget to the wombat NIGHT (DEC-21 wombat_date); when the night key changes it mints a FRESH BudgetGuard and rebuilds the budget-guarded inner model via the existing build_model(spec, guard=...) composition; within one night the ceiling accumulates as today (correct - the TK-52 once-per-night fence means one dream drive per night). Collaborator injection UNCHANGED - reconciler/extractor/oracle constructed once at boot over the wrapper (the TK-47 keyword-injection shape holds). wombat_params.yaml comments for the two ceilings corrected from per-drive-segment to per-night, matching the fixed semantics. NO cog-worx change; NO BudgetGuard mutation (compose a fresh one, never reach into private counters)."
+    acceptance_criteria:
+      - given: "the register's exact repro - build_dream_substrate over load_operating_params defaults (max_calls=20) with a canned client, 20 completes consumed on night N"
+        when: "a 21st call is made on night N and then a call is made on night N+1"
+        then: "the night-N call is refused with the budget error (ceiling intact) and the night-N+1 call SUCCEEDS - the budget is provably fresh per night (the two-successive-drives test the register demanded)."
+      - given: "the existing test_dream_substrate suite (zero-network construction, pre-network budget refusal at max_calls=0 / max_usd=0.0)"
+        when: "it runs"
+        then: "green - within-night semantics and the pre-network refusal are unchanged."
+      - given: "config/wombat_params.yaml and the substrate docstring"
+        when: "read"
+        then: "both say per-night for the two dream-budget ceilings - the documented semantics match the as-built wiring."
+    non_goals:
+      - "No cog-worx BudgetPolicy/new_guard engine-seam adoption (the dream model deliberately rides the off-path build_model composition, DEC-23)."
+      - "No ceiling re-sizing (0.10 USD / 20 calls stand)."
+    depends_on:
+      - TK-54
+      - TK-47
+    files_in_scope:
+      - src/wombat/pathways/dream_substrate.py
+      - config/wombat_params.yaml
+      - tests/unit/test_dream_substrate.py
+  - id: TK-181
+    kind: ticket
+    parent: EP-8
+    title: 'Idempotent re-add of an already-held pending item - at-least-once redelivery can never evict a DIFFERENT held item (CR2-4)'
+    intent: "As the CST-1 nothing-lost posture, a crash between the journaled PendingSetAdd and the queue ack (redelivered at-least-once on restart) must collapse to a harmless re-add at ANY fill level - today at capacity the re-added item is treated as a brand-new contender and silently evicts a DIFFERENT durably-held item, permanently losing a notification the user should still receive (review CR2-4)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One membership guard at the TOP of PendingSet.add, BEFORE the capacity/eviction branch - if item.item_id is already held, refresh the stored entry in place (journal an Add IFF the scored fields changed, so replay fidelity holds) and return None (never a CapacityEviction). This makes TK-27's recorded claim that the crash-between-add-and-ack redelivery collapses to a harmless idempotent re-add TRUE at capacity too (today true only in the non-full branch). No eviction-order change (TK-174 urgency-aware eviction and the Remove-before-Add ordering stand), no journal schema change."
+    acceptance_criteria:
+      - given: "the register's exact repro - a cap-3 set holding committed a(u=5), b(u=1), c(u=3) and an at-least-once redelivery calling add(c) again"
+        when: "add(c) runs"
+        then: "b is STILL HELD, size stays 3, no Remove is journaled, and the return is None (not a CapacityEviction) - pinned in tests/gate/test_pending_set.py."
+      - given: "the same redelivery followed by rebuild_from_journal over the journal as written"
+        when: "the rebuild runs"
+        then: "all three items are present - replay fidelity holds through the re-add."
+      - given: "a re-add whose urgency CHANGED (rescored on redelivery)"
+        when: "add runs"
+        then: "the held entry reflects the new score, exactly one additional Add is journaled, still no eviction."
+      - given: "the existing pending-set suite (non-full idempotent re-add, TK-174 eviction, the Q-45 crash-mid-eviction case)"
+        when: "it runs"
+        then: "green unchanged."
+    non_goals:
+      - "No queue-side dedup (the guard belongs at the set, the single custody owner per Q-51/Q-52)."
+      - "No journal compaction (DEF-6)."
+    depends_on:
+      - TK-25
+      - TK-174
+      - TK-29
+    files_in_scope:
+      - src/wombat/gate/pending_set.py
+      - tests/gate/test_pending_set.py
+  - id: TK-182
+    kind: ticket
+    parent: EP-12
+    title: 'Feedback-file tail read survives bad bytes and truncation/rotation - the wired feedback channel can no longer permanently wedge or silently skip (CR2-5 + CR2-7)'
+    intent: "As the outcome loop's explicit-feedback channel (live whenever WOMBAT_FEEDBACK_FILE is set), one stray non-UTF-8 byte must not kill the source forever - today the strict whole-file read_text raises every poll, the line offset never advances, and already-drained pushed events are LOST with the raise - and a truncated/rotated file must not silently skip a batch of genuine feedback lines (review CR2-5 S3 + CR2-7 S4 - the same seam, fixed together)."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "Contained to _poll_file and its offset state in feedback_source.py. (1) Tolerant decode - read the file bytes and decode utf-8 with errors=replace so a bad byte becomes a malformed line that is WARNED + SKIPPED per the module's own stated contract; poll() never raises for file content (CON-3). (2) Push-buffer protection - events drained from the PushSource buffer are combined with file results even when the file read fails for any OTHER reason (wrap _poll_file; an OSError is logged loud and yields nothing for the file portion, never discarding drained pushed events). (3) Rotation-aware offset - track a byte offset plus a file-identity/size shrinkage check; on detected shrinkage re-read from 0 accepting bounded duplicates (FeedbackSignal's event_key idempotency already dedups downstream at the queue). No parser change, no new source, no registry change."
+    acceptance_criteria:
+      - given: "the register's exact repro - a feedback file containing a valid line, a raw non-UTF-8 byte sequence, another valid line, plus one pushed event in the buffer"
+        when: "poll() runs (and runs again)"
+        then: "BOTH valid lines and the pushed event emit exactly once, the bad-byte line is warned + skipped, the offset advances, and no poll raises - the permanent-wedge repro is dead."
+      - given: "a file truncated/rotated to fewer lines and then appended before the next poll"
+        when: "poll() runs"
+        then: "the newly written lines ARE emitted (re-read from 0 on detected shrinkage); any re-emitted duplicates carry the same event_key so the queue dedups them (ALREADY_QUEUED)."
+      - given: "the existing feedback-source suite (missing file, malformed lines, push-through-parser)"
+        when: "it runs"
+        then: "green unchanged."
+    non_goals:
+      - "No inotify/watchdog file watching (the poll-tail shape stands)."
+      - "No feedback-semantics change (the item_ref y|n parser and the FeedbackSignal wire are untouched)."
+    depends_on:
+      - TK-51
+      - TK-176
+    files_in_scope:
+      - src/wombat/user_model/feedback_source.py
+      - tests/user_model/test_feedback_source.py
+  - id: TK-184
+    kind: ticket
+    parent: EP-1
+    title: 'Review hygiene batch - atomic trail-renderer sidecar, ActionTrailWriter closed at shutdown, draft re-create window documented (CR2-8 + CR2-10 + the CR2-9 note)'
+    intent: "As operational hygiene from the 2026-07-09 review - (a) a crash mid-sidecar-write must not permanently wedge the audit-log renderer on a corrupt JSON file, (b) the shared ActionTrailWriter pg connection must close at shutdown like every other assembled adapter (the exact leak class TK-173/CR-15 removed for DailyLedger), and (c) draft_composer's taint-order docstring acknowledges the documented cog-worx cross-instance at-least-once re-create window (CR2-9, accepted at RISK-10)."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Three small mechanical fixes. (1) renderer.py - _save_sidecar writes to a temp file in the same directory then os.replace (atomic); _load_sidecar treats an unparseable sidecar as EMPTY with a loud warning, falling back to the DOCUMENTED Q-89 duplicate-on-loss mode instead of raising forever. (2) RuntimeBundle gains an Optional action_trail_writer field; assemble_runtime sets it when constructed; the runtime teardown finally closes it alongside queue / daily_ledger / pending_journal. (3) draft_composer docstring - one added line naming the uncommitted-step re-run window and its ASMP-2 single-process fence (no code change - RISK-10)."
+    acceptance_criteria:
+      - given: "a corrupt/truncated sidecar JSON file next to an existing trail log"
+        when: "render() runs"
+        then: "no raise - the sidecar is treated as empty with a loud warning and rendering proceeds in the documented duplicate-on-loss mode; the sidecar save path is atomic (temp file + os.replace), proven by test."
+      - given: "an assembled runtime with the ActionTrailWriter constructed (Google creds + token present), driven through the runtime teardown path"
+        when: "shutdown/teardown runs"
+        then: "action_trail_writer.close() was called - asserted via the same lifecycle-test pattern TK-173 used for DailyLedger; a Google-less boot (writer absent) tears down unchanged."
+      - given: "draft_composer.py"
+        when: "read"
+        then: "the taint-order docstring names the cross-instance uncommitted-step re-create window and the ASMP-2 fence (the RISK-10 acknowledgment)."
+      - given: "the whole suite"
+        when: "it runs"
+        then: "green - no behavior change beyond the three fixes."
+    non_goals:
+      - "No run-lease/reaper for cross-instance resume (RISK-10 accepted; revisit trigger = multi-process deployment or a cog-worx run-lease landing)."
+      - "No renderer daemon wiring (render() stays off-path)."
+    depends_on:
+      - TK-147
+      - TK-177
+    files_in_scope:
+      - src/wombat/trail/renderer.py
+      - src/wombat/bootstrap.py
+      - src/wombat/runtime.py
+      - src/wombat/integrations/gmail/draft_composer.py
+      - tests/trail/test_projection_reader.py
+      - tests/unit/test_runtime.py
+  - id: TK-185
+    kind: ticket
+    parent: EP-10
+    title: 'Reconcile the TK-41 per-class rating defaults into the tuner clamp band - first-night tunes move WITH the outcome signal (CR2-11, Q-95)'
+    intent: "As the adaptive-gate thesis (DEC-13), the FIRST nightly tune for a class must move its params in the direction the outcome corpus says - today three defaults sit outside the locked [0.35,0.65] band (CALENDAR_CONFLICT.urgency_base=0.7, MORNING_BRIEF.load_base=0.3, REFLECTION.urgency_base=0.3), so the first non-empty-corpus tune snaps them to the nearest band edge regardless of signal, including a sign inversion for REFLECTION (review CR2-11, ruled at Q-95)."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "The Q-95 ruling - THE CLAMP IS CORRECT AND STANDS (the band is the tuner's legal operating region, locked jointly with the 12/day surfacing ceiling; delta-only clamping would let out-of-band values persist and defeat the rate bound), so the DEFAULTS move - rating/params.py per-class defaults 0.7 -> 0.65 and 0.3 -> 0.35 (both instances), preserving the designed ORDINAL differentiation (elevated / neutral / muted) inside the legal band. Mechanical updates where defaults are asserted (test_params, any scoring fixture pinning 0.7/0.3). NEW direction test - for EVERY EventClass starting from defaults, an all-load-bearing corpus does not lower urgency_base and an all-ignored corpus does not raise it on the first tune night (the direction-matches-signal proof the register demanded)."
+    acceptance_criteria:
+      - given: "the register's two exact repros - CALENDAR_CONFLICT with an all-load-bearing corpus and REFLECTION with an all-ignored corpus, both starting from defaults"
+        when: "the first nightly tune runs"
+        then: "CALENDAR_CONFLICT.urgency_base does NOT decrease and REFLECTION.urgency_base does NOT increase - the snap-against-signal is gone; pinned in tests/unit/test_rating_tuner.py."
+      - given: "default_params_for(cls) for every EventClass"
+        when: "inspected"
+        then: "every urgency_base and load_base lies INSIDE [0.35,0.65], and the ordinal ordering across classes is preserved."
+      - given: "the TK-27 scoring-monotonicity suite and the full existing suite"
+        when: "it runs"
+        then: "green - the monotonicity guarantee (already proven over the entire clamp band) holds for the new defaults; any test literally pinning 0.7/0.3 is mechanically updated."
+    non_goals:
+      - "No clamp-band change (0.35/0.65 locked with the surfacing ceiling - Q-95)."
+      - "No delta-only clamping (rejected at Q-95 - out-of-band values would persist indefinitely, defeating the band's rate-bound invariant)."
+      - "No gain / delta_bound / recall-window changes (TK-49 stands as-built)."
+    depends_on:
+      - TK-41
+      - TK-49
+    files_in_scope:
+      - src/wombat/rating/params.py
+      - tests/rating/test_params.py
+      - tests/unit/test_rating_tuner.py
   - id: TK-96
     kind: ticket
     parent: EP-19
@@ -4117,6 +4371,19 @@ governance:
       description: "Facts re-verified by the architect 2026-07-09 against the named sources. (1) DraftComposer.run() (src/wombat/integrations/gmail/draft_composer.py:181-184) UNCONDITIONALLY awaits ctx.last_output(self._upstream_stage_name) (default 'compose_dispatch') as its FIRST act and raises RuntimeError on None. (2) cog-worx Engine.run() (runtime/engine.py:438-466) accepts initial: Artifact in its signature but the body never references it — start_run journals only ids + pathway fingerprint, then _drive(ctx, graph, current=graph.entry) walks from EMPTY step history; the initial artifact is never stored, so an entry-position DraftComposer ALWAYS raises before it can park — the two-stage construction TK-79's briefing prescribed (real DraftComposer at entry -> draft_dispatch, ask_step_index=0) is structurally unsatisfiable. (3) TK-78's frozen suite (tests/integrations/gmail/test_draft_composer.py::_stub_graph, lines 269-273) already establishes the ONLY working real-engine construction: _ComposeDispatchStub (entry, emits the wombat.compose_request DRAFT artifact) -> real DraftComposer -> draft_dispatch terminal, putting DraftComposer at step index 1; the engine records the human answer at the PARKED step's positional index (engine.py:696, per Q-92), so the correct ask_step_index is 1, not 0 — 0 was wrong even in the smallest satisfiable test graph. TK-177 blocked in trivial cascade (its dispatch-edge wiring needs the real draft_dispatch stage).",
       resolution: "RESOLVED by architect 2026-07-09, recording the ORCHESTRATOR'S RULING after independent source verification — factually correct on all three claims, ADOPTED (within authority: pure TEST-CONSTRUCTION normalization; no stage design, locked decision, or v1 scope touched). TK-79 AC1/AC2 AMENDED: the real-engine acceptance graph = the 3-stage stub construction mirroring test_draft_composer.py's _stub_graph — compose_dispatch trigger stub -> TK-78's real DraftComposer -> this ticket's REAL draft_dispatch stage (replacing TK-78's raising terminal stub), with draft_dispatch constructed with ask_step_index=1. The Q-92 stage design is UNCHANGED and VINDICATED: ask_step_index as a REQUIRED graph-position-sensitive ctor arg (no default-0 footgun) was ruled precisely because the park position varies by graph — this incident is the proof. The builder's drafted stage shape CONFORMS to the briefing and STANDS: name='draft_dispatch', transitions=() (terminal), approve -> mark_dispatched (TrailStatus.DISPATCHED, the Q-92 approved-for-send mapping), reject -> mark_cancelled, absent/malformed decision -> record_refusal + loud MissingApprovalAnswer-style raise, ZERO capability dispatch on every path (never-send structural, CON-5). TK-177's Q-92 briefing stands AS-IS (it already instructs passing the drain-graph ask_step_index — this incident reinforces that instruction). TK-79 UNBLOCKED; the TK-177 cascade clears when TK-79 lands.",
       links: ["TK-79","TK-177","TK-78","Q-92","Q-91","TK-149","CON-5","ISS-3"] }
+  # --- Architect routing of the 2026-07-09 code review (planning/code-review-2026-07-09.md, CR2-1..CR2-11), 2026-07-09. Fix tickets TK-178..TK-185; accepted finding RISK-10. ---
+  - { id: Q-94, type: open_question, status: resolved, scope: EP-18, date_raised: "2026-07-09", date_updated: "2026-07-09", title: "CR2-2 (code review 2026-07-09) - the ask_step_index precomputed-position shape (Q-92/Q-93) is structurally wrong for the standing runtime; draft approval reads None, writes a false refusal, and strands the sole drain run",
+      description: "Review-confirmed and independently reproduced end-to-end with real stages on a real Engine - the drain is ONE long-lived run; every idle Sweeper poll appends a committed Wait step, so draft_composer's AwaitHuman parks at an ever-higher step_index while bootstrap precomputes ask_step_index=4 from static graph position (bootstrap.py:690, with a comment asserting the false fresh-run premise). provide_human_input records the answer at the PARKED step's step_index (engine.py:696); draft_dispatch then reads index 4 -> None -> false BLOCKED refusal + MissingApprovalAnswer raise, stranding the run RUNNING and halting ALL further draining until restart. The only e2e coverage drove a FRESH single-item run where the park lands at 4 by construction - a genuine blind spot that never exercised idle-Wait accumulation. Never-send held throughout (draft_dispatch dispatches zero capabilities on every path).",
+      resolution: "RESOLVED by architect 2026-07-09 (within authority - pipeline-level how; SUPERSEDES the Q-92/Q-93 ask_step_index ctor-arg shape, which those rulings adopted as the graph-position-sensitive stopgap; no locked DEC or v1 scope touched). The answer-read becomes POSITION-INDEPENDENT BY STAGE IDENTITY - DraftDispatchStage AND the generic DispatchApprovedStage (identical latent defect; the reusable pattern is corrected once so the future browser/speak consumers inherit the fix) DROP ask_step_index and locate the parked proposal step from the run's committed step history: ctx.journal.load_run(run_id), last step whose stage_name == propose_stage_name, read_human_input at ITS step_index - the exact journal-backed pattern StageContext.last_output already embodies (context.py:242-256; StepRecord carries stage_name + step_index; ctx.journal is public API; seams re-verified in cog-worx source 2026-07-09 - NO cog-worx change needed). Fail closed - no proposal step found -> record_refusal + loud raise. RESIDUAL recorded honestly - a GENUINE absent/malformed answer still raises on resume and parks the drain run; that is the deliberate loud bypass posture, revisit only if operator experience demands a re-park-and-continue. Fix = TK-179 (P1, lands FIRST this run) with an idled-drain e2e AC pinning the register's exact repro.",
+      links: ["TK-179","TK-79","TK-177","TK-149","Q-92","Q-93","CON-5"] }
+  - { id: Q-95, type: open_question, status: resolved, scope: EP-14, date_raised: "2026-07-09", date_updated: "2026-07-09", title: "CR2-11 (code review 2026-07-09) - three TK-41 per-class rating defaults sit outside the locked [0.35,0.65] tuner clamp band; is the clamp wrong or are the defaults wrong?",
+      description: "Review-confirmed and reproduced against the real RatingTuner - CALENDAR_CONFLICT.urgency_base=0.7, MORNING_BRIEF.load_base=0.3, REFLECTION.urgency_base=0.3 (rating/params.py:92-98) lie outside the clamp band the tuner enforces (rating_tuner.py:161), so the FIRST non-empty-corpus tune snaps them to the nearest band edge regardless of signal direction - including a sign inversion (a REFLECTION all-ignored corpus pulls urgency UP from 0.3 to 0.35). The register itself flags that the clamp may be correctly enforcing its own invariant; the genuine defect is that the TK-41 defaults were never reconciled against the band.",
+      resolution: "RESOLVED by architect 2026-07-09 (within authority - both the band and the defaults are ticket-level artifacts; no locked DEC). RULED - THE CLAMP IS CORRECT AND STANDS: the band is the tuner's legal operating region, locked jointly with surfacing sensitivity so every in-band value respects the 12/day surfacing-rate ceiling; clamping only the DELTA (the register's alternative) would let out-of-band values persist indefinitely and defeat the rate-bound invariant - REJECTED. Accepting the one-time snap-to-band was ALSO rejected - the REFLECTION case moves a param AGAINST the outcome signal, a small but genuine violation of the DEC-13 adaptive thesis (outcomes move ratings in the signal direction, never against it). Therefore the DEFAULTS RECONCILE INTO THE BAND, preserving the designed ordinal per-class differentiation - 0.7 -> 0.65 and 0.3 -> 0.35 (both instances). Fix = TK-185 (P3) with a direction-matches-signal first-night test for every EventClass.",
+      links: ["TK-185","TK-41","TK-49","TK-27","TK-13"] }
+  - { id: RISK-10, type: risk, status: accepted, scope: EP-18, date_raised: "2026-07-09", date_updated: "2026-07-09", probability: low, impact: low, title: "Crash between gmail.drafts.create and the AwaitHuman step-commit can re-create the draft on a CROSS-INSTANCE resume (review CR2-9)",
+      mitigation: "Fenced by composition - ASMP-2 single-process (the engine's _driving mutex excludes double-execution within one instance) + journal-before-side-effect ordering + never-send structural (worst case = a duplicate DRAFT held for review). TK-184 adds the draft_composer docstring acknowledgment. Revisit trigger - multi-process deployment or a cog-worx run-lease/reaper landing.",
+      description: "DraftComposer journals the proposal, dispatches drafts.create, then returns AwaitHuman; the engine commits the step AFTER run() returns. A process death in that window followed by a resume from a DIFFERENT Engine instance re-drives the stage (record_proposal is ON-CONFLICT idempotent; gmail.drafts.create is not) -> a duplicate Gmail draft, both held for review, neither ever sent.",
+      resolution: "ACCEPTED by architect 2026-07-09 - this is the cog-worx engine's DOCUMENTED at-least-once side-effect contract for cross-instance crash-resume (engine.py module docstring - single-flight cross-instance resume is the operator's responsibility); within one Engine instance the _driving mutex excludes double-execution, and wombat is single-process (ASMP-2), so the window is fenced by composition. Worst case is a duplicate DRAFT awaiting human review - never a send (CON-5 structural). Revisit trigger - multi-process deployment or a cog-worx run-lease/reaper landing (added to the ASMP-2 revisit inventory). TK-184 carries the one-line draft_composer docstring acknowledgment." }
   - { id: Q-15, type: open_question, status: resolved, scope: FEAT-1, date_raised: "2026-06-20", date_updated: "2026-06-20", title: "HIGH: the canonical 'wombat day' boundary + timezone is undefined across three independent daily ledgers",
       description: "TK-9 (DailySpendLedger), TK-27 (per-class surfacing ceiling) and TK-97 (brief once-per-day run ledger) each independently define a Postgres 'daily counter, reset at midnight, survive restart' mechanism, and none specifies a timezone. TK-101 writes a UTC timestamp header while the brief timer (TK-97) fires at a local 'morning time', so 'today' is defined at least two ways. On a laptop that sleeps across midnight (CST-1/DEC-6) a UTC-vs-local mismatch double-counts or skips a day in all three ledgers. Resolve: a decision fixing the canonical wombat-day boundary + timezone and a SHARED DailyLedger primitive that TK-9/TK-27/TK-97 reference.",
       resolution: "RESOLVED by architect 2026-06-20 (within authority — no locked DEC fixed a timezone). Recorded DEC-21: the canonical wombat-day is the CIVIL-LOCAL date in a configured IANA timezone (default host zone), computed at ACCESS time (wombat_today()), not by a fired timer — so a sleep across midnight resolves correctly on wake. Added TK-152 (shared DailyLedger primitive, P1, EP-2) that owns the boundary + row lifecycle; rewired TK-9 (spend), TK-27/TK-28 (ceiling) and TK-97 (brief run) to consume it, and fixed TK-101's header to the wombat timezone (was bare UTC). The three independent ad-hoc date mechanisms now share ONE tested primitive — the split-definition double-count/skip bug is structurally closed.",
@@ -4268,3 +4535,4 @@ changelog:
   - { date: "2026-07-09", version: "1.40", change: "Architect ruled TK-79 build-block (Q-93, a Q-92 follow-up; ORCHESTRATOR RULING independently verified against source and ADOPTED): the briefed two-stage real-engine test graph (real DraftComposer at entry, ask_step_index=0) is UNSATISFIABLE - DraftComposer.run() unconditionally awaits ctx.last_output(compose_dispatch) as its first act and raises on None (draft_composer.py:181-184), while cog-worx Engine.run() accepts initial= but never stores it (engine.py:438-466 - _drive walks from EMPTY step history), so an entry-position DraftComposer always raises before it can park. TK-79 AC1/AC2 AMENDED to the 3-stage stub construction TK-78 frozen suite already established (test_draft_composer.py _stub_graph, lines 269-273): compose_dispatch trigger stub -> real DraftComposer -> this ticket REAL draft_dispatch stage, constructed with ask_step_index=1 (the engine records the human answer at the PARKED step positional index, engine.py:696 - draft_composer parks at step 1 behind the stub entry). PURE test-construction normalization - the Q-92 stage design unchanged and VINDICATED (ask_step_index as a REQUIRED graph-position-sensitive ctor arg exists precisely because park position varies by graph; 0 was wrong even in the smallest satisfiable graph); the builder drafted stage shape conforms and STANDS (terminal transitions=(), ZERO capability dispatch on every path, approve -> mark_dispatched, reject -> mark_cancelled, absent/malformed -> record_refusal + loud raise). TK-79 UNBLOCKED; the TK-177 cascade clears when TK-79 lands (its Q-92 briefing stands as-is). +Q-93 (resolved). validate PASS; gate_check analyze PASS.", by: "architect" }
   - { date: "2026-07-09", version: "1.41", change: "TK-79 DONE (75/95) - the draft_dispatch terminal stage lands (EP-18) - pass (b) of the Q-13 split, built EXACTLY to the Q-92/Q-93 as-ruled shape: NEW src/wombat/stages/draft_dispatch.py - DraftDispatchStage (name=draft_dispatch, TERMINAL transitions=(), keyword-only ctor writer / ask_step_index REQUIRED-no-default (the graph-position-sensitive arg Q-93 vindicated) / propose_stage_name=draft_composer) consumes the human decision via ctx.read_human_input(ask_step_index) and dispatches ZERO capabilities on EVERY path - never-send stays structural (CON-5/NG-5): approve -> writer.mark_dispatched (approved-for-send = TrailStatus.DISPATCHED per Q-92, the timestamped record TK-147 renders) -> Done(status dispatched); reject -> writer.mark_cancelled -> Done(status cancelled); absent/malformed decision -> writer.record_refusal + MissingApprovalAnswer raised LOUD (imported from dispatch_approved, not reimplemented - the as-built TK-149 refusal semantics), never a silent no-op. action_id = run_id:propose_stage_name - the SAME derivation DraftComposer used for record_proposal, so trail finalization lands on the SAME row. Deliberately does NOT call bind_external_tier - external-tier admission would be unearned surface for a stage that dispatches nothing (the resumed drive is tainted anyway). BUILT + INDEPENDENTLY VERIFIED (PASS - verifier re-ran the full quality bar and every AC: 810 passed / 49 skipped = baseline 801 + 9 new tests, all skips the documented WOMBAT_TEST_PG_DSN gates, zero new skips; ruff clean; mypy Success 207 files src+tests; SCOPE = the 2 files_in_scope EXACTLY, both new, no contract edit by the builder - the process rule holding). ACs verifier-re-executed on the Q-93 3-stage construction (compose_dispatch trigger stub -> real DraftComposer -> real draft_dispatch, ask_step_index=1) over a REAL cog-worx Engine: AC1 approve - parks AWAITING_HUMAN with fake gmail.drafts.create at exactly 1 (the pre-park create), provide_human_input approve -> COMPLETED with drafts.create UNCHANGED at 1 (zero double-create - the reason the generic DispatchApprovedStage could not be reused), gmail.messages.send spy EMPTY (test fails if any send appears), writer.dispatched carries the DraftComposer action_id at the fixed clock; AC2 reject - same construction -> COMPLETED, drafts.create unchanged, send spy empty, trail row cancelled, clean halt without error; AC3 bypass - absent/malformed token -> exactly one record_refusal row + loud MissingApprovalAnswer, zero capability dispatches, structural spot-check proves the stage carries NO tool_policy attribute. NON-GOALS HELD - no auto-send under any circumstance (CON-5/NG-5), no draft composition (TK-78), no non-Gmail providers (NG-8). The Q-93 cascade CLEARS - NEXT = TK-177 (outbound live wiring, the LAST ticket before the outbound Gmail-draft track is watchable end-to-end).", by: "architect (recording the TK-79 build + independent verification)" }
   - { date: "2026-07-09", version: "1.42", change: "TK-177 DONE (76/95) - outbound live wiring lands and EP-18 CLOSES (TK-78 + TK-79 + TK-177 all done) - THE OUTBOUND GMAIL-DRAFT TRACK IS BOOT-WIRED END-TO-END - reply-worthy email -> sanitized ReplyIntent -> queue -> real gate -> fresh untainted drive -> draft created -> AwaitHuman park -> approve/reject finalizes the trail; wombat NEVER sends (CON-5/NG-5). Built EXACTLY to the Q-92 as-ruled shape - wiring ONLY over the built TK-78/TK-79/TK-80 pieces, no domain logic changed in any of them. WIRE 1 (sources/bootstrap.py) - GmailWithReplyIntents, a thin InputSource wrapper (id gmail) REPLACING the bare GmailPoller in _maybe_register_gmail (same Q-67 construction guards + loud-skip; build_brief_fetches untouched - still reads the raw unwrapped poller); poll() delegates then per returned event runs GmailMessageItem.from_payload -> triage_message -> reply_intent.build, appending a SECOND SourceEvent (event_key reply:<message_id>, item_kind draft) only when build returns non-None (HIGH band); triage rules loaded ONCE at registration, never per poll; the registry's existing enqueue path yields the TK-12 idempotency key derive_key('gmail','reply:<message_id>') - a re-poll of the same message is ALREADY_QUEUED on both events. WIRES 2+3 (bootstrap.py) - build_engine gains optional capability_registry (defaults to a bare Registry() - byte-identical for every existing caller) so assemble_runtime hands in the ONE Registry the engine dispatches through; gmail.drafts.create registration (untagged external, TK-78's capability factory over make_gmail_session) + composer_by_kind[DRAFT] -> draft_composer route + the draft_dispatch terminal edge are gated on ONE Q-67 presence check (client creds AND stored token) - an all-or-nothing loud-skip pair (the TK-16 pattern); a Google-less boot leaves the drain graph BYTE-IDENTICAL to the pre-TK-177 5-stage construction; DraftComposer assembled via NEW build_draft_composer_stage factory (the Q-69 assemble-via-factory lesson); ask_step_index COMPUTED as pre_dispatch_stages.index(draft_composer_stage), never hardcoded (the Q-93 graph-position sensitivity honored structurally); ONE shared ActionTrailWriter between composer and dispatch so trail finalization lands on the SAME row. BUILT + INDEPENDENTLY VERIFIED (PASS - verifier re-derived and re-executed the full quality bar and every AC; ruff clean; mypy Success 208 source files src+tests; FULL suite on a throwaway postgres-16 = 882 passed; SCOPE exactly the 3 files_in_scope - two modified + NEW tests/integration/test_outbound_wiring_e2e.py; no contract edit by the builder - the process rule holding). ACs verifier-re-executed - AC1 exactly one ADDITIONAL draft queue item enqueued alongside the message item, re-poll enqueues nothing; AC2 the drain surfaces the draft through the real gate, the router dispatches DRAFT, the engine walks DraftComposer in a fresh untainted drive and parks AwaitHuman - proven on a real Engine end-to-end with a fake Gmail capability; AC3 a Google-less/capability-less boot degrades loud-and-skipped, drain + brief pathways unaffected. NON-GOALS HELD - no new stage logic, no live drafts.create call (the live smoke rides the operator OAuth bring-up), no send path ever (CON-5/NG-5). The DEC-19 outbound arc is watchable the moment the operator OAuth bring-up lands.", by: "architect (recording the TK-177 build + independent verification)" }
+  - { date: "2026-07-09", version: "1.43", change: "Architect ROUTED the 2026-07-09 code review (planning/code-review-2026-07-09.md, CR2-1..CR2-11, commit range 531f392..946505c) into the contract - all 11 adversarially-verified findings dispositioned within the locked frame, nothing escalated. FIX TICKETS (+8, 95->103 tickets, 76 done): TK-179 (P1, EP-18, CR2-2 - THE REVIEW P1, ruled at Q-94) position-independent draft-approval answer read - DraftDispatchStage AND the generic DispatchApprovedStage drop ask_step_index and locate the parked proposal step BY STAGE IDENTITY from the run committed step history (ctx.journal.load_run -> last step whose stage_name == propose_stage_name -> read_human_input at ITS step_index - the StageContext.last_output pattern, seams re-verified in cog-worx source; supersedes the Q-92/Q-93 ctor-arg shape), with an idled-drain e2e AC pinning the register exact repro (park at step_index > 4 after Sweeper Waits, approve -> DISPATCHED trail row, run not stranded); bootstrap drops the precomputed index + its false fresh-run comment. TK-178 (P1, EP-28, CR2-1) residency guard surfaces libpq hostaddr= in all DSN forms and checks it as the actual connection target - the documented one-keyword CON-7 bypass closed, all three register repro DSNs pinned REFUSED. TK-183 (P2, EP-28, CR2-6) resolver predicate any() -> all-resolved-addresses-local + empty-resolution refuses (multi-A / DNS-rebinding false accept closed). TK-180 (P2, EP-13, CR2-3) dream BudgetGuard per-NIGHT (DEC-21 wombat_date-keyed wrapper minting a fresh guard + rebuilt inner model when the night changes; collaborator injection unchanged) - the process-lifetime accumulation that silently killed consolidation after 20 cumulative calls is gone; params.yaml comments corrected to per-night; two-successive-drives AC. TK-181 (P2, EP-8, CR2-4) idempotent membership guard at the TOP of PendingSet.add before the capacity/eviction branch - an at-least-once redelivered already-held item refreshes in place and can NEVER evict a different held item (the register cap-3 a/b/c repro pinned; replay fidelity AC). TK-182 (P2, EP-12, CR2-5 + CR2-7 folded - same seam) feedback-file tolerant decode (bad byte -> warned+skipped malformed line, never a raise), push-buffer protection (drained pushed events survive any file-read failure), and rotation-aware byte-offset tracking (shrinkage -> re-read from 0, event_key dedup absorbs duplicates). TK-184 (P3, EP-1, CR2-8 + CR2-10 + CR2-9 note) hygiene batch - atomic sidecar write (temp + os.replace) + corrupt-sidecar-treated-as-empty loud fallback to the documented Q-89 duplicate-on-loss mode; ActionTrailWriter exposed on RuntimeBundle and closed in the runtime teardown (the TK-173/CR-15 leak class); draft_composer docstring names the RISK-10 window. TK-185 (P3, EP-10, CR2-11, ruled at Q-95) TK-41 defaults reconciled INTO the clamp band (0.7->0.65, 0.3->0.35 both instances; ordinal differentiation preserved) - the clamp itself ruled CORRECT (the band is the tuner legal operating region locked with the 12/day surfacing ceiling; delta-only clamping rejected as defeating the rate bound; accepting the snap rejected because the REFLECTION case moves a param AGAINST the outcome signal, violating the DEC-13 adaptive thesis) + a direction-matches-signal first-night test for every EventClass. ACCEPTED: RISK-10 (CR2-9) - the cross-instance uncommitted-step draft re-create window is the cog-worx engine DOCUMENTED at-least-once side-effect contract, fenced by ASMP-2 single-process composition; worst case a duplicate DRAFT held for review, never a send; revisit trigger multi-process or run-lease. SEQUENTIAL BUILD ORDER for this run - TK-179 -> TK-178 -> TK-183 -> TK-180 -> TK-181 -> TK-182 -> TK-184 -> TK-185 (both P1s land this run). validate PASS; gate_check analyze PASS.", by: "architect (routing the 2026-07-09 code review, CR2-1..CR2-11)" }
