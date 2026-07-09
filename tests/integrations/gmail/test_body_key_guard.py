@@ -32,6 +32,12 @@ architect-ruling follow-up — this test file does not edit ``planning/contract.
 Q-84 (2026-07-09) sanctions a FIFTH path: ``integrations/gmail/task_extractor.py`` (TK-77) —
 ``extract_tasks`` reads ``item.body_text`` directly to do its regex/keyword extraction, so it is
 added to the allowlist below as the ticket's own sanctioned in-scope guard edit.
+
+Q-91 (2026-07-09) sanctions a SIXTH path: ``integrations/gmail/reply_intent.py`` (TK-80) —
+``build`` reads ``item.body_text`` once to derive the bounded, control-character-stripped
+``quoted_excerpt`` field; the ``ReplyIntent`` it returns carries no ``body_text`` field at all
+(structural sanitization). Added to the allowlist below as this ticket's own sanctioned
+in-scope guard edit.
 """
 
 from __future__ import annotations
@@ -50,6 +56,7 @@ _SANCTIONED_PATHS = (
     _SRC_ROOT / "safety" / "taint.py",
     _SRC_ROOT / "stages" / "ingest_email_body.py",
     _SRC_ROOT / "integrations" / "gmail" / "task_extractor.py",
+    _SRC_ROOT / "integrations" / "gmail" / "reply_intent.py",
 )
 
 
