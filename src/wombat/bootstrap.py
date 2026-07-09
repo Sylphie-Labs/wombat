@@ -38,11 +38,21 @@ builds, so a dream run is harmless even on a Google-less/sink-less boot. Additiv
 ``RuntimeBundle.dream_pathway_id`` mirrors ``brief_pathway_id``'s field shape; TK-52's nightly
 trigger/fence wires against that field once it exists, never a hardcoded pathway id.
 
-TK-175 (Q-90 split, EP-12): the dream graph's entry is now ``DreamOutcomeStage`` (``build_dream_
-pathway``'s ``outcome`` arg) — the nightly collect/infer/label pass — constructed over the SAME
-shared ``entity_kg``/``outcome_labeler`` instances TK-176 also threads into the drain-side wiring
-(both built once, below); it transitions onward to ``DreamScaffoldStage`` (still the reachable
-terminal, TK-46's own isolation proofs unaffected).
+TK-175 (Q-90 split, EP-12): ``DreamOutcomeStage`` (``build_dream_pathway``'s ``outcome`` arg) —
+the nightly collect/infer/label pass — is constructed over the SAME shared ``entity_kg``/
+``outcome_labeler`` instances TK-176 also threads into the drain-side wiring (both built once,
+below); it transitions onward to ``DreamScaffoldStage`` (still the reachable terminal, TK-46's own
+isolation proofs unaffected).
+
+TK-47 (EP-13, DEC-12/DEC-23): the dream graph's entry is now ``DreamConsolidationStage``
+(``build_dream_pathway``'s ``consolidate`` arg) — the nightly consolidation sweep, upstream of
+``DreamOutcomeStage``. Composed via TK-54's ``build_dream_substrate`` over the SAME shared
+``entity_kg`` instance and the SAME deepseek ``ModelSpec`` descriptor ``_deepseek_registry``
+registers for the drain-side profile (``_deepseek_spec``, factored out so both call sites build
+the identical descriptor) — ``CoherenceReconciler`` and ``ClaimExtractor`` are then constructed
+directly over ``DreamSubstrate``'s ``store``/``oracle``/``model``/``source_registry`` (the SAME
+cold-boot substrate bundle's ``journal`` backs the extractor, never a second journal). Registration
+stays UNCONDITIONAL (Q-85) — no external deps beyond what this composition already builds.
 
 TK-52 (Q-85): ``assemble_runtime`` ALSO registers ``wombat.dream_schedule`` — the once-nightly
 dream timer, mirroring TK-97's ``wombat.brief_schedule`` wiring VERBATIM: built AFTER
@@ -77,6 +87,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from cogworx.capability.registry import Registry
+from cogworx.coherence.reconciler import CoherenceReconciler
 from cogworx.context.personality import PersonalityProfile
 from cogworx.context.rules import RuleSet
 from cogworx.cost.budget import BudgetPolicy
@@ -86,6 +97,7 @@ from cogworx.model.base import ModelCapabilities
 from cogworx.model.providers.config import ProviderConfig
 from cogworx.model.registry import ModelRegistry, ModelSpec
 from cogworx.recall.stack import RecallStack
+from cogworx.runtime.claim_extractor import ClaimExtractor
 from cogworx.runtime.engine import Engine
 from cogworx.substrate.entity_kg import EntityKG
 from cogworx.substrate.journal import Journal, RunState
@@ -115,10 +127,12 @@ from .pathways.brief_pathway import (
 from .pathways.drain_pathway import build_drain_pathway
 from .pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
+    DreamConsolidationStage,
     DreamOutcomeStage,
     build_dream_pathway,
     dream_trigger_artifact,
 )
+from .pathways.dream_substrate import build_dream_substrate
 from .pathways.dream_trigger import (
     DREAM_SCHEDULE_PATHWAY_ID,
     DreamRunLedger,
@@ -172,11 +186,15 @@ _lock = threading.Lock()
 _engine: Engine | None = None
 
 
-def _deepseek_registry(config: WombatConfig) -> ModelRegistry:
-    """Register the DeepSeek profile as a ModelSpec descriptor (no client built here)."""
-    registry = ModelRegistry()
-    spec = ModelSpec(
-        provider="openai_compat",  # DeepSeek speaks the OpenAI-compatible protocol
+def _deepseek_spec(config: WombatConfig) -> ModelSpec:
+    """The DeepSeek ``ModelSpec`` descriptor (DeepSeek speaks the OpenAI-compatible protocol).
+
+    Factored out of ``_deepseek_registry`` (TK-47) so ``assemble_runtime``'s dream-consolidation
+    wiring (``build_dream_substrate``) can build the IDENTICAL descriptor rather than a second,
+    independently-drifting copy — briefing's "the SAME deepseek ModelSpec build_engine registers".
+    """
+    return ModelSpec(
+        provider="openai_compat",
         config=ProviderConfig(
             api_key=config.deepseek_api_key,
             base_url=config.deepseek_base_url,
@@ -186,7 +204,12 @@ def _deepseek_registry(config: WombatConfig) -> ModelRegistry:
         # capabilities is REQUIRED for a non-None base_url (DeepSeek endpoint).
         capabilities=ModelCapabilities(structured_output=True, streaming=True, tools=True),
     )
-    registry.register_spec(MODEL_PROFILE, spec)
+
+
+def _deepseek_registry(config: WombatConfig) -> ModelRegistry:
+    """Register the DeepSeek profile as a ModelSpec descriptor (no client built here)."""
+    registry = ModelRegistry()
+    registry.register_spec(MODEL_PROFILE, _deepseek_spec(config))
     return registry
 
 
@@ -565,13 +588,29 @@ def assemble_runtime(
     )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
-    # TK-46/TK-175 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — DreamOutcomeStage's own
-    # entity-KG reads are as harmless on a Google-less/sink-less boot as the terminal scaffold was
-    # (no external deps beyond the SAME shared entity_kg/outcome_labeler constructed above).
+    # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both
+    # DreamOutcomeStage's entity-KG reads and DreamConsolidationStage's sweepers are as harmless
+    # on a Google-less/sink-less boot as the terminal scaffold was (no external deps beyond the
+    # SAME shared entity_kg constructed above + the SAME deepseek descriptor _deepseek_registry
+    # registers).
+    dream_spec = _deepseek_spec(config)
+    dream_substrate = build_dream_substrate(entity_kg=entity_kg, spec=dream_spec, params=op)
+    dream_reconciler = CoherenceReconciler(
+        entity_kg=entity_kg, store=dream_substrate.store, oracle=dream_substrate.oracle
+    )
+    dream_extractor = ClaimExtractor(
+        journal=substrate.journal,
+        entity_kg=entity_kg,
+        model=dream_substrate.model,
+        source_registry=dream_substrate.source_registry,
+    )
+    dream_consolidation_stage = DreamConsolidationStage(
+        reconciler=dream_reconciler, extractor=dream_extractor
+    )
     dream_outcome_stage = DreamOutcomeStage(
         entity_kg=entity_kg, labeler=outcome_labeler, user_id=_RUNTIME_USER_ID
     )
-    dream_graph = build_dream_pathway(dream_outcome_stage)
+    dream_graph = build_dream_pathway(dream_consolidation_stage, dream_outcome_stage)
     substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     # TK-96: register wombat.brief off the SAME composed Gate/substrate/dsn — CONDITIONAL on a

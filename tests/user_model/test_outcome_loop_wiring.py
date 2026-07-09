@@ -1,9 +1,14 @@
 """TK-175 — outcome-loop dream-side wiring acceptance criteria (Q-90 split of TK-175, EP-12).
 
-``DreamOutcomeStage`` is inserted as the ``wombat.dream`` entry, transitioning onward to the
-TK-46 terminal scaffold (Q-90 end-state: ``dream_outcome`` -> ``dream_run``). Both ACs drive a
-REAL cog-worx ``Engine`` (in-memory substrate — no Postgres needed) over ``build_dream_pathway``,
-mirroring ``tests/integration/test_dream_pathway_e2e.py``'s hand-built-``Engine`` idiom.
+``DreamOutcomeStage`` is the ``wombat.dream`` graph's SECOND stage, transitioning onward to the
+TK-46 terminal scaffold (Q-90 end-state: ``dream_consolidate`` -> ``dream_outcome`` -> ``dream_
+run``). Both ACs drive a REAL cog-worx ``Engine`` (in-memory substrate — no Postgres needed) over
+``build_dream_pathway``, mirroring ``tests/integration/test_dream_pathway_e2e.py``'s
+hand-built-``Engine`` idiom. TK-47 (mechanical update, flagged per the ticket's own sanction):
+``build_dream_pathway`` now also requires a ``consolidate`` (entry) stage — ``_build_engine``
+below wires a zero-work ``DreamConsolidationStage`` (empty KG, empty journal, so its own sweepers
+never do anything) purely to satisfy the graph shape; this module's ACs are about the outcome
+pass, not consolidation.
 
   AC1 (e2e): seed the shared KG (via ``OutcomeLabeler``) with PENDING claims for two items across
       two event classes, plus a ``BEHAVIOR_OBSERVED`` 'useful' feedback claim for one of them.
@@ -24,15 +29,21 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+from cogworx.coherence.reconciler import CoherenceReconciler
 from cogworx.knowledge.scopes import ScopeRegistry
+from cogworx.knowledge.source_registry import SourceRegistry
 from cogworx.loop.state import RunStatus
 from cogworx.model.registry import ModelRegistry
+from cogworx.runtime.claim_extractor import ClaimExtractor
 from cogworx.runtime.engine import Engine
 from cogworx.testing.doubles import InMemoryEntityKG
+from cogworx.testing.fake_model import ReplayModel
+from cogworx.testing.fake_oracle import TableOracle
 
 from tests.support.stage_context_fake import FakeModel
 from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
+    DreamConsolidationStage,
     DreamOutcomeStage,
     build_dream_pathway,
     dream_trigger_artifact,
@@ -57,11 +68,29 @@ def _never_called_model(guard: object) -> FakeModel:
 def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> Engine:
     """Mirrors ``test_dream_pathway_e2e.py``'s ``_build_stack_with_raising_dream`` idiom: a
     hand-built Engine over ``cold_boot_bundle()`` (in-memory substrate, zero infra) with
-    ``wombat.dream`` registered via ``build_dream_pathway`` over a REAL ``DreamOutcomeStage``."""
-    dream_outcome_stage = DreamOutcomeStage(entity_kg=entity_kg, labeler=labeler, user_id=_USER_ID)
-    dream_graph = build_dream_pathway(dream_outcome_stage)
+    ``wombat.dream`` registered via ``build_dream_pathway`` over a REAL ``DreamOutcomeStage``.
 
+    TK-47: ``build_dream_pathway`` now also requires a ``consolidate`` (entry) stage. A zero-work
+    ``DreamConsolidationStage`` is wired here purely to satisfy the graph shape — this KG has no
+    dirty subjects and the journal has no committed steps, so both sweepers report zero work on
+    tick 1 and the stage transitions straight through, unaffected by this module's own ACs.
+    """
+    dream_reconciler = CoherenceReconciler(
+        entity_kg=entity_kg, store=entity_kg, oracle=TableOracle([])
+    )
     bundle = cold_boot_bundle()
+    dream_extractor = ClaimExtractor(
+        journal=bundle.journal,
+        entity_kg=entity_kg,
+        model=ReplayModel([]),
+        source_registry=SourceRegistry(),
+    )
+    dream_consolidation_stage = DreamConsolidationStage(
+        reconciler=dream_reconciler, extractor=dream_extractor
+    )
+    dream_outcome_stage = DreamOutcomeStage(entity_kg=entity_kg, labeler=labeler, user_id=_USER_ID)
+    dream_graph = build_dream_pathway(dream_consolidation_stage, dream_outcome_stage)
+
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
     models = ModelRegistry()

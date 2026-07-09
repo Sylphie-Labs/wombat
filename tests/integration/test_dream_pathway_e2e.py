@@ -28,12 +28,14 @@ from datetime import UTC, datetime
 import psycopg
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
+from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.loop.result import StageResult
 from cogworx.loop.stage import StageContext
 from cogworx.loop.state import RunStatus
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 from cogworx.substrate.journal import Journal
+from cogworx.testing.doubles import InMemoryEntityKG
 
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
@@ -46,6 +48,7 @@ from wombat.params import load_operating_params
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
+    DreamOutcomeStage,
     build_dream_pathway,
     dream_trigger_artifact,
 )
@@ -57,6 +60,8 @@ from wombat.stages.drain_queue import DrainQueueStage
 from wombat.stages.gate_stage import GateStage, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
 from wombat.substrate import cold_boot_bundle
+from wombat.user_model.observation_writer import ObservationWriter
+from wombat.user_model.outcome_labeler import OutcomeLabeler
 
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
 
@@ -157,10 +162,14 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
 class _RaisingDreamStage:
     """A ``Stage`` double whose ``run()`` ALWAYS raises — the AC2 injection seam.
 
-    Substituted as ``build_dream_pathway``'s ``outcome`` (entry) arg (TK-175 reshape): declaring
-    ``transitions=("dream_run",)`` keeps the two-stage graph's static shape valid (``dream_run`` —
-    the default ``DreamScaffoldStage`` terminal — is a real, reachable edge) even though ``run()``
-    always raises before ever returning a ``Transition`` that would take it.
+    Substituted as ``build_dream_pathway``'s ``consolidate`` (entry) arg (TK-47 reshape,
+    mechanical update — flagged per the ticket's own sanction): declaring
+    ``transitions=("dream_outcome",)`` keeps the three-stage graph's static shape fully connected
+    (``StageGraph`` now validates every stage is reachable from the entry) even though ``run()``
+    always raises before ever returning a ``Transition`` that would take it. The real ``outcome``
+    stage passed alongside it is never ACTUALLY reached at runtime (the entry always raises
+    first), so a trivially-constructed ``DreamOutcomeStage`` over a throwaway in-memory KG
+    satisfies the now-required ``outcome`` arg without asserting anything about it.
 
     An un-classified exception (not in ``DEFAULT_RETRY_POLICY.retryable``, not a ``TimeoutError``)
     propagates loud out of ``Engine.run`` (cog-worx S9: uncaught is a bug, never a silent FAILED),
@@ -169,7 +178,7 @@ class _RaisingDreamStage:
     """
 
     name: str = "dream_run_raising"
-    transitions: tuple[str, ...] = ("dream_run",)
+    transitions: tuple[str, ...] = ("dream_outcome",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         raise RuntimeError("simulated dream failure — injected for AC2 isolation proof")
@@ -209,7 +218,21 @@ def _build_stack_with_raising_dream(
         compose_stage,
     )
 
-    dream_graph = build_dream_pathway(_RaisingDreamStage())
+    # Never reached (the entry always raises first) — a throwaway stub outcome stage merely
+    # satisfies build_dream_pathway's now-required outcome arg (TK-47 reshape).
+    stub_entity_kg = InMemoryEntityKG()
+    stub_outcome_stage = DreamOutcomeStage(
+        entity_kg=stub_entity_kg,
+        labeler=OutcomeLabeler(
+            writer=ObservationWriter(
+                entity_kg=stub_entity_kg,
+                scope_registry=ScopeRegistry(),
+                user_id="test-user",
+            )
+        ),
+        user_id="test-user",
+    )
+    dream_graph = build_dream_pathway(_RaisingDreamStage(), stub_outcome_stage)
 
     bundle = cold_boot_bundle()
     bundle.pathways.register(_LOCAL_DRAIN_PATHWAY_ID, drain_graph)

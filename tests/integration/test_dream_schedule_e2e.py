@@ -94,13 +94,35 @@ def _night_keyed_run_id(now: datetime) -> str:
 
 
 @dataclass
+class _PassthroughConsolidateStage:
+    """TK-47 mechanical reshape (flagged per the ticket's own sanction): ``wombat.dream``'s entry
+    is now ``dream_consolidate`` -> ``dream_outcome`` -> ``dream_run``, so this suite's own
+    doubles (below) — which stand in for the TERMINAL ``DreamScaffoldStage``, the ONLY stage this
+    suite's fire-count witnesses care about — need a real entry stage ahead of them. This trivial
+    double always transitions straight onward; it carries none of ``DreamConsolidationStage``'s
+    reconciler/extractor drain behavior (TK-47 owns that, out of scope for the TK-52 timer/fence
+    suite this file tests)."""
+
+    name: str = "dream_consolidate"
+    transitions: tuple[str, ...] = ("dream_outcome",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_outcome",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
 class _PassthroughOutcomeStage:
-    """TK-175 mechanical reshape: ``wombat.dream``'s entry is now ``dream_outcome`` ->
-    ``dream_run``, so this suite's own doubles (below) — which stand in for the TERMINAL
-    ``DreamScaffoldStage``, the ONLY stage this suite's fire-count witnesses care about — need a
-    real entry stage ahead of them. This trivial double always transitions straight onward; it
-    carries none of ``DreamOutcomeStage``'s collect/infer/label behavior (TK-175 owns that, out of
-    scope for the TK-52 timer/fence suite this file tests)."""
+    """TK-175 mechanical reshape: ``wombat.dream``'s middle stage — always transitions straight
+    onward; it carries none of ``DreamOutcomeStage``'s collect/infer/label behavior (TK-175 owns
+    that, out of scope for the TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_outcome"
     transitions: tuple[str, ...] = ("dream_run",)
@@ -174,7 +196,10 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
 
     stage: Stage = dream_stage if dream_stage is not None else _CountingDreamStage()
     pathways = PathwayRegistry()
-    pathways.register(DREAM_PATHWAY_ID, build_dream_pathway(_PassthroughOutcomeStage(), stage))
+    pathways.register(
+        DREAM_PATHWAY_ID,
+        build_dream_pathway(_PassthroughConsolidateStage(), _PassthroughOutcomeStage(), stage),
+    )
 
     journal = InMemoryJournal()
     models = ModelRegistry()
