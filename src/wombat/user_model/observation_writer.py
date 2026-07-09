@@ -1,0 +1,121 @@
+"""ObservationWriter — behavior/outcome write seam into the cog-worx user scope (TK-44, EP-11).
+
+The ONE writer of ``wombat.user_model.claims.Claim`` objects into ``user:<user_id>`` (S7): every
+call mints its ``ScopedKG`` via :func:`cogworx.knowledge.scoped_kg.user_model` under the fixed
+owner ``'wombat.observation_writer'``, so a second writer attempting the same scope under a
+different owner fails structurally (S7, enforced by ``ScopeRegistry.claim_write_token``) rather
+than silently racing this one. TK-42's ``UserModel`` reads the RAW ``EntityKG`` (no token), so
+there is no S7 conflict between the reader and this writer.
+
+Two write paths:
+  ``record``               generic behavior/outcome claims (``ClaimPredicate``-typed, TK-43's
+                            closed vocabulary). The schema wall is re-checked here (defense in
+                            depth beyond ``Claim.__post_init__``) so a duck-typed stand-in with a
+                            hand-rolled string predicate cannot reach the entity KG (AC2).
+  ``record_rating_params``  the BINDING Q-41 wire (ruling 4, standing obligation v0.30): writes
+                            EXACTLY the predicate/subject/payload shape ``wombat.rating.params``
+                            defines and ``UserModel.ratings_for`` reads, so the read/write wire
+                            cannot drift (AC1b). No supersede surface yet — TK-45 widens this.
+
+``claim.value`` (TK-43's already-JSON-native payload string, Q-49 convention) and ``event_id``
+are carried together as one JSON envelope object (``{"value": ..., "event_id": ...}``) written as
+the claim's ``obj`` — ``assert_fact`` accepts a single ``obj`` string, and treating ``value`` as an
+opaque nested string (rather than re-parsing it) works regardless of what shape it holds.
+
+Frame: no outcome-decision logic (TK-50), no labeling (TK-45), no supersede/Defeat call-site yet,
+does not construct ``EntityKG``/``ScopeRegistry`` (injected; TK-14's bundle owns them), no LLM,
+no pg.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from cogworx.knowledge.scoped_kg import user_model
+from cogworx.knowledge.scopes import ScopeRegistry
+from cogworx.knowledge.source_registry import SourceDeclaration
+from cogworx.substrate.entity_kg import EntityKG
+
+from wombat.rating.params import RATING_CLAIM_PREDICATE, EventClass, RatingParams, to_claim_payload
+from wombat.user_model.claims import Claim, ClaimPredicate
+
+logger = logging.getLogger(__name__)
+
+# The single authorized writer to user:<user_id> (S7) — also the SourceDeclaration ref, so every
+# claim this writer mints carries a source_ref that traces back to this module.
+_OWNER = "wombat.observation_writer"
+
+
+class ObservationWriter:
+    """The ONE behavior/outcome write seam into one user's cog-worx user-model scope (S7).
+
+    Keyword-injected deps only (TK-42 precedent): ``entity_kg`` is the raw cog-worx ``EntityKG``
+    Protocol, ``scope_registry`` mints the S7 write token, ``user_id`` is a plain string. The
+    ``ScopedKG`` view is built once, internally, at construction time — callers never see or mint
+    a write token themselves.
+    """
+
+    def __init__(self, *, entity_kg: EntityKG, scope_registry: ScopeRegistry, user_id: str) -> None:
+        self._scoped_kg = user_model(entity_kg, scope_registry, user_id, owner=_OWNER)
+        self._source = SourceDeclaration(kind="system", ref=_OWNER)
+
+    async def record(self, claim: Claim) -> str:
+        """Write one behavior/outcome ``Claim`` (AC1). Returns the canonical claim id.
+
+        Re-validates ``claim.predicate`` is a ``ClaimPredicate`` member BEFORE any I/O
+        (``TypeError`` otherwise, AC2) — defense in depth beyond ``Claim.__post_init__``, since a
+        duck-typed stand-in can carry a hand-rolled string predicate past a type-only check.
+        On an entity-KG write failure the error is logged and RE-RAISED, never silently dropped
+        (AC3).
+        """
+        if not isinstance(claim.predicate, ClaimPredicate):
+            raise TypeError(
+                f"ObservationWriter.record: claim.predicate must be a ClaimPredicate, got "
+                f"{type(claim.predicate).__name__}: {claim.predicate!r}"
+            )
+        obj = json.dumps({"value": claim.value, "event_id": claim.event_id})
+        try:
+            return await self._scoped_kg.assert_fact(
+                subject=claim.subject,
+                predicate=claim.predicate.value,
+                obj=obj,
+                epistemic_type="observation",
+                source=self._source,
+                created_by=_OWNER,
+            )
+        except Exception:
+            logger.error(
+                "ObservationWriter.record: entity-KG write failed (subject=%r, predicate=%r)",
+                claim.subject,
+                claim.predicate.value,
+                exc_info=True,
+            )
+            raise
+
+    async def record_rating_params(self, event_class: EventClass, params: RatingParams) -> str:
+        """Write ``params`` under the BINDING Q-41 wire (ruling 4). Returns the canonical claim id.
+
+        MUST write through ``wombat.rating.params``'s helpers —
+        predicate=``RATING_CLAIM_PREDICATE``, subject=``event_class.value``,
+        obj=``to_claim_payload(params)`` — so
+        ``UserModel.ratings_for`` (the as-built read seam) reads back EXACTLY what was written
+        (AC1b). No supersede surface yet (TK-45). On an entity-KG write failure the error is
+        logged and RE-RAISED, never silently dropped (AC3).
+        """
+        try:
+            return await self._scoped_kg.assert_fact(
+                subject=event_class.value,
+                predicate=RATING_CLAIM_PREDICATE,
+                obj=to_claim_payload(params),
+                epistemic_type="observation",
+                source=self._source,
+                created_by=_OWNER,
+            )
+        except Exception:
+            logger.error(
+                "ObservationWriter.record_rating_params: entity-KG write failed (event_class=%r)",
+                event_class.value,
+                exc_info=True,
+            )
+            raise
