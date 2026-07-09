@@ -64,6 +64,16 @@ class SourceRegistry:
         """Ids of sources whose most recent ``poll()`` raised (AC4)."""
         return frozenset(self._degraded)
 
+    @property
+    def source_ids(self) -> frozenset[str]:
+        """Ids of every registered source (TK-161, AC2 — registration-not-rewrite, DEC-5).
+
+        Read-only; registration still happens exclusively through ``register()``. Lets a
+        caller (e.g. a test) confirm a source was registered without reaching into registry
+        internals — no push entry point, no dispatch branch, nothing else changes here.
+        """
+        return frozenset(self._sources)
+
     async def start(self) -> None:
         """Start every registered source and spawn its poll loop task."""
         for source in self._sources.values():
