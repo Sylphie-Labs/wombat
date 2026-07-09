@@ -8,10 +8,12 @@ stage name>``, mirroring how ``ComposeStage`` (TK-8) is itself a terminal Stage 
 ``ctx.last_output("compose_dispatch")``.
 
 The router is constructed with an INJECTED ``composer_by_kind: dict[ItemKind, str]`` map (kind ->
-composer STAGE NAME); ``transitions`` is derived from the map's values so the graph's declared
-edges cover every registered target. An unknown/unregistered kind falls back to ``"compose"``
-(the generic TK-8 stage) and logs a warning — it never raises and never silently drops the item
-(AC4).
+composer STAGE NAME); ``transitions`` is derived from the map's values PLUS ``_FALLBACK_COMPOSER``
+(TK-172, CR-12) so the graph's declared edges cover every registered target AND the fallback edge
+``run()`` can always return — even when a future map omits ``"compose"`` from its values, which
+today's sole construction (``bootstrap.py``'s ``{ItemKind.GENERIC: "compose"}``) happens not to.
+An unknown/unregistered kind falls back to ``"compose"`` (the generic TK-8 stage) and logs a
+warning — it never raises and never silently drops the item (AC4).
 
 Input is the NEW single-item ``wombat.surfaced_item`` wire (TK-7 ``review_or_speak``'s
 single-ized forward of one gate-decisions entry), read via ``ctx.last_output("review_or_speak")``
@@ -52,8 +54,12 @@ class ComposeDispatchRouter:
 
     def __init__(self, *, composer_by_kind: dict[ItemKind, str]) -> None:
         self._composer_by_kind = composer_by_kind
-        # The declared graph edges must cover every registered target (Q-51).
-        self.transitions: tuple[str, ...] = tuple(sorted(set(composer_by_kind.values())))
+        # The declared graph edges must cover every registered target (Q-51) PLUS the fallback
+        # edge (TK-172, CR-12) -- run() can return Transition(to=_FALLBACK_COMPOSER) on an unknown
+        # kind regardless of whether the injected map's values happen to include it.
+        self.transitions: tuple[str, ...] = tuple(
+            sorted(set(composer_by_kind.values()) | {_FALLBACK_COMPOSER})
+        )
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("review_or_speak")

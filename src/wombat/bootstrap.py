@@ -274,6 +274,27 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _guard_drain_batch_size(batch_size: int) -> None:
+    """Loud guard (TK-172, CR-10) at the ONE place the drain batch size is consumed.
+
+    ``gate.pipeline`` (``gate/pipeline.py``) can return ``SURFACE_IMMEDIATE`` MID-ITERATION —
+    the rest of the batch is never scored or held. Yet ``gate_stage`` pairs that ONE decision
+    with EVERY drained item, and ``review_or_speak`` acks them all. This is safe ONLY because
+    ``_DRAIN_BATCH_SIZE`` is 1 (exactly one item per decision, nothing dropped). Raise loud
+    rather than let a future batch_size bump silently strand unscored, wrongly-acked items —
+    batch>1 needs its own decision-wire redesign (gate_stage/review_or_speak), not a quiet
+    constant change here.
+    """
+    if batch_size != 1:
+        msg = (
+            f"drain batch_size={batch_size!r} != 1: gate.pipeline's mid-batch SURFACE_IMMEDIATE "
+            "return is paired with the WHOLE drained batch by gate_stage and acked wholesale by "
+            "review_or_speak -- safe only at batch_size=1. Batch>1 needs a decision-wire "
+            "redesign, not a constant change (TK-172, CR-10)."
+        )
+        raise ValueError(msg)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeBundle:
     """Everything ``wombat.runtime.serve()`` needs to start/drive/stop the standing process
@@ -356,6 +377,7 @@ def assemble_runtime(
         idle_threshold_s=op.presence_idle_threshold_seconds,
     )
 
+    _guard_drain_batch_size(_DRAIN_BATCH_SIZE)
     drain_queue_stage = DrainQueueStage(
         queue,
         batch_size=_DRAIN_BATCH_SIZE,

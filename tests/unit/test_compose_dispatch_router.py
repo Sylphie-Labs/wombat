@@ -191,3 +191,30 @@ def test_transitions_are_the_sorted_set_of_composer_map_values() -> None:
         "draft_compose",
         "reflection_compose",
     )
+
+
+# --- TK-172 (CR-12): transitions ALWAYS include the fallback edge, even when the injected map's
+# values omit "compose" (the undeclared-edge bug: run() can still return Transition(to="compose")
+# on an unknown kind) --------------------------------------------------------------------------
+
+
+async def test_ac2_transitions_include_fallback_even_when_map_values_omit_compose() -> None:
+    map_without_compose: dict[ItemKind, str] = {
+        ItemKind.REFLECTION: "reflection_compose",
+        ItemKind.DRAFT: "draft_compose",
+    }
+    router = ComposeDispatchRouter(composer_by_kind=map_without_compose)
+
+    assert "compose" in router.transitions
+    assert router.transitions == ("compose", "draft_compose", "reflection_compose")
+
+    # AC3: unknown-kind dispatch still transitions to "compose", with the existing warning --
+    # byte-identical run() behavior, only the declared transitions changed.
+    scored_item = ScoredItem(item_id="i-7", item_kind=ItemKind.GENERIC, urgency=0.5, load=0.1)
+    queue_item = QueueItem(idempotency_key="i-7", payload={"subject": "hi"}, item_id=7)
+    ctx = _ctx(GateAction.SURFACE_IMMEDIATE, scored_item, queue_item)
+
+    result = await router.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert result.to == "compose"

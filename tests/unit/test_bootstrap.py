@@ -9,6 +9,7 @@ import pytest
 from wombat import bootstrap
 from wombat.bootstrap import MODEL_PROFILE, build_engine, reset_engine
 from wombat.config import ConfigurationError, WombatConfig, load_config
+from wombat.params import load_operating_params
 from wombat.substrate import cold_boot_bundle
 
 # The ten seams the Engine must carry after composition (4 required substrate + 6 optional).
@@ -90,3 +91,27 @@ def test_wombat_config_boots_without_brief_path_or_voice_env(
     config = _config()  # must not raise -- neither is in REQUIRED_ENV
     assert config.wombat_brief_path is None
     assert config.wombat_voice_enabled is False
+
+
+# --- TK-172 (CR-10): the mid-batch-surface/whole-batch-ack coupling guard -----------------------
+
+
+def test_guard_drain_batch_size_raises_for_non_one() -> None:
+    with pytest.raises(ValueError, match="mid-batch"):
+        bootstrap._guard_drain_batch_size(2)
+
+
+def test_guard_drain_batch_size_noop_for_one() -> None:
+    bootstrap._guard_drain_batch_size(1)  # must not raise
+
+
+def test_assemble_runtime_still_succeeds_at_current_batch_size_of_one() -> None:
+    """AC1: the guard is a no-op at the current composition (_DRAIN_BATCH_SIZE == 1) -- assembly
+    is byte-identical, no new raise on the real boot path."""
+    op = load_operating_params()
+    # A fake Postgres DSN -- every adapter assemble_runtime wires is lazy (no connection at
+    # construction), so this never touches a real Postgres (mirrors tests/unit/test_runtime.py).
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn="postgresql://fake-host/fake-db", params=op
+    )
+    assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
