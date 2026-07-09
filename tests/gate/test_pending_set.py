@@ -29,6 +29,7 @@ from wombat.gate.pending_set import (
     PendingJournal,
     PendingSet,
     PendingSetAdd,
+    PendingSetRemove,
 )
 
 
@@ -207,6 +208,88 @@ def test_ac3_kill_after_both_evicting_appends_commits_swap() -> None:
     rebuilt_ids = {item.item_id for item in rebuilt.list()}
     assert rebuilt_ids == {"a", "c", "d"}  # new item present, evicted item absent
     assert len(rebuilt) == 3
+
+
+# --- TK-174 (Q-82, CR-8): urgency-aware capacity eviction — held-plus-incoming minimum --------
+
+
+def test_tk174_ac1_incoming_less_urgent_than_all_held_is_dropped_no_journal_records() -> None:
+    """At capacity, every held item strictly more urgent than the incoming item: the incoming
+    item is dropped — nothing evicted, nothing added, ZERO journal records appended, and the
+    returned ``CapacityEviction`` names the INCOMING item."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=0.9), added_at=0.0)
+    pending.add(_item("b", urgency=0.7), added_at=0.0)
+    pending.add(_item("c", urgency=0.5), added_at=0.0)
+    records_before = journal.replay()
+
+    eviction = pending.add(_item("d", urgency=0.1), added_at=0.0)
+
+    assert isinstance(eviction, CapacityEviction)
+    assert eviction.item_id == "d"
+    assert eviction.urgency == 0.1
+    assert {item.item_id for item in pending.list()} == {"a", "b", "c"}
+    assert len(pending) == 3
+    assert journal.replay() == records_before  # zero new journal records appended
+
+
+def test_tk174_ac2_incoming_more_urgent_than_lowest_held_evicts_lowest_held_as_before() -> None:
+    """At capacity with at least one held item strictly less urgent: as-built behavior —
+    the lowest held item is evicted (Remove-before-Add) and the incoming item is added."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=0.9), added_at=0.0)
+    pending.add(_item("b", urgency=0.2), added_at=0.0)
+    pending.add(_item("c", urgency=0.5), added_at=0.0)
+
+    eviction = pending.add(_item("d", urgency=0.7), added_at=0.0)
+
+    assert isinstance(eviction, CapacityEviction)
+    assert eviction.item_id == "b"
+    assert {item.item_id for item in pending.list()} == {"a", "c", "d"}
+    records = journal.replay()
+    assert isinstance(records[-2], PendingSetRemove) and records[-2].item_id == "b"
+    assert isinstance(records[-1], PendingSetAdd) and records[-1].item_id == "d"
+
+
+def test_tk174_ac3_exact_tie_incumbent_wins_incoming_dropped() -> None:
+    """Exact urgency tie between the incoming item and the lowest held item: the incumbent
+    wins (deterministic under replay) — the incoming item is dropped, no journal records."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=0.9), added_at=0.0)
+    pending.add(_item("b", urgency=0.5), added_at=0.0)
+    pending.add(_item("c", urgency=0.7), added_at=0.0)
+    records_before = journal.replay()
+
+    eviction = pending.add(_item("d", urgency=0.5), added_at=0.0)  # exact tie with "b"
+
+    assert isinstance(eviction, CapacityEviction)
+    assert eviction.item_id == "d"
+    assert {item.item_id for item in pending.list()} == {"a", "b", "c"}
+    assert journal.replay() == records_before
+
+
+def test_tk174_ac4_drop_incoming_rebuild_parity_matches_live_set() -> None:
+    """After a drop-incoming sequence, rebuild_from_journal yields identical items and
+    cumulative_load to the live set — no phantom records from the dropped add."""
+    journal = InMemoryPendingJournal()
+    pending = PendingSet(journal=journal, max_pending=3)
+    pending.add(_item("a", urgency=0.9, load=0.3), added_at=0.0)
+    pending.add(_item("b", urgency=0.7, load=0.2), added_at=0.0)
+    pending.add(_item("c", urgency=0.5, load=0.1), added_at=0.0)
+
+    eviction = pending.add(_item("d", urgency=0.1, load=0.4), added_at=0.0)
+    assert isinstance(eviction, CapacityEviction)
+    assert eviction.item_id == "d"
+
+    rebuilt = PendingSet.rebuild_from_journal(journal, max_pending=3)
+    assert {item.item_id for item in rebuilt.list()} == {
+        item.item_id for item in pending.list()
+    }
+    assert rebuilt.cumulative_load() == pending.cumulative_load()
+    assert rebuilt.cumulative_load() == 0.6  # a + b + c, d never landed
 
 
 # --- AC4: mid-drain kill-and-restart — the 10 ported TK-24 kill scenarios --------------------

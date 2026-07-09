@@ -12,16 +12,25 @@ in-memory effect, so a kill can never lose a COMMITTED mutation, and replay (``d
 is idempotent so it can never double-count. ``rebuild_from_journal`` is the exactly-once
 recovery path proven by the TK-24 kill scenarios (ported to ``tests/gate/test_pending_set.py``).
 
-ORDERING under capacity eviction (Q-45): a capacity-forced ``add`` is a COMPOUND op — it emits
-BOTH a ``PendingSetRemove`` (the evicted item) and a ``PendingSetAdd`` (the new item). These are
-journaled Remove-BEFORE-Add so the only durable intermediate state a kill can freeze is
-Remove-committed / Add-absent = ``max_pending - 1`` items, never ``max_pending + 1``. The size
-<= ``max_pending`` invariant therefore holds at EVERY durable point. A kill in that two-append
-window aborts an UNCOMMITTED ``add`` — the call never returned, so this is clean write-ahead
-abort semantics, not loss: the TK-2 at-least-once queue redelivers the unacked source item on
-restart and ``add`` re-runs (now a plain insert, since the evicted slot is already free) and the
-system converges. So the precise guarantee is: no COMMITTED (returned) mutation is ever lost or
-double-counted, and ``max_pending`` is never exceeded at any durable point.
+ORDERING under capacity eviction (Q-45): a capacity-forced ``add`` for an item that OUTRANKS the
+lowest held item is a COMPOUND op — it emits BOTH a ``PendingSetRemove`` (the evicted item) and
+a ``PendingSetAdd`` (the new item). These are journaled Remove-BEFORE-Add so the only durable
+intermediate state a kill can freeze is Remove-committed / Add-absent = ``max_pending - 1``
+items, never ``max_pending + 1``. The size <= ``max_pending`` invariant therefore holds at EVERY
+durable point. A kill in that two-append window aborts an UNCOMMITTED ``add`` — the call never
+returned, so this is clean write-ahead abort semantics, not loss: the TK-2 at-least-once queue
+redelivers the unacked source item on restart and ``add`` re-runs (now a plain insert, since the
+evicted slot is already free) and the system converges. So the precise guarantee is: no
+COMMITTED (returned) mutation is ever lost or double-counted, and ``max_pending`` is never
+exceeded at any durable point.
+
+URGENCY-AWARE eviction target (Q-82, TK-174, CR-8): the eviction target at capacity is the
+minimum-urgency item across held-plus-incoming, not always the lowest HELD item. When the
+incoming item is no more urgent than the lowest held item (ties go to the incumbent,
+deterministic under replay), the INCOMING item is the one discarded instead — that path appends
+ZERO journal records (no add, no remove) since nothing durable changes, and ``add`` returns a
+``CapacityEviction`` naming the incoming item so observability is preserved. Otherwise the
+Remove-before-Add ordering above runs unchanged.
 
 ``CapacityEviction`` is defined here (not ``models.py``) mirroring how ``Gate.decay()`` returns
 ``DecayEvent`` — TK-21's canonical decision vocabulary is not touched.
@@ -103,7 +112,13 @@ class InMemoryPendingJournal:
 
 @dataclass(frozen=True, slots=True)
 class CapacityEviction:
-    """Emitted by ``PendingSet.add`` when adding at capacity evicts the lowest-urgency item.
+    """Emitted by ``PendingSet.add`` whenever adding at capacity discards the minimum-urgency
+    item across held-plus-incoming (Q-82, TK-174).
+
+    Names the item that lost: the lowest-urgency HELD item when the incoming item outranks it
+    (as-built, journaled Remove-before-Add), or the INCOMING item itself when it is no more
+    urgent than the lowest held item (ties go to the incumbent) — that drop appends NO journal
+    records since nothing durable changes.
 
     Mirrors ``DecayEvent``'s shape (item_id + one scalar) rather than joining models.py.
     """
@@ -122,7 +137,13 @@ class PendingSet:
         self._added_at: dict[str, float] = {}
 
     def add(self, item: ScoredItem, *, added_at: float) -> CapacityEviction | None:
-        """Write-ahead the add; if at capacity, journal the eviction Remove FIRST (Q-45).
+        """Write-ahead the add; if at capacity, evict the minimum-urgency item across
+        held-plus-incoming (Q-82, TK-174).
+
+        If the incoming item is no more urgent than the lowest held item (ties go to the
+        incumbent), the incoming item itself is dropped instead — no journal records, no
+        mutation — and a ``CapacityEviction`` naming it is still returned. Otherwise the
+        lowest held item is evicted, journaled Remove-BEFORE-Add (Q-45).
 
         ``added_at`` (epoch seconds, TK-27 rider) is journaled on the ``PendingSetAdd`` record
         alongside the canonical ``ScoredItem`` fields, and tracked in memory so
@@ -142,13 +163,23 @@ class PendingSet:
             self._added_at[item.item_id] = added_at
             return None
 
-        # At capacity: evict the lowest-urgency item FIRST (Remove-before-Add, Q-45). This
-        # keeps the only durable intermediate state at max_pending-1 (Remove committed, Add
-        # absent) rather than max_pending+1, so the size <= max_pending invariant holds at every
-        # durable point. A kill in the two-append window aborts this UNCOMMITTED add (it never
-        # returned); the TK-2 at-least-once queue redelivers the unacked item and add() re-runs.
+        # At capacity: the eviction target is the minimum-urgency item across held-plus-incoming
+        # (Q-82, TK-174, CR-8). Ties go to the INCUMBENT (deterministic under replay) — so when
+        # the incoming item is NO MORE urgent than the lowest held item, drop the incoming item
+        # instead of displacing a more-urgent held one: append ZERO journal records (no add, no
+        # remove — rebuild parity is trivial), leave the set untouched, and still return a
+        # CapacityEviction naming the incoming item for observability.
         evicted = _lowest_urgency(self._items.values())
         assert evicted is not None  # capacity >= 1 implies non-empty here
+        if item.urgency <= evicted.urgency:
+            return CapacityEviction(item_id=item.item_id, urgency=item.urgency)
+
+        # Otherwise the incoming item outranks the lowest held item: evict it FIRST
+        # (Remove-before-Add, Q-45). This keeps the only durable intermediate state at
+        # max_pending-1 (Remove committed, Add absent) rather than max_pending+1, so the size <=
+        # max_pending invariant holds at every durable point. A kill in the two-append window
+        # aborts this UNCOMMITTED add (it never returned); the TK-2 at-least-once queue
+        # redelivers the unacked item and add() re-runs.
         self._journal.append(PendingSetRemove(item_id=evicted.item_id))
         self._journal.append(
             PendingSetAdd(
