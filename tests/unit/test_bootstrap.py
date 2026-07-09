@@ -191,3 +191,51 @@ def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:
     )
     assert bundle.dream_pathway_id == "wombat.dream"
     assert bundle.pathways.get(bundle.dream_pathway_id) is not None
+
+
+# --- TK-114 (EP-22, Q-102b-f): the reflection-render leg registers UNCONDITIONALLY ----------------
+
+
+def test_assemble_runtime_registers_reflection_compose_in_drain_graph() -> None:
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+    )
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+
+    assert "reflection_compose" in graph.names()
+    # ComposeDispatchRouter's own declared edges cover the injected composer_by_kind map (Q-51) —
+    # this proves ItemKind.REFLECTION routes to "reflection_compose" structurally.
+    assert "reflection_compose" in graph.transitions_from("compose_dispatch")
+    stage = graph.get("reflection_compose")
+    assert stage.transitions == ()  # TERMINAL by ruling (Q-102c)
+
+
+def test_assemble_runtime_reflection_kb_load_failure_boots_with_empty_kb_and_loud_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CON-3: a psychology-KB load failure never fails the whole boot — ReflectionComposeStage
+    is constructed with an empty kb and ONE loud warning is logged."""
+
+    def _raise(path: Path | None = None) -> list[object]:
+        raise FileNotFoundError("kb missing")
+
+    monkeypatch.setattr(bootstrap, "load_psychology_kb", _raise)
+    op = load_operating_params()
+
+    with caplog.at_level("WARNING"):
+        bundle = bootstrap.assemble_runtime(
+            config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+        )
+
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = graph.get("reflection_compose")
+    assert stage._kb == []  # type: ignore[attr-defined]
+
+    matching = [
+        r
+        for r in caplog.records
+        if "ReflectionComposeStage boots with an empty KB" in r.getMessage()
+    ]
+    assert len(matching) == 1
+    assert matching[0].levelname == "WARNING"

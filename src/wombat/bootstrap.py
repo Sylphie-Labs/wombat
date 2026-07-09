@@ -129,6 +129,7 @@ from cogworx.testing.doubles import InMemoryEntityKG
 
 from .behavior.event_log import BehaviorEventLog
 from .behavior.stages.pattern_detector import PatternDetectorStage
+from .behavior.stages.reflection_compose import ReflectionComposeStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
@@ -720,6 +721,22 @@ def assemble_runtime(
     # BYTE-IDENTICAL to the pre-TK-177 5-stage construction.
     capability_registry = Registry()
     composer_by_kind = {ItemKind.GENERIC: "compose"}
+    # TK-114 (EP-22, Q-102b-f): the reflection-render leg is UNCONDITIONAL (mirrors dream_pattern's
+    # own posture below) — no external deps beyond the psychology KB, loaded once here and wrapped
+    # the SAME CON-3 default as TK-113's own load further down: a load failure never fails the
+    # whole boot, ReflectionComposeStage just boots with an empty kb (safe default prompt, no
+    # phrasing hints).
+    try:
+        reflection_kb = load_psychology_kb()
+    except (FileNotFoundError, KBValidationError):
+        logger.warning(
+            "assemble_runtime: load_psychology_kb failed; ReflectionComposeStage boots with an "
+            "empty KB (safe default prompt, no phrasing hints) rather than failing the whole boot",
+            exc_info=True,
+        )
+        reflection_kb = []
+    reflection_compose_stage = ReflectionComposeStage(kb=reflection_kb)
+    composer_by_kind[ItemKind.REFLECTION] = "reflection_compose"
     draft_composer_stage: DraftComposer | None = None
     action_trail_writer: ActionTrailWriter | None = None
     if _has_google_client_credentials(config):
@@ -786,7 +803,11 @@ def assemble_runtime(
         )
         draft_dispatch_stage = DraftDispatchStage(writer=action_trail_writer)
         graph = build_drain_pathway(
-            *pre_dispatch_stages, compose_stage, speak_stage, draft_dispatch_stage
+            *pre_dispatch_stages,
+            compose_stage,
+            speak_stage,
+            reflection_compose_stage,
+            draft_dispatch_stage,
         )
     else:
         graph = build_drain_pathway(
@@ -796,6 +817,7 @@ def assemble_runtime(
             compose_dispatch_router,
             compose_stage,
             speak_stage,
+            reflection_compose_stage,
         )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
