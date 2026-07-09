@@ -1,0 +1,119 @@
+# psychology KB — a small, curated, evidence-based KB of behavioral patterns (TK-115, EP-23).
+#
+# RULES OF THE ROAD
+#   * HUMAN-AUTHORED ONLY (TECH-13/CON-6). Every entry below was written and cited by a human.
+#     NEVER add an entry via a model-generation script, and NEVER add a `generated_by` or
+#     `model_authored` key anywhere in this file — CI (tests/kb/) asserts both absences and
+#     that every entry carries a non-empty, real `evidence_tag`.
+#   * NO CLINICAL OR THERAPY FRAMING (NG-2). No entry — description, phrasing_hints, anything —
+#     may contain 'diagnos', 'disorder', 'therapy', 'symptom', 'ADHD', or any DSM/ICD term.
+#     These are plain behavioral-pattern observations, not assessments.
+#   * NEVER RECITED VERBATIM (EP-24). phrasing_hints are calibration material for the mouth
+#     (TK-117/TK-118), not user-facing copy to echo as-is.
+#   * gate_condition.metric MUST be one of the CLOSED v1 vocabulary: switch_rate, window_count,
+#     event_count (Q-99b — TK-113 derives exactly these three from a day's WindowSummaries).
+#   * gate_condition.operator MUST be one of: >, >=, <, <=, == (Q-99b closed set).
+#   * Change a value -> BUMP `version`. The change is then auditable in git history (mirrors
+#     wombat_params.yaml's convention).
+#   * <=20 entries total (complexity_budget cap).
+
+version: 1
+
+entries:
+  - pattern_id: rapid_context_switching
+    description: >
+      A day marked by an unusually high rate of task-to-task switching relative to its total
+      tracked activity.
+    gate_condition:
+      metric: switch_rate
+      operator: ">"
+      threshold: 0.6
+    phrasing_hints:
+      - "noticed today had a lot of quick switching between things"
+      - "today moved between tasks pretty rapidly"
+    autonomy_level: gentle_note
+    evidence_tag: context_switching_mark_2005
+
+  - pattern_id: fragmented_day
+    description: >
+      A day split into many short, separate windows of activity rather than a few longer
+      stretches.
+    gate_condition:
+      metric: window_count
+      operator: ">="
+      threshold: 6
+    phrasing_hints:
+      - "today looked pretty broken up into pieces"
+      - "the day had a lot of separate short stretches"
+    autonomy_level: gentle_note
+    evidence_tag: attention_residue_leroy_2009
+
+  - pattern_id: high_volume_day
+    description: >
+      A day with an unusually large total number of tracked events, suggesting a busy,
+      high-throughput day.
+    gate_condition:
+      metric: event_count
+      operator: ">"
+      threshold: 35
+    phrasing_hints:
+      - "today had a lot going on, more than usual"
+      - "that was a high-volume day"
+    autonomy_level: gentle_note
+    evidence_tag: cognitive_load_sweller_1988
+
+  - pattern_id: sustained_focus_block
+    description: >
+      A day that stayed within a single long window rather than splitting into many
+      stretches — a sign of sustained, uninterrupted focus.
+    gate_condition:
+      metric: window_count
+      operator: "<="
+      threshold: 1
+    phrasing_hints:
+      - "today stayed on one thing for a long stretch"
+      - "that looked like real sustained focus"
+    autonomy_level: gentle_note
+    evidence_tag: flow_csikszentmihalyi_1990
+
+  - pattern_id: low_switching_day
+    description: >
+      A day with an unusually low rate of task switching — few transitions relative to its
+      total tracked activity.
+    gate_condition:
+      metric: switch_rate
+      operator: "<"
+      threshold: 0.15
+    phrasing_hints:
+      - "today had very little back-and-forth between tasks"
+      - "things stayed steady today"
+    autonomy_level: gentle_note
+    evidence_tag: deep_work_newport_2016
+
+  - pattern_id: quiet_day
+    description: >
+      A day with an unusually small total number of tracked events, suggesting a light or
+      quiet day.
+    gate_condition:
+      metric: event_count
+      operator: "<"
+      threshold: 5
+    phrasing_hints:
+      - "today was pretty quiet, not much tracked"
+      - "a light day overall"
+    autonomy_level: gentle_note
+    evidence_tag: restorative_breaks_trougakos_2008
+
+  - pattern_id: moderate_fragmentation
+    description: >
+      A day split across a moderate number of windows — more fragmented than a single-block
+      day but not extreme.
+    gate_condition:
+      metric: window_count
+      operator: "=="
+      threshold: 3
+    phrasing_hints:
+      - "today had a handful of separate stretches"
+      - "the day broke into a few pieces"
+    autonomy_level: gentle_note
+    evidence_tag: ultradian_rhythm_kleitman_1963
