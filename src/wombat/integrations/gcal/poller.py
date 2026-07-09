@@ -143,6 +143,11 @@ class CalendarPoller:
         a caller (e.g. ``BriefGatherStage``, TK-98) distinguish "source unavailable" from "zero
         events" — something a swallowed-to-``[]`` result cannot. ``poll()`` below is the
         transient-error-tolerant wrapper around this method (ruling 4 unchanged).
+
+        A response with no ``items`` key at all (Google's shape for an empty window) is zero
+        events, not malformed (TK-170) — mirrors the gmail poller's ``.get("messages") or []``.
+        A response carrying ``nextPageToken`` is NOT paginated (v1 floor, TK-170, parity with
+        the gmail poller's posture): a loud WARNING names this source and the truncation.
         """
         hours = self._lookahead_hours if lookahead_hours is None else lookahead_hours
         now = self._clock()
@@ -154,7 +159,16 @@ class CalendarPoller:
         }
         response = self._session.get(_EVENTS_URL, params=params, timeout=_REQUEST_TIMEOUT_S)
         response.raise_for_status()
-        items = response.json()["items"]
+        body = response.json()
+        if body.get("nextPageToken"):
+            logger.warning(
+                "gcal source %r: events response has more pages (nextPageToken present) — "
+                "NOT paginating this fetch, events beyond the first page are truncated",
+                self.id,
+            )
+        # Google omits "items" entirely on an empty window (TK-170) — that is zero events, not
+        # a malformed response (mirrors the gmail poller's `.get("messages") or []` convention).
+        items = body.get("items") or []
         return [_parse_event(raw, tz=self._tz) for raw in items]
 
     async def poll(self) -> list[SourceEvent]:

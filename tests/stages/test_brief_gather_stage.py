@@ -234,6 +234,31 @@ async def test_ac2_gmail_triage_failure_also_degrades_gmail_cleanly() -> None:
     assert len(data["calendar_events"]) == 1
 
 
+# ------------------------------------------------------------------------------------- TK-170
+
+
+async def test_calendar_fetch_returning_empty_list_renders_as_empty_not_unavailable() -> None:
+    """A tolerant ``fetch_calendar`` (e.g. ``CalendarPoller.fetch_window`` on TK-170's missing-
+    ``items``-key window) returns ``[]`` WITHOUT raising — this must produce an empty calendar
+    slice with ``calendar_unavailable=False``, distinct from the raising-degrade path (AC2a)
+    which sets ``calendar_unavailable=True``. This is the render-time distinction between "no
+    events today" and "Calendar is unavailable right now" (``compose/brief_template.py``)."""
+
+    def _empty_calendar() -> list[CalendarEvent]:
+        return []
+
+    stage = _make_stage(fetch_calendar=_empty_calendar)
+    ctx = _make_ctx()
+
+    result = await stage.run(ctx)  # MUST NOT raise
+
+    assert isinstance(result, Transition)
+    data = result.output.data
+    assert data["calendar_events"] == []
+    assert data["calendar_unavailable"] is False  # empty, NOT unavailable
+    assert len(data["gmail_items"]) == 1  # gmail still collected
+
+
 # ------------------------------------------------------------------------------------------ AC3
 
 

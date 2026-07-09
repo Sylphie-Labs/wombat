@@ -186,10 +186,6 @@ def _http_error_session(status: int) -> _FakeSession:
     return _FakeSession(response=_FakeResponse(status, {"items": []}))
 
 
-def _malformed_missing_items_session() -> _FakeSession:
-    return _FakeSession(response=_FakeResponse(200, {"not_items": []}))
-
-
 def _malformed_bad_interval_session() -> _FakeSession:
     body = {
         "items": [
@@ -212,7 +208,6 @@ def _malformed_bad_interval_session() -> _FakeSession:
         lambda: _http_error_session(403),
         lambda: _http_error_session(500),
         lambda: _http_error_session(503),
-        _malformed_missing_items_session,
         _malformed_bad_interval_session,
     ],
     ids=[
@@ -221,7 +216,6 @@ def _malformed_bad_interval_session() -> _FakeSession:
         "http_403",
         "http_500",
         "http_503",
-        "malformed_missing_items_key",
         "malformed_bad_interval",
     ],
 )
@@ -309,7 +303,6 @@ async def test_ac3_same_event_two_polls_identical_key_single_admission_via_regis
         (lambda: _http_error_session(403), requests.exceptions.HTTPError),
         (lambda: _http_error_session(500), requests.exceptions.HTTPError),
         (lambda: _http_error_session(503), requests.exceptions.HTTPError),
-        (_malformed_missing_items_session, KeyError),
         (_malformed_bad_interval_session, ValueError),
     ],
     ids=[
@@ -318,7 +311,6 @@ async def test_ac3_same_event_two_polls_identical_key_single_admission_via_regis
         "http_403",
         "http_500",
         "http_503",
-        "malformed_missing_items_key",
         "malformed_bad_interval",
     ],
 )
@@ -343,3 +335,73 @@ async def test_poll_still_degrades_to_empty_via_the_extracted_fetch_window() -> 
     result = await poller.poll()  # MUST NOT raise, even though fetch_window() would
 
     assert result == []
+
+
+# ------------------------------------------------------------------------------------- TK-170
+#
+# (1) Google omits the "items" key entirely on an empty window response — that is zero events,
+#     not a malformed body (mirrors the gmail poller's ``.get("messages") or []`` convention).
+#     Because ``fetch_window`` is the RAISING seam ``BriefGatherStage`` consumes, tolerating this
+#     shape (instead of raising ``KeyError``) is what keeps an empty calendar from rendering as
+#     "Calendar is unavailable right now" in the trusted brief.
+# (2) A response carrying ``nextPageToken`` (>250 events in the window) is NOT paginated (v1
+#     floor, parity with gmail) — a loud WARNING names this source and the truncation.
+
+
+def test_fetch_window_missing_items_key_returns_empty_no_exception() -> None:
+    session = _FakeSession(response=_FakeResponse(200, {}))  # no "items" key at all
+    poller = CalendarPoller(
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    result = poller.fetch_window()  # MUST NOT raise
+
+    assert result == []
+
+
+async def test_poll_missing_items_key_yields_empty_calendar_not_unavailable_degrade(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """poll() (and thus a caller like ``BriefGatherStage``) must see this as a clean, empty
+    result — NOT the malformed-response WARNING/degrade path — so an empty calendar renders as
+    an empty calendar, not "Calendar is unavailable right now"."""
+    session = _FakeSession(response=_FakeResponse(200, {}))
+    poller = CalendarPoller(
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await poller.poll()
+
+    assert result == []
+    # NOT the malformed-response degrade path: no WARNING at all for this shape.
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_fetch_window_next_page_token_logs_loud_warning_naming_source(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    body = {
+        "items": [
+            {
+                "id": "evt1",
+                "summary": "Standup",
+                "start": {"dateTime": "2026-07-02T09:00:00Z"},
+                "end": {"dateTime": "2026-07-02T09:30:00Z"},
+            }
+        ],
+        "nextPageToken": "page-2-token",
+    }
+    session = _FakeSession(response=_FakeResponse(200, body))
+    poller = CalendarPoller(
+        session=session, tz=_TZ, poll_interval_seconds=0.1, clock=lambda: _NOW  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = poller.fetch_window()  # MUST NOT raise — a full pagination loop is optional
+
+    assert [e.event_id for e in result] == ["evt1"]  # first page still returned
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "gcal" in r.getMessage() and "nextPageToken" in r.getMessage() for r in warnings
+    )
