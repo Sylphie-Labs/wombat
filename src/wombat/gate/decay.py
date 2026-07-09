@@ -99,8 +99,13 @@ class DayRollover:
         today = self._daily_ledger.today()
         if today == self._last_seen:
             return None
-        self._last_seen = today
+        # TK-169 (CR-4): stamp ``_last_seen`` only AFTER the durable increment succeeds. If
+        # increment() raises (transient pg error), the exception propagates (fail-loud, by
+        # design) and ``_last_seen`` stays untouched — the next check() on this same wombat-day
+        # is a real retry, not a short-circuited no-op that would silently swallow the day's
+        # LedgerReset.
         row = self._daily_ledger.increment(_ROLLOVER_LEDGER_NAME)
+        self._last_seen = today
         if row.value == 1:
             return LedgerReset(wombat_date=today)
         return None

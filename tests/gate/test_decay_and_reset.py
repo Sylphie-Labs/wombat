@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 import pytest
 
-from wombat.domain.daily_ledger import DailyLedger, ensure_schema, wombat_today
+from wombat.domain.daily_ledger import DailyLedger, DailyLedgerRow, ensure_schema, wombat_today
 from wombat.gate.ceiling import CeilingLedger
 from wombat.gate.decay import DayRollover, LedgerReset, decay_stale
 from wombat.gate.models import DecayEvent, GateAction, GateItem, ItemKind, ScoredItem
@@ -128,6 +128,31 @@ class _FakeRollover:
         if self._counts[today] == 1:
             return LedgerReset(wombat_date=today)
         return None
+
+
+@dataclass
+class _FlakyDailyLedger:
+    """A ``DailyLedger`` double whose ``increment()`` raises on its first call, then succeeds
+    (TK-169, CR-4). Stands in for a transient pg error on the first ``DayRollover.check()`` of a
+    new wombat-day, so tests can prove ``_last_seen`` is stamped only AFTER the durable increment
+    lands -- never before.
+    """
+
+    today_value: date
+    calls: int = field(default=0, init=False)
+    _value: int = field(default=0, init=False)
+
+    def today(self) -> date:
+        return self.today_value
+
+    def increment(self, ledger_name: str, amount: int = 1) -> DailyLedgerRow:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("simulated transient pg error")
+        self._value += amount
+        return DailyLedgerRow(
+            ledger_name=ledger_name, wombat_date=self.today_value, value=self._value
+        )
 
 
 @dataclass(slots=True)
@@ -248,6 +273,38 @@ async def test_gate_decay_method_returns_the_same_events_it_emits() -> None:
 
     assert returned == (DecayEvent(item_id="stale", age_seconds=1000.0),)
     assert recorder.events == list(returned)
+
+
+# ================================================================================================
+# TK-169 (CR-4): DayRollover must stamp ``_last_seen`` only AFTER the durable increment succeeds.
+# A transient increment() failure on the first check() of a new wombat-day must not short-circuit
+# every later check() that day at the ``today == self._last_seen`` guard -- the next check() is
+# the retry. Un-gated: a local double stands in for the real DailyLedger.
+# ================================================================================================
+
+
+def test_tk169_last_seen_stamped_only_after_increment_succeeds_next_check_retries() -> None:
+    today = date(2026, 7, 8)
+    ledger = _FlakyDailyLedger(today_value=today)
+    rollover = DayRollover(daily_ledger=ledger)  # type: ignore[arg-type]  # duck-typed double
+
+    with pytest.raises(RuntimeError):
+        rollover.check()
+
+    assert ledger.calls == 1  # the failed increment was attempted...
+
+    # ...but _last_seen was NOT stamped: the very next check() (still the same day) must be a
+    # real retry -- not a silent no-op swallowed by the `today == self._last_seen` guard.
+    result = rollover.check()
+
+    assert ledger.calls == 2  # retried, not skipped
+    assert isinstance(result, LedgerReset)
+    assert result.wombat_date == today
+
+    # a THIRD check() the same day is quiet -- the in-memory fast path now works normally, and
+    # the retry above did not cause a double-emit.
+    assert rollover.check() is None
+    assert ledger.calls == 2  # short-circuited by _last_seen; no further increment call
 
 
 # ================================================================================================
