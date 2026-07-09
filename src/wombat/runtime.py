@@ -39,6 +39,7 @@ from wombat.config import ConfigurationError, load_config
 from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
+from wombat.safety.local_residency import check_config
 
 _HEARTBEAT_ARTIFACT_KIND = "drain-tick"
 _RUNTIME_RUN_ID_PREFIX = "wombat-drain"
@@ -121,11 +122,17 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
 async def serve() -> None:
     """Boot wombat as ONE standing process: assemble the composition, then start/drive/stop it.
 
+    ``check_config(config)`` runs FIRST, right after ``load_config()`` (TK-150, Q-87 ruling 4) —
+    the same-host storage-residency guard refuses (``RemoteStorageConfigError``, naming the
+    offending config key) before anything else, including the ``WOMBAT_PG_DSN``-required check
+    below.
+
     Requires ``WOMBAT_PG_DSN`` (Q-36: the queue is pg-only) — fails loud with
     ``ConfigurationError`` naming it when absent, rather than starting silently broken. It is
     deliberately NOT part of ``REQUIRED_ENV`` so tests and the demo stay bootable without it.
     """
     config = load_config()
+    check_config(config)
     dsn = config.wombat_pg_dsn
     if not dsn:
         raise ConfigurationError(
