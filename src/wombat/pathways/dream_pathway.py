@@ -1,13 +1,14 @@
 """build_dream_pathway — the wombat.dream pathway (TK-46 scaffold, TK-175 outcome pass, TK-47
-consolidation sweep, TK-49 tuner pass, TK-111 behavior-log pass, Q-33/Q-85/Q-90/Q-91/Q-98,
-DEC-12/DEC-23).
+consolidation sweep, TK-49 tuner pass, TK-111 behavior-log pass, TK-112 window-detect pass,
+Q-33/Q-85/Q-90/Q-91/Q-98/Q-99e, DEC-12/DEC-23).
 
 MIRRORS ``brief_pathway.py``'s posture: pure graph assembly, no bootstrap import (avoids an import
-cycle — ``bootstrap.py`` imports this module, not the reverse). Q-98 (superseding Q-91's shape)
+cycle — ``bootstrap.py`` imports this module, not the reverse). Q-99e (superseding Q-98's shape)
 RULES the dream graph's end-state: ``dream_consolidate`` (entry, TK-47) -> ``dream_outcome``
-(TK-175) -> ``dream_tune`` (TK-49) -> ``dream_behavior_log`` (TK-111) -> ``dream_run`` (terminal)
-— TK-52's later recurrence/fence inserts UPSTREAM of ``dream_consolidate`` so ``dream_run`` stays
-the ONE reachable terminal and TK-46's isolation proofs keep passing.
+(TK-175) -> ``dream_tune`` (TK-49) -> ``dream_behavior_log`` (TK-111) -> ``dream_window``
+(TK-112) -> ``dream_run`` (terminal) — TK-52's later recurrence/fence inserts UPSTREAM of
+``dream_consolidate`` so ``dream_run`` stays the ONE reachable terminal and TK-46's isolation
+proofs keep passing.
 
 ``DreamConsolidationStage`` (TK-47, EP-13) is the nightly consolidation sweep: it drives
 cog-worx's ``CoherenceReconciler`` + ``ClaimExtractor`` sweepers to drain, off-path (S1) model
@@ -41,6 +42,12 @@ BehaviorEventLog`` keyed on the canonical TK-12 ``idempotency_key`` the claim's 
 (malformed payload, an un-invertible ``item_ref``, or a store write failure) is caught, logged
 LOUD, and skipped — mirrors ``DreamTuneStage``'s own never-block-the-terminal posture: one bad
 night's write never blocks ``dream_run``.
+
+``WriteWindowSummariesStage`` (TK-112, EP-21, Q-99e; ``wombat.behavior.stages.
+write_window_summaries``) is the nightly ``dream_window`` stage — it is NOT defined in this
+module (it lives with the behavioral event log it reads, ``wombat.behavior``), but is spliced into
+this graph exactly like every other dream stage, between ``dream_behavior_log`` and the
+``dream_run`` terminal.
 
 ``DreamScaffoldStage`` remains the reachable terminal, off-path (S1/S11), no-op stage — no
 recurrence/fence (TK-52), no model call.
@@ -501,12 +508,14 @@ class DreamBehaviorLogStage:
     posture). A per-claim failure — a malformed payload, an ``item_ref`` that
     ``split_idempotency_key`` cannot invert, or a ``store.upsert`` failure — is caught, logged
     LOUD, and skipped (AC5: never a partial write, never blocks the rest of the pass). ``run()``
-    ALWAYS ``Transition``s onward to ``dream_run`` — mirrors ``DreamTuneStage``'s own
-    never-block-the-terminal posture: one bad night's write never blocks the reachable terminal.
+    ALWAYS ``Transition``s onward to ``dream_window`` (TK-112, Q-99e — this stage's downstream
+    neighbor since the window-detect pass was inserted between the behavior log and the
+    terminal) — mirrors ``DreamTuneStage``'s own never-block-the-terminal posture: one bad
+    night's write never blocks the reachable terminal.
     """
 
     name: str = "dream_behavior_log"
-    transitions: tuple[str, ...] = ("dream_run",)
+    transitions: tuple[str, ...] = ("dream_window",)
 
     def __init__(self, *, store: BehaviorEventLog, entity_kg: EntityKG, user_id: str) -> None:
         self._store = store
@@ -581,7 +590,7 @@ class DreamBehaviorLogStage:
                     errors += 1
 
         return Transition(
-            to="dream_run",
+            to="dream_window",
             output=Artifact(
                 kind=DREAM_BEHAVIOR_LOG_REPORT_KIND,
                 produced_by=self.name,
@@ -619,27 +628,33 @@ def build_dream_pathway(
     outcome: Stage,
     tune: Stage,
     behavior_log: Stage,
+    window: Stage,
     terminal: Stage | None = None,
 ) -> StageGraph:
-    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (Q-98
-    end-state, superseding Q-91's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
-    ``dream_tune`` -> ``dream_behavior_log`` -> ``dream_run``, TK-47/TK-175/TK-49/TK-111).
+    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (Q-99e
+    end-state, superseding Q-98's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
+    ``dream_tune`` -> ``dream_behavior_log`` -> ``dream_window`` -> ``dream_run``,
+    TK-47/TK-175/TK-49/TK-111/TK-112).
 
-    ``consolidate``, ``outcome``, ``tune``, and ``behavior_log`` are ALL REQUIRED and supplied by
-    the caller (mirrors ``build_brief_pathway``'s all-stages-injected convention) — production
-    callers pass a ``DreamConsolidationStage`` built with its real ``reconciler``/``extractor``
-    collaborators (TK-54's ``build_dream_substrate``), a ``DreamOutcomeStage`` built with its real
-    ``entity_kg``/``labeler``/``user_id`` collaborators, a ``DreamTuneStage`` built with its real
-    ``RatingTuner``, and a ``DreamBehaviorLogStage`` built with its real ``store``/``entity_kg``/
-    ``user_id`` collaborators; this module never constructs those (no bootstrap import, pure graph
-    assembly). ``terminal`` KEEPS the TK-46 injectable-stage seam: it defaults to
-    ``DreamScaffoldStage()`` — since ``DreamBehaviorLogStage.transitions`` names the literal
-    ``"dream_run"`` target, a substituted terminal double (e.g. an always-raising stage, AC2's
-    off-path error-isolation proof) must keep that SAME name to be reachable.
+    ``consolidate``, ``outcome``, ``tune``, ``behavior_log``, and ``window`` are ALL REQUIRED and
+    supplied by the caller (mirrors ``build_brief_pathway``'s all-stages-injected convention) —
+    production callers pass a ``DreamConsolidationStage`` built with its real
+    ``reconciler``/``extractor`` collaborators (TK-54's ``build_dream_substrate``), a
+    ``DreamOutcomeStage`` built with its real ``entity_kg``/``labeler``/``user_id`` collaborators,
+    a ``DreamTuneStage`` built with its real ``RatingTuner``, a ``DreamBehaviorLogStage`` built
+    with its real ``store``/``entity_kg``/``user_id`` collaborators, and a
+    ``WriteWindowSummariesStage`` (``wombat.behavior.stages.write_window_summaries``, TK-112)
+    built with its real ``store``/``writer``/``tz`` collaborators; this module never constructs
+    those (no bootstrap import, pure graph assembly). ``terminal`` KEEPS the TK-46
+    injectable-stage seam: it defaults to ``DreamScaffoldStage()`` — since
+    ``WriteWindowSummariesStage.transitions`` names the literal ``"dream_run"`` target, a
+    substituted terminal double (e.g. an always-raising stage, AC2's off-path error-isolation
+    proof) must keep that SAME name to be reachable.
     """
     dream_terminal = terminal if terminal is not None else DreamScaffoldStage()
     return StageGraph(
-        [consolidate, outcome, tune, behavior_log, dream_terminal], entry=consolidate.name
+        [consolidate, outcome, tune, behavior_log, window, dream_terminal],
+        entry=consolidate.name,
     )
 
 

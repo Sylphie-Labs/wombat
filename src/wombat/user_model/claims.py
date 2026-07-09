@@ -13,6 +13,12 @@ as-built ``wombat.rating.params.RATING_CLAIM_PREDICATE`` (TK-41/Q-41 ruling 4). 
 not import ``rating.params`` (would invert TK-41's dependency direction); instead
 ``tests/user_model/test_claims.py`` asserts the two literal values never drift apart.
 
+``ClaimPredicate.PRODUCTIVITY_WINDOW`` (TK-112, EP-21, Q-99c) is a deliberate, reviewed addition
+to this closed vocabulary — a pure behavior aggregate (a nightly list of detected productivity
+windows over the TK-111 event log), never a motive/why signal. It carries the same schema-wall
+guarantees as every other member: adding it here is the one place this vocabulary widens; no
+caller can invent it as a raw string.
+
 FRAME: pure Python, no I/O, no cog-worx import (this is wombat's own vocabulary leaf, not a read
 or write seam — TK-44 owns the writer). Deliberately out of scope here: no Neo4j/EntityKG I/O,
 no outcome-labeling logic (EP-12), no supersede semantics.
@@ -39,6 +45,7 @@ class ClaimPredicate(StrEnum):
     OUTCOME_REGRETTED = "outcome_regretted"
     OUTCOME_IGNORED = "outcome_ignored"
     RATING_PARAMS = "rating_params"
+    PRODUCTIVITY_WINDOW = "productivity_window"
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,7 +17,8 @@ shared local Postgres is safe to reuse.
   AC2 (structural, no pg needed) the migration has no motive/why column, and every column name is
       drawn from the closed TK-43 OUTCOME_* vocabulary + the row-mapping fields Q-98 ruled — never
       a free-form motive field. Also (AC4, NG-3): the only src/wombat importers of
-      wombat.behavior.event_log are pathways/dream_pathway.py and bootstrap.py.
+      wombat.behavior.event_log are pathways/dream_pathway.py, bootstrap.py, and (TK-112)
+      behavior/window_detector.py + behavior/stages/write_window_summaries.py.
   AC3 events_between returns rows ordered ASCENDING by timestamp_utc, human-readable (a
       dataclass, not raw tuples), over a >=7-day spread.
 """
@@ -182,7 +183,8 @@ def _targets_event_log_module(dotted_module: str) -> bool:
 
 def test_ac2_only_pathways_and_bootstrap_import_behavior_event_log() -> None:
     """AC4/NG-3: the only src/wombat importers of wombat.behavior.event_log are
-    pathways/dream_pathway.py and bootstrap.py — no dashboard/analytics consumer anywhere."""
+    pathways/dream_pathway.py, bootstrap.py, and (TK-112) behavior/window_detector.py +
+    behavior/stages/write_window_summaries.py — no dashboard/analytics consumer anywhere."""
     src_root = Path(__file__).resolve().parents[2] / "src" / "wombat"
     event_log_module = src_root / "behavior" / "event_log.py"
 
@@ -200,7 +202,12 @@ def test_ac2_only_pathways_and_bootstrap_import_behavior_event_log() -> None:
                     if _targets_event_log_module(alias.name):
                         importers.add(path)
 
-    assert importers == {src_root / "pathways" / "dream_pathway.py", src_root / "bootstrap.py"}
+    assert importers == {
+        src_root / "pathways" / "dream_pathway.py",
+        src_root / "bootstrap.py",
+        src_root / "behavior" / "window_detector.py",
+        src_root / "behavior" / "stages" / "write_window_summaries.py",
+    }
 
 
 # --------------------------------------------------------------------------------------- AC3

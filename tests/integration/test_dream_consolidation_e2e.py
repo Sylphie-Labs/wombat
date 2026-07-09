@@ -161,13 +161,36 @@ class _PassthroughBehaviorLogStage:
     no DSN for)."""
 
     name: str = "dream_behavior_log"
+    transitions: tuple[str, ...] = ("dream_window",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_window",
+            output=Artifact(
+                kind="wombat.dream_behavior_log_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+class _PassthroughWindowStage:
+    """TK-112 mechanical reshape (flagged per the ticket's own sanction, Q-99e):
+    ``build_dream_pathway`` now also requires a ``window`` stage too — this suite's own AC1-AC3
+    witnesses are all about ``DreamConsolidationStage``, so a trivial always-transitions-onward
+    double merely satisfies the shape without asserting anything about it (a real
+    ``WriteWindowSummariesStage`` needs a Postgres-backed ``BehaviorEventLog`` this module has no
+    DSN for)."""
+
+    name: str = "dream_window"
     transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_run",
             output=Artifact(
-                kind="wombat.dream_behavior_log_report",
+                kind="wombat.dream_window_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={},
@@ -259,6 +282,7 @@ async def test_ac1_drain_with_work_reflects_reconciler_merges_and_terminates() -
         _outcome_stage(entity_kg),
         _tune_stage(entity_kg),
         _PassthroughBehaviorLogStage(),
+        _PassthroughWindowStage(),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -321,6 +345,7 @@ async def test_ac2_clean_night_terminates_in_one_pass_with_zero_model_calls(
         _outcome_stage(entity_kg),
         _tune_stage(entity_kg),
         _PassthroughBehaviorLogStage(),
+        _PassthroughWindowStage(),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -375,6 +400,7 @@ async def test_ac3_extractor_stall_still_transitions_and_run_completes(
         _outcome_stage(entity_kg),
         _tune_stage(entity_kg),
         _PassthroughBehaviorLogStage(),
+        _PassthroughWindowStage(),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 

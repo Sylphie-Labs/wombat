@@ -13,8 +13,10 @@ recording/raising double — the genuine pg round-trip lives in ``tests/behavior
       claim's own predicate, duration_seconds=None); a still-``OUTCOME_PENDING`` claim never
       reaches the writer (AC2 filtering).
   AC5 (never-block): a store whose ``upsert()`` raises -> logged LOUD, the row is skipped (counted
-      as an error), and ``run()`` STILL ``Transition``s to ``dream_run`` — proven both as a direct
-      unit call AND end-to-end through a real ``Engine`` drive (the run reaches COMPLETED).
+      as an error), and ``run()`` STILL ``Transition``s to ``dream_window`` (TK-112's stage, this
+      stage's downstream neighbor since the window-detect pass was inserted between the behavior
+      log and the terminal) — proven both as a direct unit call AND end-to-end through a real
+      ``Engine`` drive (the run reaches COMPLETED).
 """
 
 from __future__ import annotations
@@ -196,7 +198,7 @@ async def test_ac1_terminal_claims_are_upserted_with_the_mapped_row_shape(
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_run"
+    assert result.to == "dream_window"
     assert result.output.data == {"rows_upserted": 2, "errors": 0}
 
     assert len(calls) == 2  # NOT the pending item
@@ -225,7 +227,7 @@ async def test_ac1_empty_corpus_completes_cleanly_with_zero_upserts(
     result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_run"
+    assert result.to == "dream_window"
     assert result.output.data == {"rows_upserted": 0, "errors": 0}
     assert calls == []
 
@@ -259,7 +261,7 @@ async def test_ac5_store_raise_is_caught_logged_and_still_transitions(
         result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_run"  # STILL transitions — one bad row never blocks the terminal
+    assert result.to == "dream_window"  # STILL transitions — one bad row never blocks the terminal
     assert result.output.data == {"rows_upserted": 0, "errors": 1}
     assert calls == []
     assert any(
@@ -321,6 +323,7 @@ async def test_ac5_engine_drive_completes_even_when_the_store_raises(
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
         _PassthroughStage(name="dream_tune", to="dream_behavior_log"),
         behavior_log_stage,
+        _PassthroughStage(name="dream_window", to="dream_run"),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -348,5 +351,5 @@ async def test_ac5_engine_drive_completes_even_when_the_store_raises(
 
     assert final.status is RunStatus.COMPLETED
     stage_names = [step.stage_name for step in final.steps]
-    assert stage_names[-2:] == ["dream_behavior_log", "dream_run"]
+    assert stage_names[-3:] == ["dream_behavior_log", "dream_window", "dream_run"]
     assert calls == []  # the store raised — nothing was ever recorded

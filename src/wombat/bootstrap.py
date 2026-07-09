@@ -84,11 +84,19 @@ gate/pipeline change here — the gate re-reads a tuned parameter on its next dr
 
 TK-111 (Q-98, EP-21): the dream graph's new ``dream_behavior_log`` stage — ``DreamBehaviorLogStage``
 (``build_dream_pathway``'s new ``behavior_log`` arg), inserted between ``dream_tune`` and the
-reachable terminal — composes a ``BehaviorEventLog`` over the SAME runtime ``dsn`` every other
-Postgres-touching seam here uses, and the SAME shared ``entity_kg``/``_RUNTIME_USER_ID`` TK-176
-built above (never a second KG instance). Exposed on ``RuntimeBundle.behavior_event_log`` so
-``runtime.py``'s teardown can close it (the SAME TK-184 lifecycle pattern as ``action_trail_
+window-detect pass below — composes a ``BehaviorEventLog`` over the SAME runtime ``dsn`` every
+other Postgres-touching seam here uses, and the SAME shared ``entity_kg``/``_RUNTIME_USER_ID``
+TK-176 built above (never a second KG instance). Exposed on ``RuntimeBundle.behavior_event_log``
+so ``runtime.py``'s teardown can close it (the SAME TK-184 lifecycle pattern as ``action_trail_
 writer``/``daily_ledger``/``pending_journal``/``queue``).
+
+TK-112 (Q-99e, EP-21): the dream graph's new ``dream_window`` stage —
+``wombat.behavior.stages.write_window_summaries.WriteWindowSummariesStage``
+(``build_dream_pathway``'s new ``window`` arg), inserted between ``dream_behavior_log`` and the
+reachable terminal — composes over the SAME shared ``behavior_event_log``/``observation_writer``
+instances built above (never a second instance of either) and the SAME configured ``tz``. No new
+``RuntimeBundle`` field: unlike ``behavior_event_log`` this stage owns no closeable resource of
+its own.
 """
 
 from __future__ import annotations
@@ -120,6 +128,7 @@ from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .behavior.event_log import BehaviorEventLog
+from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
@@ -828,8 +837,19 @@ def assemble_runtime(
     dream_behavior_log_stage = DreamBehaviorLogStage(
         store=behavior_event_log, entity_kg=entity_kg, user_id=_RUNTIME_USER_ID
     )
+    # TK-112 (Q-99e): WriteWindowSummariesStage over the SAME shared behavior_event_log/
+    # observation_writer instances built above (never a second instance of either) and the SAME
+    # configured tz. UNCONDITIONAL (mirrors dream_behavior_log_stage's own posture) — no external
+    # deps beyond what this composition already builds.
+    dream_window_stage = WriteWindowSummariesStage(
+        store=behavior_event_log, writer=observation_writer, tz=tz
+    )
     dream_graph = build_dream_pathway(
-        dream_consolidation_stage, dream_outcome_stage, dream_tune_stage, dream_behavior_log_stage
+        dream_consolidation_stage,
+        dream_outcome_stage,
+        dream_tune_stage,
+        dream_behavior_log_stage,
+        dream_window_stage,
     )
     substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 

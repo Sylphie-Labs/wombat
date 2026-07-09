@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -41,6 +42,7 @@ from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
 from wombat.behavior.event_log import BehaviorEventLog
 from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
+from wombat.behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
@@ -147,12 +149,13 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
-        # TK-111 (Q-98): the graph AC — the run walked all five stages, in order, ending COMPLETED.
+        # TK-112 (Q-99e): the graph AC — the run walked all six stages, in order, ending COMPLETED.
         assert [step.stage_name for step in dream_state.steps] == [
             "dream_consolidate",
             "dream_outcome",
             "dream_tune",
             "dream_behavior_log",
+            "dream_window",
             "dream_run",
         ]
 
@@ -244,8 +247,9 @@ def _build_stack_with_raising_dream(
         speak_stage,
     )
 
-    # Never reached (the entry always raises first) — throwaway stub outcome/tune/behavior_log
-    # stages merely satisfy build_dream_pathway's now-required args (TK-47/TK-49/TK-111 reshape).
+    # Never reached (the entry always raises first) — throwaway stub outcome/tune/behavior_log/
+    # window stages merely satisfy build_dream_pathway's now-required args (TK-47/TK-49/TK-111/
+    # TK-112 reshape).
     stub_entity_kg = InMemoryEntityKG()
     stub_writer = ObservationWriter(
         entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
@@ -267,8 +271,15 @@ def _build_stack_with_raising_dream(
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
+    stub_window_stage = WriteWindowSummariesStage(
+        store=BehaviorEventLog(_DSN), writer=stub_writer, tz=ZoneInfo("UTC")
+    )
     dream_graph = build_dream_pathway(
-        _RaisingDreamStage(), stub_outcome_stage, stub_tune_stage, stub_behavior_log_stage
+        _RaisingDreamStage(),
+        stub_outcome_stage,
+        stub_tune_stage,
+        stub_behavior_log_stage,
+        stub_window_stage,
     )
 
     bundle = cold_boot_bundle()
