@@ -329,6 +329,40 @@ async def test_claims_about_raise_is_caught_logged_and_still_transitions(
     )
 
 
+async def test_generic_enqueue_exception_is_caught_logged_and_still_transitions(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """TK-204 CR3-2: a non-QueueFullError exception out of ``_enqueue`` (e.g. a reaped connection
+    raising ``psycopg.OperationalError``) must not propagate and crash the nightly dream run."""
+    entity_kg = InMemoryEntityKG()
+    writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id=_USER_ID
+    )
+    await _write_window_claim(writer, summaries=_matching_summaries())
+
+    kb = load_psychology_kb()
+    enqueue = _RecordingEnqueue(raises=RuntimeError("simulated psycopg.OperationalError"))
+    stage = PatternDetectorStage(
+        entity_kg=entity_kg, kb=kb, enqueue=enqueue, user_id=_USER_ID, tz=_TZ
+    )
+
+    with caplog.at_level(logging.ERROR, logger="wombat.behavior.stages.pattern_detector"):
+        result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
+
+    assert isinstance(result, Transition)
+    assert result.to == "dream_run"  # never blocks the terminal
+    assert result.output.data == {
+        "enqueued": 0,
+        "pattern_id": "rapid_context_switching",
+        "errors": 1,
+    }
+    assert len(enqueue.calls) == 1
+    assert any(
+        record.levelno == logging.ERROR and "enqueue failed" in record.message
+        for record in caplog.records
+    )
+
+
 async def test_queue_full_error_is_caught_logged_and_still_transitions(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

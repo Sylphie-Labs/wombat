@@ -122,16 +122,31 @@ def _parse_entry(raw_entry: Any, index: int, file_version: Any) -> KBEntry:
     if not isinstance(phrasing_hints_raw, list) or not phrasing_hints_raw:
         raise ValidationError(f"KB entry #{index} 'phrasing_hints' must be a non-empty list")
 
+    try:
+        threshold = float(condition_raw["threshold"])
+    except (ValueError, TypeError) as exc:
+        raise ValidationError(
+            f"KB entry #{index} gate_condition.threshold {condition_raw['threshold']!r} is not "
+            f"a valid number"
+        ) from exc
+
+    try:
+        version = int(file_version)
+    except (ValueError, TypeError) as exc:
+        raise ValidationError(
+            f"psychology KB YAML top-level 'version' {file_version!r} is not a valid integer"
+        ) from exc
+
     return KBEntry(
         pattern_id=str(raw_entry["pattern_id"]),
         description=str(raw_entry["description"]),
         gate_condition=GateCondition(
             metric=str(metric),
             operator=str(operator),
-            threshold=float(condition_raw["threshold"]),
+            threshold=threshold,
         ),
         phrasing_hints=tuple(str(hint) for hint in phrasing_hints_raw),
         autonomy_level=str(raw_entry["autonomy_level"]),
         evidence_tag=str(raw_entry["evidence_tag"]),
-        version=int(file_version),
+        version=version,
     )

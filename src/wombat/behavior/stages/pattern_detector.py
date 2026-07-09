@@ -191,6 +191,14 @@ class PatternDetectorStage:
                     exc_info=True,
                 )
                 errors += 1
+            except Exception:
+                logger.error(
+                    "dream_pattern: enqueue failed unexpectedly; tonight's pattern_reflection "
+                    "(pattern_id=%r) is dropped",
+                    pattern_id,
+                    exc_info=True,
+                )
+                errors += 1
             else:
                 if result is EnqueueResult.QUEUED:
                     enqueued = 1

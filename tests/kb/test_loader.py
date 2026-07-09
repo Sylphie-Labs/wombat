@@ -154,6 +154,36 @@ def test_ac1_empty_phrasing_hints_raises_validation_error(tmp_path: Path) -> Non
         load_psychology_kb(fixture_path)
 
 
+@pytest.mark.parametrize("bad_threshold", ["0.6.", None])
+def test_ac1_non_numeric_threshold_raises_validation_error_not_bare_value_error(
+    tmp_path: Path, bad_threshold: Any
+) -> None:
+    """TK-204 CR3-3: a present-but-non-numeric threshold must raise ValidationError (the
+    loader's documented contract), never the bare ValueError/TypeError float() raises."""
+    document = _valid_document()
+    document["entries"][0]["gate_condition"]["threshold"] = bad_threshold
+    fixture_path = _write_yaml(tmp_path, document)
+
+    with pytest.raises(ValidationError) as excinfo:
+        load_psychology_kb(fixture_path)
+    assert type(excinfo.value) is ValidationError
+
+
+@pytest.mark.parametrize("bad_version", ["v1", [1, 2]])
+def test_ac1_non_numeric_version_raises_validation_error_not_bare_value_error(
+    tmp_path: Path, bad_version: Any
+) -> None:
+    """TK-204 CR3-3: a present-but-non-numeric top-level version must raise ValidationError,
+    never the bare ValueError/TypeError int() raises."""
+    document = _valid_document()
+    document["version"] = bad_version
+    fixture_path = _write_yaml(tmp_path, document)
+
+    with pytest.raises(ValidationError) as excinfo:
+        load_psychology_kb(fixture_path)
+    assert type(excinfo.value) is ValidationError
+
+
 # --------------------------------------------------------------------------------------- AC2
 
 
