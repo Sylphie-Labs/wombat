@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from wombat.params import load_operating_params
 from wombat.rating.params import (
     RATING_PARAMS_VERSION,
     EventClass,
@@ -20,7 +21,7 @@ def test_known_event_class_returns_fully_typed_params() -> None:
     params = default_params_for(EventClass.CALENDAR_CONFLICT)
     assert isinstance(params, RatingParams)
     assert params.version == RATING_PARAMS_VERSION
-    assert params.urgency_base == 0.7
+    assert params.urgency_base == 0.65
     assert params.load_base == 0.4
 
 
@@ -64,6 +65,31 @@ def test_with_updates_is_pure_and_preserves_version() -> None:
     assert updated.urgency_base == 0.8
     assert updated.version == base.version
     # original untouched (purity)
-    assert base.urgency_base == 0.7
+    assert base.urgency_base == 0.65
     # unspecified fields carried over
     assert updated.load_base == base.load_base
+
+
+def test_ac2_every_default_is_inside_the_tuner_clamp_band_and_preserves_ordinal_ordering() -> None:
+    # TK-185/Q-95: the RatingTuner clamps urgency_base/load_base into a locked
+    # [clamp_floor, clamp_ceiling] band (OperatingParams.rating_tuner, TK-48 joint block). Every
+    # documented default must already live inside that band so the first non-empty-corpus tune
+    # night moves a class WITH its outcome signal instead of snapping it to the nearest edge
+    # regardless of direction (CR2-11).
+    bounds = load_operating_params().rating_tuner
+    urgency_base = {}
+    load_base = {}
+    for ec in EventClass:
+        params = default_params_for(ec)
+        assert bounds.clamp_floor <= params.urgency_base <= bounds.clamp_ceiling
+        assert bounds.clamp_floor <= params.load_base <= bounds.clamp_ceiling
+        urgency_base[ec] = params.urgency_base
+        load_base[ec] = params.load_base
+
+    # Cross-class ordinal differentiation (TK-41 design intent) is preserved inside the band:
+    # CALENDAR_CONFLICT stays the most urgency-elevated class, REFLECTION the most urgency-muted;
+    # MORNING_BRIEF stays the lowest-load class, DRAFT_REPLY the highest-load.
+    assert urgency_base[EventClass.CALENDAR_CONFLICT] == max(urgency_base.values())
+    assert urgency_base[EventClass.REFLECTION] == min(urgency_base.values())
+    assert load_base[EventClass.DRAFT_REPLY] == max(load_base.values())
+    assert load_base[EventClass.MORNING_BRIEF] == min(load_base.values())

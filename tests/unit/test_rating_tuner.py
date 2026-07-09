@@ -150,6 +150,73 @@ async def test_recall_window_excludes_claims_older_than_seven_nights() -> None:
     assert rating_claims == []  # AC5-shaped: a stale-only corpus writes nothing
 
 
+# --- CR2-11/TK-185/Q-95: first-night tunes move WITH the outcome signal --------------------
+#
+# TK-41's per-class defaults are now reconciled into the RatingTuner's locked [clamp_floor,
+# clamp_ceiling] band (Q-95 ruling: the band stands, the DEFAULTS moved). This directly pins the
+# register's two exact repros (CR2-11) plus generalizes the check to every EventClass, so a
+# future out-of-band default regresses loudly instead of silently snapping on the first tune.
+
+
+async def test_cr2_11_first_night_tune_moves_with_the_outcome_signal_for_every_class() -> None:
+    """Starting from the documented (now in-band) defaults, an all-load-bearing corpus must
+    never LOWER urgency_base and an all-ignored corpus must never RAISE it, on the very first
+    tune night (no prior rating_params claim), for EVERY EventClass — including the register's
+    two exact repros: CALENDAR_CONFLICT + all-load-bearing, and REFLECTION + all-ignored."""
+    op = load_operating_params()
+
+    for event_class in EventClass:
+        default = default_params_for(event_class)
+
+        # All-load-bearing corpus: urgency_base must not decrease.
+        kg_up = InMemoryEntityKG()
+        writer_up = ObservationWriter(
+            entity_kg=kg_up, scope_registry=ScopeRegistry(), user_id="alice"
+        )
+        labeler_up = OutcomeLabeler(writer=writer_up)
+        for i in range(3):
+            await _seed_terminal(
+                labeler_up,
+                event_class=event_class,
+                outcome=Outcome.LOAD_BEARING,
+                item_ref=f"lb-{i}",
+                resolved_at=_NOW - timedelta(days=i),
+            )
+        tuner_up = RatingTuner(
+            entity_kg=kg_up, writer=writer_up, params=op, user_id="alice", clock=lambda: _NOW
+        )
+        await tuner_up.tune(_NOW)
+        updated_up = await _current_rating_claim(kg_up, event_class)
+        assert updated_up.urgency_base >= default.urgency_base, (
+            f"{event_class}: all-load-bearing corpus lowered urgency_base "
+            f"({default.urgency_base} -> {updated_up.urgency_base})"
+        )
+
+        # All-ignored corpus: urgency_base must not increase.
+        kg_down = InMemoryEntityKG()
+        writer_down = ObservationWriter(
+            entity_kg=kg_down, scope_registry=ScopeRegistry(), user_id="alice"
+        )
+        labeler_down = OutcomeLabeler(writer=writer_down)
+        for i in range(3):
+            await _seed_terminal(
+                labeler_down,
+                event_class=event_class,
+                outcome=Outcome.IGNORED,
+                item_ref=f"ig-{i}",
+                resolved_at=_NOW - timedelta(days=i),
+            )
+        tuner_down = RatingTuner(
+            entity_kg=kg_down, writer=writer_down, params=op, user_id="alice", clock=lambda: _NOW
+        )
+        await tuner_down.tune(_NOW)
+        updated_down = await _current_rating_claim(kg_down, event_class)
+        assert updated_down.urgency_base <= default.urgency_base, (
+            f"{event_class}: all-ignored corpus raised urgency_base "
+            f"({default.urgency_base} -> {updated_down.urgency_base})"
+        )
+
+
 # --- AC2/AC3: ceiling/floor -----------------------------------------------------------------
 
 

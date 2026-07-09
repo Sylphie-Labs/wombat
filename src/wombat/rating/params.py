@@ -87,15 +87,25 @@ class RatingParams:
 # Documented per-class defaults. A request for a known event class returns a fully-typed
 # RatingParams with these values (AC1). Classes absent here fall back to the neutral
 # baseline via ``default_params_for``.
+#
+# TK-185/Q-95: every urgency_base/load_base here MUST lie inside the RatingTuner's locked
+# [0.35, 0.65] clamp band (``OperatingParams.rating_tuner``, TK-48 joint block). That band is
+# the tuner's legal operating region, locked jointly with the 12/day surfacing ceiling — it is
+# NOT to be widened to fit an out-of-band default (Q-95 ruling). CALENDAR_CONFLICT.urgency_base
+# and MORNING_BRIEF/REFLECTION's *_base were originally seeded at 0.7/0.3, outside the band, so
+# the first non-empty-corpus tune night silently snapped them to the nearest band edge
+# regardless of the outcome signal (CR2-11). Moved to the nearest in-band value (0.65/0.35)
+# instead, preserving the designed ordinal differentiation (elevated / neutral / muted) inside
+# the band.
 _DEFAULTS: dict[EventClass, RatingParams] = {
     EventClass.CALENDAR_CONFLICT: RatingParams(
-        urgency_base=0.7, urgency_gain=0.6, load_base=0.4, load_gain=0.5
+        urgency_base=0.65, urgency_gain=0.6, load_base=0.4, load_gain=0.5
     ),
     EventClass.MORNING_BRIEF: RatingParams(
-        urgency_base=0.5, urgency_gain=0.5, load_base=0.3, load_gain=0.5
+        urgency_base=0.5, urgency_gain=0.5, load_base=0.35, load_gain=0.5
     ),
     EventClass.REFLECTION: RatingParams(
-        urgency_base=0.3, urgency_gain=0.4, load_base=0.5, load_gain=0.5
+        urgency_base=0.35, urgency_gain=0.4, load_base=0.5, load_gain=0.5
     ),
     EventClass.DRAFT_REPLY: RatingParams(
         urgency_base=0.5, urgency_gain=0.5, load_base=0.6, load_gain=0.5
