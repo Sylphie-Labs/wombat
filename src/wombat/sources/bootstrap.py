@@ -48,6 +48,15 @@ registry.SourceRegistry`` already enqueues every polled event under
 message item's own key — a re-poll of the same message is ``ALREADY_QUEUED`` on both events. The
 triage rule set is loaded ONCE (``load_triage_rules()``, at source-construction time in
 ``_maybe_register_gmail``), never per poll.
+
+TK-162 (EP-29, Q-97): ``_maybe_register_asr`` registers ``ASRSource`` (``sources/asr.py``) under
+id ``"asr"`` following the SAME loud-skip pattern as the sources above, but with TWO independent
+skip conditions instead of one: an unset/blank ``config.wombat_asr_drop_dir`` (naming
+``WOMBAT_ASR_DROP_DIR``), and separately faster-whisper (the ``[voice]`` extra) not being
+installed (an ``ImportError`` constructing ``FasterWhisperTranscriber``) — either skips the
+source with its own loud log, never raises. The real ``FasterWhisperTranscriber`` is constructed
+ONLY here (``sources/asr.py`` never constructs it itself). Registration-not-rewrite (DEC-5/
+TK-161): ``SourceRegistry``/``sources/base.py`` are untouched.
 """
 
 from __future__ import annotations
@@ -74,6 +83,7 @@ from wombat.integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
+from wombat.sources.asr import ASRSource, FasterWhisperTranscriber
 from wombat.sources.base import InputSource, SourceEvent
 from wombat.sources.registry import Enqueuer, SourceRegistry
 from wombat.user_model.feedback_source import FeedbackInputSource
@@ -85,6 +95,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_GCAL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_GMAIL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS = 300.0
+DEFAULT_ASR_POLL_INTERVAL_SECONDS = 300.0
 
 
 def _utc_now() -> datetime:
@@ -284,6 +295,44 @@ def _maybe_register_feedback(
     )
 
 
+def _maybe_register_asr(
+    registry: SourceRegistry,
+    config: WombatConfig,
+    *,
+    poll_interval_seconds: float,
+) -> None:
+    """TK-162 (Q-97): register the local ASR drop-directory source (``ASRSource``) iff
+    ``config.wombat_asr_drop_dir`` is non-blank AND faster-whisper is importable — the SAME
+    loud-skip pattern as ``_maybe_register_gcal``/``_maybe_register_gmail``/
+    ``_maybe_register_feedback`` above, with two independent skip conditions. Neither missing
+    piece ever raises: voice is additive (CON-3), so a checkout without the ``[voice]`` extra,
+    or one with no drop directory configured, still boots clean with every other source intact.
+    The real ``FasterWhisperTranscriber`` is constructed ONLY here."""
+    raw_dir = (config.wombat_asr_drop_dir or "").strip()
+    if not raw_dir:
+        logger.warning(
+            "asr source not wired: WOMBAT_ASR_DROP_DIR not configured — skipping the local "
+            "voice drop-directory channel (boot continues without it)"
+        )
+        return
+    try:
+        transcriber = FasterWhisperTranscriber(model_name=config.wombat_asr_model)
+    except ImportError:
+        logger.warning(
+            "asr source not wired: faster-whisper is not installed — install the [voice] "
+            "extra (`uv sync --extra voice`) to enable local ASR (boot continues without it)",
+            exc_info=True,
+        )
+        return
+    registry.register(
+        ASRSource(
+            drop_dir=Path(raw_dir),
+            transcriber=transcriber,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+    )
+
+
 def build_source_registry(
     config: WombatConfig,
     queue: Enqueuer,
@@ -293,20 +342,23 @@ def build_source_registry(
     gcal_poll_interval_seconds: float = DEFAULT_GCAL_POLL_INTERVAL_SECONDS,
     gmail_poll_interval_seconds: float = DEFAULT_GMAIL_POLL_INTERVAL_SECONDS,
     feedback_poll_interval_seconds: float = DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS,
+    asr_poll_interval_seconds: float = DEFAULT_ASR_POLL_INTERVAL_SECONDS,
     gcal_token_store: GcalTokenStore | None = None,
     gmail_token_store: GmailTokenStore | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
-    of the gcal/gmail/feedback sources INDEPENDENTLY when its own configuration is present
-    (Q-61/Q-67 for gcal/gmail; TK-176 for feedback). Never raises for missing/absent config or
-    tokens — a loud log names what is missing and the source is skipped; the returned registry
-    is always usable, with zero or more sources registered.
+    of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
+    (Q-61/Q-67 for gcal/gmail; TK-176 for feedback; TK-162/Q-97 for asr). Never raises for
+    missing/absent config, tokens, or the optional [voice] extra — a loud log names what is
+    missing and the source is skipped; the returned registry is always usable, with zero or
+    more sources registered.
 
     ``tz``/``clock`` are injected (no config field is read internally here beyond the Google
-    OAuth client id/secret and ``wombat_feedback_file``) — callers supply the wombat civil-local
-    tz (DEC-21) and, in tests, a fake clock. ``gcal_token_store``/``gmail_token_store`` default to
-    the real OS-keyring ``TokenStore`` adapters; tests inject in-memory fakes so this function
-    never touches the real vault outside the live smokes.
+    OAuth client id/secret, ``wombat_feedback_file``, and ``wombat_asr_drop_dir``/
+    ``wombat_asr_model``) — callers supply the wombat civil-local tz (DEC-21) and, in tests, a
+    fake clock. ``gcal_token_store``/``gmail_token_store`` default to the real OS-keyring
+    ``TokenStore`` adapters; tests inject in-memory fakes so this function never touches the
+    real vault outside the live smokes.
     """
     registry = SourceRegistry(queue)
     _maybe_register_gcal(
@@ -328,6 +380,11 @@ def build_source_registry(
         registry,
         config,
         poll_interval_seconds=feedback_poll_interval_seconds,
+    )
+    _maybe_register_asr(
+        registry,
+        config,
+        poll_interval_seconds=asr_poll_interval_seconds,
     )
     return registry
 
@@ -420,6 +477,7 @@ def build_brief_fetches(
 
 
 __all__ = [
+    "DEFAULT_ASR_POLL_INTERVAL_SECONDS",
     "DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS",
     "DEFAULT_GCAL_POLL_INTERVAL_SECONDS",
     "DEFAULT_GMAIL_POLL_INTERVAL_SECONDS",

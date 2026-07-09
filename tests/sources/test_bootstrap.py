@@ -25,6 +25,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -52,13 +53,17 @@ def _utc_now() -> datetime:
 
 
 def _make_config(
-    *, client_id: str | None = None, client_secret: str | None = None
+    *,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    asr_drop_dir: str | None = None,
 ) -> WombatConfig:
     return WombatConfig(
         deepseek_api_key=SecretStr("unused-in-this-test"),
         deepseek_base_url="https://unused.example",
         google_oauth_client_id=client_id,
         google_oauth_client_secret=SecretStr(client_secret) if client_secret is not None else None,
+        wombat_asr_drop_dir=asr_drop_dir,
     )
 
 
@@ -344,6 +349,60 @@ def test_no_client_creds_skips_loudly_naming_the_missing_config(
 
     assert consent_calls == []
     assert "GOOGLE_OAUTH_CLIENT_ID" in caplog.text or "not configured" in caplog.text
+
+
+# ---------------------------------------------------------------------- TK-162/Q-97: asr lesion
+
+
+def test_asr_source_not_wired_when_drop_dir_unset(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2 (lesion): WOMBAT_ASR_DROP_DIR unset -> one loud skip log, no 'asr' source
+    registered, and the gcal/gmail paths are entirely unaffected (both still skip loudly on
+    their own missing config, exactly as the pre-existing suite already proves)."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_config()  # no client id/secret, no asr drop dir at all
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "asr")
+    assert not _is_registered(registry, "gcal")
+    assert not _is_registered(registry, "gmail")
+    assert "WOMBAT_ASR_DROP_DIR" in caplog.text
+    assert consent_calls == []
+
+
+def test_asr_source_not_wired_when_faster_whisper_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A configured drop dir alone is not enough: faster-whisper genuinely is not installed in
+    this test env (the optional ``[voice]`` extra, never a core dep), so ``_maybe_register_asr``
+    catches the real ``ImportError`` from constructing ``FasterWhisperTranscriber`` and skips
+    loudly — never raises, never registers, no import error escapes anywhere in this call."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_config(asr_drop_dir=str(tmp_path))
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "asr")
+    assert "faster-whisper" in caplog.text.lower()
+    assert consent_calls == []
 
 
 # ------------------------------------------------------------------------------ both + polling

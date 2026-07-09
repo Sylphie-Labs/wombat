@@ -60,6 +60,15 @@ class WombatConfig(BaseSettings):
     # with a loud log naming this var when it is missing/blank (the push channel is unaffected).
     wombat_feedback_file: str | None = None
 
+    # OPTIONAL (TK-162, Q-97): the local ASR drop-directory channel — ``wombat_asr_drop_dir`` is
+    # the watched directory an operator drops audio recordings into; ``wombat_asr_model`` names
+    # the faster-whisper model. Deliberately NOT in REQUIRED_ENV — the drain spine/demo/tests
+    # must keep booting without them; ``sources.bootstrap._maybe_register_asr`` skips the ASR
+    # source with a loud log naming ``WOMBAT_ASR_DROP_DIR`` when the directory is missing/blank,
+    # and separately when faster-whisper (the ``[voice]`` extra) is not installed.
+    wombat_asr_drop_dir: str | None = None
+    wombat_asr_model: str = "base"
+
 
 def load_config() -> WombatConfig:
     """Load + validate config from the environment, or raise ConfigurationError loudly."""

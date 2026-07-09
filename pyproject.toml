@@ -24,7 +24,8 @@ dependencies = [
 providers = ["anthropic>=0.40.0", "openai>=1.55.0"]
 # Local voice I/O rides behind wombat's own sink/source seams (TK-164, Q-96) — never a hard dep;
 # the concrete adapters lazy-import these, so a checkout without this extra still boots clean.
-voice = ["pyttsx3>=2.90"]
+# faster-whisper (TK-162, Q-97) rides the SAME extra alongside pyttsx3 — local ASR, offline.
+voice = ["pyttsx3>=2.90", "faster-whisper>=1.0"]
 
 [project.scripts]
 wombat = "wombat:main"
@@ -75,6 +76,13 @@ ignore_missing_imports = true
 # pyttsx3 ships no py.typed marker/stubs, and is an OPTIONAL extra not installed by default
 # (TK-164, Q-96) — mypy must not fail to resolve it inside Pyttsx3Adapter's lazy import.
 module = ["pyttsx3.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# faster-whisper ships no py.typed marker/stubs, and is an OPTIONAL extra not installed by
+# default (TK-162, Q-97) — mypy must not fail to resolve it inside FasterWhisperTranscriber's
+# lazy import.
+module = ["faster_whisper.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
