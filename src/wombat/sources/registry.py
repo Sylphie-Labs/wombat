@@ -90,6 +90,7 @@ class SourceRegistry:
                 _log.exception("source %s: poll() raised; marking degraded", source.id)
                 self._degraded.add(source.id)
             else:
+                self._degraded.discard(source.id)
                 for event in events:
                     self._enqueue.enqueue(
                         QueueItem(

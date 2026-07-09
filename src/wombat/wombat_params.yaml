@@ -22,7 +22,7 @@ version: 4
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
 # revise these; they were never "locked". The gate (TK-27/28) reads them from here.
-urgency_threshold: 0.75      # immediate-voice fires when item urgency >= this
+urgency_threshold: 0.75      # immediate-voice fires when item urgency > this (strict, TK-171)
 load_flush_threshold: 1.0    # the load-triggered consolidated flush fires once/day at >= this
 per_class_daily_ceiling: 3   # max immediate-voice surfacings per sender class per day
 

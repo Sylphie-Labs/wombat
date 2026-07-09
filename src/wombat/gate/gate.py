@@ -75,10 +75,11 @@ def stub_evaluate(
 
     Otherwise the stub score is read straight out of the payload:
     ``payload["stub_urgency"]`` of ``"high"`` -> 0.9, ``"low"`` (or anything else / missing) ->
-    0.1 (the quiet default). ``urgency >= urgency_threshold`` surfaces immediately; otherwise
-    it holds. ``urgency_threshold``, ``staleness_ceiling_s``, and ``confidence_floor`` are all
-    injected args — composition binds the real ``OperatingParams`` values; no inline literal
-    lives in this module.
+    0.1 (the quiet default). ``urgency > urgency_threshold`` surfaces immediately (TK-171:
+    strict, aligned with the production ``trigger.is_surfacing_worthy`` predicate — an item
+    exactly AT the threshold holds); otherwise it holds. ``urgency_threshold``,
+    ``staleness_ceiling_s``, and ``confidence_floor`` are all injected args — composition binds
+    the real ``OperatingParams`` values; no inline literal lives in this module.
 
     Exactly one ``ScoredItem`` is returned per call either way (a HOLD from a presence fail-safe
     still identifies which item held, with a zero score since it was never actually scored) — no
@@ -107,7 +108,7 @@ def stub_evaluate(
         str(gate_item.payload.get("stub_urgency", "low")), 0.1
     )
     action = (
-        GateAction.SURFACE_IMMEDIATE if stub_urgency >= urgency_threshold else GateAction.HOLD
+        GateAction.SURFACE_IMMEDIATE if stub_urgency > urgency_threshold else GateAction.HOLD
     )
     return GateDecision(
         action=action,

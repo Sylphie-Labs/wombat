@@ -58,6 +58,7 @@ class _StubSource:
     poll_interval_seconds: float
     events_by_call: list[list[SourceEvent]] = field(default_factory=list)
     fail_with: Exception | None = None
+    fail_until_call: int = 0  # with fail_with set: 0 = fail every call; N = fail only calls <= N
     start_called: int = 0
     stop_called: int = 0
     poll_count: int = 0
@@ -70,7 +71,9 @@ class _StubSource:
 
     async def poll(self) -> list[SourceEvent]:
         self.poll_count += 1
-        if self.fail_with is not None:
+        if self.fail_with is not None and (
+            self.fail_until_call == 0 or self.poll_count <= self.fail_until_call
+        ):
             raise self.fail_with
         if not self.events_by_call:
             return []
@@ -189,6 +192,27 @@ async def test_ac4_poll_error_is_logged_degrades_source_others_keep_polling(
 
     error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert any("bad" in record.message for record in error_records)
+
+
+async def test_tk171_degraded_source_clears_from_degraded_sources_on_a_later_success() -> None:
+    """A source that raises on cycle 1 and succeeds on cycle 2 is degraded after cycle 1, but
+    NOT after cycle 2 — degraded_sources tracks only the MOST RECENT poll() outcome."""
+    enqueuer = _FakeEnqueuer()
+    registry = SourceRegistry(enqueuer)
+    flaky = _StubSource(
+        id="flaky", poll_interval_seconds=0.01, fail_with=RuntimeError("boom"), fail_until_call=1
+    )
+    registry.register(flaky)
+
+    await registry.start()
+    try:
+        await _wait_until(lambda: flaky.poll_count >= 1)
+        assert "flaky" in registry.degraded_sources
+
+        await _wait_until(lambda: flaky.poll_count >= 2)
+        assert "flaky" not in registry.degraded_sources
+    finally:
+        await registry.stop()
 
 
 @_requires_pg

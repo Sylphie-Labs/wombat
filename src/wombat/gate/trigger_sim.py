@@ -6,7 +6,8 @@ daily ceiling, and reports surfacings/day so thresholds can be tuned before hard
 
 Two DISTINCT surfacing classes are counted (per the TK-26 AC / DEC-16):
 
-* immediate-voice  — fired when an item's ``urgency`` >= ``urgency_threshold``. Counted
+* immediate-voice  — fired when an item's ``urgency`` > ``urgency_threshold`` (TK-171: strict,
+  aligned with the production ``is_surfacing_worthy`` predicate). Counted
   per sender CLASS and capped by the per-class daily ceiling.
 * load-flush       — fired AT MOST ONCE/day when the day's cumulative load crosses
   ``load_flush_threshold``. This is the LOAD-triggered consolidated flush, a separate class
@@ -71,15 +72,16 @@ def evaluate_day(
 ) -> SweepResult:
     """Evaluate one threshold combo over a day. Pure.
 
-    Immediate-voice: an item surfaces when urgency >= threshold, but no more than
-    ``per_class_ceiling`` items per sender class surface in the day; the rest are ceiling hits.
+    Immediate-voice: an item surfaces when urgency > threshold (TK-171: strict, matching
+    ``trigger.is_surfacing_worthy``), but no more than ``per_class_ceiling`` items per sender
+    class surface in the day; the rest are ceiling hits.
     Load-flush: fires once if total day load >= ``load_flush_threshold``.
     """
     surfaced_per_class: Counter[str] = Counter()
     ceiling_hits = 0
     immediate = 0
     for row in rows:
-        if row.urgency >= urgency_threshold:
+        if row.urgency > urgency_threshold:
             if surfaced_per_class[row.sender_class] < per_class_ceiling:
                 surfaced_per_class[row.sender_class] += 1
                 immediate += 1

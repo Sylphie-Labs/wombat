@@ -72,7 +72,7 @@ def test_ac_sweep_writes_csv_with_one_row_per_combo() -> None:
 def _per_class_immediate(rows: list[Any], urgency_threshold: float) -> dict[str, int]:
     counts: dict[str, int] = {}
     for r in rows:
-        if r.urgency >= urgency_threshold:
+        if r.urgency > urgency_threshold:  # TK-171: strict, matching evaluate_day
             counts[r.sender_class] = counts.get(r.sender_class, 0) + 1
     return counts
 
@@ -132,3 +132,42 @@ def test_recommendation_appended_with_two_sweep_rows() -> None:
     assert chosen.immediate_voice_count <= 3 * 5  # ceiling caps each of <=5 classes at 3
     assert chosen.flush_count <= MAX_FLUSH
     assert looser.immediate_voice_count >= chosen.immediate_voice_count
+
+
+def test_tk171_urgency_exactly_at_threshold_holds_across_prod_sim_and_stub() -> None:
+    """CR-6/CR-9: the worth predicate is STRICT (``>``, not ``>=``) everywhere it's evaluated —
+    production's ``is_surfacing_worthy``, this module's ``evaluate_day`` sim, and the TK-6 gate
+    stub. An item whose urgency lands EXACTLY on the threshold must HOLD in all three, never
+    surface."""
+    from wombat.gate.gate import stub_evaluate
+    from wombat.gate.models import GateAction, GateItem, ItemKind, ScoredItem
+    from wombat.gate.trigger import is_surfacing_worthy
+    from wombat.gate.trigger_sim import ScoredRow, evaluate_day
+    from wombat.sources.presence import PresenceSnapshot, PresenceState
+
+    threshold = 0.9  # matches the stub's "high" score exactly (_STUB_URGENCY_SCORES)
+
+    # 1. production: trigger.is_surfacing_worthy
+    scored = ScoredItem(item_id="a", item_kind=ItemKind.GENERIC, urgency=threshold, load=0.0)
+    assert is_surfacing_worthy(scored, threshold) is False
+
+    # 2. sim: trigger_sim.evaluate_day
+    row = ScoredRow(sender_class="automated", urgency=threshold, load=0.0)
+    result = evaluate_day(
+        [row], urgency_threshold=threshold, load_flush_threshold=999.0, per_class_ceiling=3
+    )
+    assert result.immediate_voice_count == 0
+
+    # 3. stub: gate.gate.stub_evaluate
+    gate_item = GateItem(
+        item_id="b", item_kind=ItemKind.GENERIC, created_at=0.0, payload={"stub_urgency": "high"}
+    )
+    presence = PresenceSnapshot(state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=0.0)
+    decision = stub_evaluate(
+        gate_item,
+        presence,
+        urgency_threshold=threshold,
+        staleness_ceiling_s=300.0,
+        confidence_floor=0.5,
+    )
+    assert decision.action is GateAction.HOLD
