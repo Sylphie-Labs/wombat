@@ -173,6 +173,24 @@ nothing side-effectful happens off a reviewable trail.
 - Terse, load-bearing output — no filler, no performance, no credit-seeking.
 - Voiced or text-only — full capability without speech.
 
+### Voice providers & configuration surface (added 2026-07-09, Jim's direction)
+- STT and TTS are **pluggable provider slots**; the defaults are **local and free** —
+  faster-whisper (STT) and pyttsx3 (TTS) — so zero-config wombat stays fully offline.
+- Integrated cloud options at launch: **ElevenLabs** (TTS flagship + Scribe STT),
+  **Deepgram** (STT flagship + Aura TTS), **Fish Audio** (TTS + STT). Cloud voice is
+  **per-provider user opt-in** (chosen in config AND keyed with the user's own API key);
+  the default configuration keeps exactly one egress (the DeepSeek mouth). Degrade is
+  strictly cloud → local (DEC-28).
+- The assistant's **name is user-configurable** (default: "the Steward").
+- Configuration happens in a local **Electron + React companion app** over a
+  loopback-only Python settings API — intended to grow into wombat's front-end
+  (future companion/avatar surface, e.g. a rendered 3D assistant) (DEC-31). In v1 it is
+  the configuration surface only: no analytics (DEC-29), no accounts, no packaging or
+  installer (DEC-30). Secrets live in the OS keyring; non-secrets in a local settings
+  file the operator's `.env` always overrides (DEC-32).
+- This is the first **distribution seed** — people other than Jim configuring their own
+  wombat — honored in v1 as the config surface only (DEC-30).
+
 ## Open decision (shapes everything downstream)
 
 Define what **"necessary"** means concretely for the first integration (calendar or inbox).

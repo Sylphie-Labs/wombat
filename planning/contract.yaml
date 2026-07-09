@@ -107,6 +107,7 @@ nodes:
   - { id: FEAT-10, kind: feature, parent: null, title: "Browser / computer use (in v1)", intent: "Accessibility-tree browser automation (Playwright) as the workhorse, niche screenshot computer-use, web lookups/research, form-filling, with explicit login handoff to the human.", status: todo, priority: P3 }
   - { id: FEAT-11, kind: feature, parent: null, title: "Privacy, safety & action trail", intent: "Local data residency, no action without a reviewable trail, review-before-send for high-consequence outbound, no unattended sensitive auth — privacy as character.", status: todo, priority: P1 }
   - { id: FEAT-12, kind: feature, parent: null, title: "Voice & interaction (in v1, as a registered input source)", intent: "Voice is in v1 'out the box' — but built as one registered input source on the loop's input queue (not a special path), plus terse load-bearing spoken/text output on rare speak-events. Full capability without speech.", status: todo, priority: P2 }
+  - { id: FEAT-13, kind: feature, parent: null, title: "Configuration surface & companion app (Electron + React)", intent: "The user-facing configuration surface - assistant name, voice provider choices, user-supplied API keys - as a local Electron + React app over a loopback Python settings API; intended to grow into wombat's front-end (future companion/avatar surface, DEC-31). Config only in v1 - zero analytics (DEC-29), no accounts/packaging (DEC-30).", status: todo, priority: P2 }
   - { id: EP-1, kind: epic, parent: FEAT-1, title: "Engine assembly & wombat bootstrap", intent: "Construct the cog-worx Engine with wombat's ModelRegistry/BudgetPolicy/Registry/RecallStack/personality/rules; one composition root.", status: todo, priority: P1 }
   - { id: EP-2, kind: epic, parent: FEAT-1, title: "Durable work queue (WombatQueue)", intent: "Bounded, persisted enqueue/drain with idempotent items; queue is wombat domain state, journal stays run authority.", status: todo, priority: P1 }
   - { id: EP-3, kind: epic, parent: FEAT-1, title: "Source registry & registration contract", intent: "Pluggable input-source contract (id/poll/push/map) + lifecycle; adding a source is registration, not a rewrite (DEC-5).", status: todo, priority: P1 }
@@ -137,6 +138,8 @@ nodes:
   - { id: EP-28, kind: epic, parent: FEAT-11, title: "Structural safety posture wiring", intent: "Wire taint latch + approval gate + local-residency defaults; assert lethal-trifecta break (S10/NG-5/NG-7).", status: todo, priority: P1 }
   - { id: EP-29, kind: epic, parent: FEAT-12, title: "Voice input source (ASR) on the queue", intent: "ASR listener registered as one input source feeding the same queue (DEC-7); no special path.", status: todo, priority: P2 }
   - { id: EP-30, kind: epic, parent: FEAT-12, title: "Terse spoken/text output sink", intent: "Speak only on rare speak-events the gate decided; full capability without speech (CON-3).", status: todo, priority: P2 }
+  - { id: EP-31, kind: epic, parent: FEAT-12, title: "Pluggable voice provider slots (STT/TTS)", intent: "Cloud STT/TTS providers (ElevenLabs, Deepgram, Fish Audio) behind the EXISTING Transcriber/TTSAdapter seams; local-free defaults stand; egress is structural per-provider user opt-in with strictly cloud-to-local degrade (DEC-28, Q-100).", status: todo, priority: P2 }
+  - { id: EP-32, kind: epic, parent: FEAT-13, title: "Local settings app (Electron shell)", intent: "Electron + React settings app over the loopback Python settings API - v1 is the configuration surface ONLY (DEC-29/DEC-30); the shell is deliberately sized for the app's stated trajectory as wombat's front-end (future 3D assistant avatar - flagged future feature, NOT a v1 ticket) (DEC-31/DEC-32).", status: todo, priority: P2 }
   - id: TK-1
     kind: ticket
     parent: EP-1
@@ -3802,6 +3805,466 @@ nodes:
       - tests/gate/test_pending_set.py
 
 # Open questions, assumptions, risks, decisions, deferrals. Decisions are append-only.
+  - id: TK-186
+    kind: ticket
+    parent: EP-1
+    title: "Fix load_config - drop the pre-pydantic os.environ REQUIRED_ENV check so a .env-only DeepSeek setup boots"
+    intent: "As the operator with DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL present ONLY in the repo-root .env (the exact setup config.py's own comment promises), when wombat boots, then load_config() returns a populated WombatConfig instead of raising - today src/wombat/config.py:75 checks os.environ BEFORE pydantic-settings ever reads .env, contradicting the module's documented contract (bit Jim live 2026-07-09; workaround in place)."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: production
+    complexity_budget: "ONE function reshaped - load_config() stops pre-checking os.environ and lets pydantic-settings construct WombatConfig (env vars still take precedence over .env via SettingsConfigDict), converting the pydantic ValidationError for a missing required field into ConfigurationError naming the FIRST missing variable in REQUIRED_ENV order (the loud-boot contract and message shape are unchanged). No new fields, no new deps, no bootstrap changes."
+    acceptance_criteria:
+      - given: "a process env with NO DEEPSEEK_* variables and a repo-root .env containing both DEEPSEEK_API_KEY and DEEPSEEK_BASE_URL"
+        when: "load_config() runs"
+        then: "it returns a WombatConfig populated from .env and does not raise."
+      - given: "neither the env nor .env provides DEEPSEEK_API_KEY"
+        when: "load_config() runs"
+        then: "ConfigurationError is raised naming DEEPSEEK_API_KEY (the first missing variable; existing message shape preserved)."
+      - given: "an explicit env var value AND a different .env value for the same key"
+        when: "load_config() runs"
+        then: "the env var wins (pydantic-settings precedence unchanged); the full existing suite stays green."
+    non_goals:
+      - "No new config fields (TK-187 owns the voice/persona surface)."
+      - "No keyring involvement (TK-188)."
+    depends_on: []
+    files_in_scope:
+      - src/wombat/config.py
+      - tests/unit/test_config.py
+  - id: TK-187
+    kind: ticket
+    parent: EP-31
+    title: "Voice/persona config surface - STT/TTS provider selection, per-provider key overrides, voice id, assistant name (all optional; default fully offline)"
+    intent: "As the provider layer (DEC-28) and settings app (EP-32), I need WombatConfig to carry the voice-provider selection surface - wombat_stt_provider / wombat_tts_provider (closed set local|deepgram|elevenlabs|fish, default local), wombat_tts_voice_id, wombat_stt_model, SecretStr overrides wombat_elevenlabs_api_key / wombat_deepgram_api_key / wombat_fish_api_key, and wombat_assistant_name (default Steward) - with ZERO behavior change while defaults hold."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Config fields + .env.example lines + docstrings ONLY, following the exact optional-field precedent already in config.py (deliberately NOT in REQUIRED_ENV; consumer validation deferred to construction sites). Provider names validated at field level to the closed set (Literal) so a typo fails loud at boot. NO consumer wiring (TK-193), no keyring (TK-188), no UI."
+    acceptance_criteria:
+      - given: "a default environment (none of the new variables set)"
+        when: "load_config() runs and the runtime boots"
+        then: "both providers resolve to local, assistant name to Steward, and the full existing suite is green - behavior stays byte-for-byte offline."
+      - given: "WOMBAT_STT_PROVIDER=deepgram, WOMBAT_TTS_PROVIDER=fish, WOMBAT_TTS_VOICE_ID set"
+        when: "load_config() runs"
+        then: "the fields are populated and typed; every key field is SecretStr."
+      - given: "WOMBAT_STT_PROVIDER=nonsense"
+        when: "load_config() runs"
+        then: "it fails loud naming the offending variable (closed provider vocabulary)."
+    non_goals:
+      - "No provider construction or bootstrap wiring (TK-193)."
+      - "No keyring reads (TK-188 owns key resolution)."
+    depends_on:
+      - TK-186
+    files_in_scope:
+      - src/wombat/config.py
+      - .env.example
+      - tests/unit/test_config.py
+  - id: TK-188
+    kind: ticket
+    parent: EP-31
+    title: "Voice provider key vault - OS-keyring store on the existing TokenStore pattern + env-then-keyring resolution helper"
+    intent: "As the cloud provider constructors (TK-189..TK-192) and the settings API (TK-197), I resolve a provider API key through ONE helper - explicit env/.env value first, then the OS keyring (service wombat, per-provider accounts e.g. voice-elevenlabs-api-key), else absent - so secrets live in the same Windows credential vault the Google OAuth tokens already use and are never written to any file (DEC-32)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "ONE new module src/wombat/voice/key_store.py riding the gcal token_store.py shape - keyring get/set/delete behind a small Protocol so tests inject an in-memory fake; a keyring failure on WRITE raises a loud module error (the settings API surfaces it); a keyring failure on READ logs a loud WARNING and resolves as absent so boot never dies for a voice reason (CON-3). Resolution order pinned by test."
+    acceptance_criteria:
+      - given: "a key present in the env override field and a different value in the (fake) keyring"
+        when: "the resolution helper runs"
+        then: "the env value wins."
+      - given: "no env override and a stored (fake) keyring value"
+        when: "resolution runs"
+        then: "the keyring value is returned; absent both, None is returned."
+      - given: "a (fake) keyring backend that raises on read"
+        when: "resolution runs"
+        then: "a loud WARNING is logged and None is returned - a broken vault never crashes boot (CON-3)."
+    non_goals:
+      - "No provider HTTP code (TK-189+)."
+      - "DeepSeek/Google credentials do NOT move to this vault (flagged follow-up, out of scope)."
+    depends_on:
+      - TK-187
+    files_in_scope:
+      - src/wombat/voice/__init__.py
+      - src/wombat/voice/key_store.py
+      - tests/voice/test_key_store.py
+  - id: TK-189
+    kind: ticket
+    parent: EP-31
+    title: "Cloud STT pattern-setter - voice HTTP transport primitive + Deepgram Transcriber behind the existing TK-162 protocol"
+    intent: "As the ASR seam, DeepgramTranscriber implements the EXISTING Transcriber Protocol (transcribe(path) -> str, src/wombat/sources/asr.py) via ONE httpx POST of the audio file to Deepgram's prerecorded-transcription endpoint - establishing the thin-REST-no-vendor-SDK pattern (Q-100) and the voice-cloud optional extra every later provider rides."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "src/wombat/voice/stt.py - a tiny shared audio-POST transport helper (httpx LAZY-imported at construction per the Q-46/Q-72 clean-checkout bar; explicit timeout; non-2xx raises a module error the ASRSource failed/ path already absorbs) + DeepgramTranscriber (key + optional model). Tests run on a fake transport - NO live calls (live smokes are DEF-7). pyproject gains the voice-cloud extra (httpx only). NO selection wiring and NO fallback wrapper (TK-193)."
+    acceptance_criteria:
+      - given: "a fake transport returning a canned Deepgram response body"
+        when: "DeepgramTranscriber.transcribe(path) runs over a small fixture file"
+        then: "the transcript text is returned; the request carried the auth header and the audio bytes to the prerecorded endpoint shape."
+      - given: "a fake transport returning a non-2xx or malformed body"
+        when: "transcribe runs"
+        then: "it raises (never returns a lying empty transcript) - ASRSource's per-file failed/ handling is unchanged."
+      - given: "a checkout WITHOUT the voice-cloud extra"
+        when: "importing wombat.voice.stt"
+        then: "the import succeeds; only CONSTRUCTING a cloud transcriber raises ImportError (lazy-import bar)."
+    non_goals:
+      - "No streaming/websocket STT (the Q-97 drop-directory capture shape stands)."
+      - "No vendor SDK dependency (Q-100)."
+    depends_on:
+      - TK-188
+    files_in_scope:
+      - src/wombat/voice/stt.py
+      - tests/voice/test_stt_deepgram.py
+      - pyproject.toml
+  - id: TK-190
+    kind: ticket
+    parent: EP-31
+    title: "ElevenLabs Scribe + Fish Audio STT providers riding the TK-189 pattern"
+    intent: "As the ASR seam, ElevenLabsScribeTranscriber and FishAudioTranscriber implement the Transcriber Protocol as thin single-POST httpx clients over the TK-189 transport helper, completing the launch STT roster (DEC-28 opt-in providers)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Two classes in src/wombat/voice/stt.py, each a request-shape + response-parse over the shared helper; same lazy-import, same raise-on-failure contract; fake-transport tests mirroring TK-189. Nothing else."
+    acceptance_criteria:
+      - given: "a fake transport returning each provider's canned success body"
+        when: "transcribe(path) runs for each provider"
+        then: "the transcript is returned and the request carries that provider's auth header and endpoint shape."
+      - given: "a non-2xx or malformed body from either provider"
+        when: "transcribe runs"
+        then: "it raises - degrade semantics identical to TK-189."
+      - given: "a checkout WITHOUT the voice-cloud extra"
+        when: "importing wombat.voice.stt"
+        then: "import stays clean; construction alone raises."
+    non_goals:
+      - "No selection wiring (TK-193)."
+    depends_on:
+      - TK-189
+    files_in_scope:
+      - src/wombat/voice/stt.py
+      - tests/voice/test_stt_providers.py
+  - id: TK-191
+    kind: ticket
+    parent: EP-31
+    title: "Cloud TTS pattern-setter - AudioPlayer playback primitive + Fish Audio TTSAdapter (Jim's own configured path)"
+    intent: "As the speak seam, FishAudioTTSAdapter implements the EXISTING TTSAdapter Protocol (speak(text) -> None, src/wombat/sinks/tts_adapter.py) - one httpx POST requesting WAV/PCM synthesis with the configured voice id (Jim's setup uses reference id c427a70dbe34432fba546edcde45a2f4), then LOCAL playback behind a new AudioPlayer Protocol whose default is stdlib winsound (zero new dependency, laptop CST-1)."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "src/wombat/voice/playback.py (AudioPlayer Protocol + WinsoundPlayer, platform-guarded, lazily constructed) + src/wombat/voice/tts.py (FishAudioTTSAdapter over the TK-189 transport helper; requests WAV output; any transport/playback failure RAISES so SpeakSink's existing Degraded(to=None) path handles it - the TK-164/TK-165 additive-voice contract is untouched). Fake transport + fake player tests; no live calls (DEF-7)."
+    acceptance_criteria:
+      - given: "a fake transport returning WAV bytes and a fake player"
+        when: "speak(text) runs"
+        then: "exactly one POST carries the text + configured voice id and the returned bytes are played exactly once."
+      - given: "a transport or player failure"
+        when: "speak runs"
+        then: "it raises - SpeakSink degrades to Degraded(to=None) with the composed text artifact byte-unaffected (TK-165 parity, CON-3)."
+      - given: "a checkout WITHOUT the voice-cloud extra"
+        when: "importing wombat.voice.tts and wombat.voice.playback"
+        then: "imports succeed; only construction raises."
+    non_goals:
+      - "No SpeakSink changes (the sink already owns degrade; only the adapter behind it varies)."
+      - "No voice-catalog browsing/preview (flagged creep, excluded)."
+    depends_on:
+      - TK-189
+    files_in_scope:
+      - src/wombat/voice/playback.py
+      - src/wombat/voice/tts.py
+      - tests/voice/test_playback.py
+      - tests/voice/test_tts_fish.py
+  - id: TK-192
+    kind: ticket
+    parent: EP-31
+    title: "ElevenLabs + Deepgram Aura TTS providers riding the TK-191 pattern"
+    intent: "As the speak seam, ElevenLabsTTSAdapter and DeepgramAuraTTSAdapter implement the TTSAdapter Protocol as thin single-POST clients requesting WAV/PCM output, played through the TK-191 AudioPlayer - completing the launch TTS roster (DEC-28 opt-in providers)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Two classes in src/wombat/voice/tts.py over the shared transport + player seams; same lazy-import, raise-on-failure, play-exactly-once contract; fake-transport/fake-player tests mirroring TK-191. Nothing else."
+    acceptance_criteria:
+      - given: "a fake transport returning WAV bytes for each provider"
+        when: "speak(text) runs for each"
+        then: "one POST carries the text (+ voice id where the provider takes one) with that provider's auth header/endpoint shape, and the bytes play exactly once."
+      - given: "a failure from either provider"
+        when: "speak runs"
+        then: "it raises - degrade semantics identical to TK-191."
+    non_goals:
+      - "No selection wiring (TK-193)."
+    depends_on:
+      - TK-191
+    files_in_scope:
+      - src/wombat/voice/tts.py
+      - tests/voice/test_tts_providers.py
+  - id: TK-193
+    kind: ticket
+    parent: EP-31
+    title: "Provider selection + cloud-to-local fallback - voice/select.py factories bound into bootstrap; loud-skip to local on missing key/extra"
+    intent: "As the runtime, build_transcriber(config, key_store) and build_tts_adapter(config, key_store) honor wombat_stt_provider/wombat_tts_provider - a cloud provider is constructed ONLY when the user-supplied key resolves (the DEC-28 structural opt-in) and is wrapped in FallbackTranscriber/FallbackTTSAdapter that on ANY runtime exception WARNs loud and tries the local default; sources.bootstrap._maybe_register_asr and the speak-sink construction route through these factories."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE new module src/wombat/voice/select.py + the two bootstrap call-site reroutes. Bootstrap-time degrade - selected cloud provider with a missing key or missing voice-cloud extra logs LOUD naming the gap and falls back to the local default (never a boot failure, CON-3, the Q-67 loud-skip shape). Runtime degrade - the fallback wrappers try cloud, catch, WARN, try local; if local is unavailable the exception propagates into the EXISTING degrade machinery (ASRSource failed/, SpeakSink Degraded). Fallback direction is ONLY cloud-to-local (DEC-28) - no code path constructs a cloud provider as a fallback."
+    acceptance_criteria:
+      - given: "the default config (both providers local)"
+        when: "the factories run"
+        then: "they return the exact existing local paths (FasterWhisperTranscriber wiring / Pyttsx3Adapter wiring) and NO cloud class is constructed."
+      - given: "a cloud provider selected with a resolving (fake) key"
+        when: "the factory runs and the primary later raises mid-call"
+        then: "the wrapped provider falls back to the local default exactly once with a loud WARNING; a structural test proves no local-to-cloud fallback path exists."
+      - given: "a cloud provider selected with NO resolvable key (or the extra absent)"
+        when: "bootstrap runs"
+        then: "one loud log names the missing key/extra, the local default is used, and boot continues."
+    non_goals:
+      - "No UI (EP-32)."
+      - "No hot reload - restart-to-apply (DEC-32)."
+    depends_on:
+      - TK-190
+      - TK-192
+    files_in_scope:
+      - src/wombat/voice/select.py
+      - src/wombat/sources/bootstrap.py
+      - src/wombat/bootstrap.py
+      - tests/voice/test_select.py
+  - id: TK-194
+    kind: ticket
+    parent: EP-31
+    title: "Configurable assistant name - thread wombat_assistant_name into the three steward prompt constants"
+    intent: "As a user who names their assistant (Jim's is the Steward), the fixed system-instruction strings in stages/compose.py, compose/brief_template.py, and integrations/gmail/draft_composer.py address the assistant by the configured name, with the default (Steward) keeping today's phrasing stable."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: prototype
+    complexity_budget: "The three constants become tiny pure builders taking the name (default preserves current text modulo the name slot); construction sites thread config.wombat_assistant_name. The name is DISPLAY/persona ONLY - never parsed, never in the gate, never an event field. Mechanical test updates where the constants are pinned."
+    acceptance_criteria:
+      - given: "the default configuration"
+        when: "the three instructions are built"
+        then: "output matches today's posture (one mechanical update pass allowed where tests pin literals); full suite green."
+      - given: "WOMBAT_ASSISTANT_NAME=Marvin"
+        when: "the three instructions are built"
+        then: "each contains the configured name; nothing outside the three prompt constants changes."
+    non_goals:
+      - "No prompt-engineering iteration (TK-8 non_goal stands)."
+      - "No name usage anywhere deterministic (gate/queue/claims)."
+    depends_on:
+      - TK-187
+    files_in_scope:
+      - src/wombat/stages/compose.py
+      - src/wombat/compose/brief_template.py
+      - src/wombat/integrations/gmail/draft_composer.py
+      - tests/stages/test_compose.py
+      - tests/compose/test_brief_template.py
+  - id: TK-195
+    kind: ticket
+    parent: EP-31
+    title: "Voice egress lesion tests - default config constructs ZERO cloud clients; cloud-down degrades to local on both axes (the DEC-28 structural proof)"
+    intent: "As the DEC-28 posture, the default configuration is PROVABLY offline-but-for-DeepSeek - runtime assembly under defaults instantiates no wombat.voice cloud class - and a mid-run cloud outage on either axis degrades to the local default without a crash or a lost item."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "Tests ONLY (the TK-163/TK-165 lesion-test pattern). Construction-spy or import-ledger proof for the default-zero-egress invariant; fake-provider outage scenarios for both axes riding the existing degrade assertions."
+    acceptance_criteria:
+      - given: "a default-config runtime assembly"
+        when: "sources and sinks are bootstrapped"
+        then: "no cloud STT/TTS class is constructed and httpx is never imported (structural proof)."
+      - given: "cloud STT selected and the primary raising mid-run"
+        when: "ASRSource processes a dropped file"
+        then: "the transcript is produced via the local fallback (or, with local absent, the file lands in failed/) - never a crash, other files unaffected."
+      - given: "cloud TTS selected and the primary raising"
+        when: "SpeakSink runs on a gate-surfaced item"
+        then: "local fallback speaks, or the sink returns Degraded(to=None) with the composed artifact byte-unaffected (TK-165 parity)."
+    non_goals:
+      - "No live provider calls (DEF-7)."
+    depends_on:
+      - TK-193
+    files_in_scope:
+      - tests/voice/test_egress_lesion.py
+  - id: TK-196
+    kind: ticket
+    parent: EP-32
+    title: "wombat.settings.json - app-editable non-secret settings as a pydantic-settings source (env > .env > settings.json > defaults)"
+    intent: "As the settings app's write target (DEC-32), one gitignored repo-root wombat.settings.json carries the app-editable NON-SECRET fields (providers, voice id, stt model, assistant name); WombatConfig gains a JSON settings source under the pinned precedence so wombat reads it at boot and the operator's .env always wins."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "pydantic-settings JsonConfigSettingsSource wiring in config.py + a documented schema of admitted fields + .gitignore line. Secret fields (any *_api_key) present in the file are IGNORED with one loud WARNING - the no-secrets-in-file rule is structural, not documentation. Nothing writes the file here (TK-197 owns writes)."
+    acceptance_criteria:
+      - given: "a value present only in wombat.settings.json"
+        when: "load_config() runs"
+        then: "the value is loaded; the same key in .env overrides it; an explicit env var overrides both (precedence pinned by test)."
+      - given: "an api-key field embedded in wombat.settings.json"
+        when: "load_config() runs"
+        then: "it is ignored with a loud WARNING naming the field - secrets never load from the file."
+      - given: "no wombat.settings.json"
+        when: "load_config() runs"
+        then: "behavior is unchanged; .gitignore covers the file."
+    non_goals:
+      - "No write path (TK-197)."
+      - "No hot reload (DEC-32 restart-to-apply)."
+    depends_on:
+      - TK-187
+    files_in_scope:
+      - src/wombat/config.py
+      - .gitignore
+      - tests/unit/test_config.py
+  - id: TK-197
+    kind: ticket
+    parent: EP-32
+    title: "Settings API - loopback-only process with ephemeral-port + per-launch-token handshake; write-only keyring key PUT; zero runtime imports"
+    intent: "As the Electron renderer's ENTIRE backend (DEC-31), python -m wombat.settings_app serves GET/PUT settings (the TK-196 file) and PUT provider keys (write-only into the TK-188 vault; reads return configured-booleans only), binds 127.0.0.1 exclusively on an ephemeral port, prints ONE machine-readable port+token JSON handshake line on stdout for the Electron main (TK-199), rejects any request without the token, and imports nothing from the wombat runtime so it runs while serve() is down."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "New package src/wombat/settings_app (FastAPI + uvicorn under a NEW settings-app optional extra - never core deps). Endpoints - GET /settings (non-secrets + key-presence booleans), PUT /settings (validates against the TK-196 admitted-field schema, writes the json file), PUT /keys/PROVIDER (TK-188 vault write; never echoed). Security - 127.0.0.1 bind pinned, per-launch random token required on every request (401 otherwise). The app edits voice + persona config ONLY (DEC-32); DeepSeek/Google/DSN stay operator-surface."
+    acceptance_criteria:
+      - given: "a running settings API"
+        when: "a request arrives without (or with a wrong) token"
+        then: "401; with the token, GET /settings returns current values with secrets as presence booleans only."
+      - given: "a tokened PUT of settings and a provider key"
+        when: "handled"
+        then: "wombat.settings.json is updated, the (fake) keyring receives the key, and no response body ever contains a secret value."
+      - given: "the settings_app module import graph and startup"
+        when: "inspected under test"
+        then: "no wombat.runtime/bootstrap import exists (structural test), the bind address is 127.0.0.1, and exactly one parseable handshake line is emitted."
+    non_goals:
+      - "No static-asset serving (Electron owns the renderer)."
+      - "No accounts/auth beyond loopback+token (DEC-30)."
+      - "No editing of DeepSeek/Google/DSN config (flagged follow-up)."
+    depends_on:
+      - TK-196
+      - TK-188
+    files_in_scope:
+      - src/wombat/settings_app/__init__.py
+      - src/wombat/settings_app/__main__.py
+      - src/wombat/settings_app/api.py
+      - tests/settings_app/test_api.py
+      - pyproject.toml
+  - id: TK-198
+    kind: ticket
+    parent: EP-32
+    title: "Electron shell scaffold - app/ with main + preload + Vite React TS renderer; security posture baked (contextIsolation on, nodeIntegration off, sandbox, loopback-only CSP)"
+    intent: "As the DEC-31 shell, app/ holds the Electron main process, preload, and a Vite + React + TypeScript renderer that opens a window rendering the app - with the security posture pinned by config-assert tests: contextIsolation true, nodeIntegration false, sandbox true, CSP restricting connect-src to the loopback origin, and NO remote content ever loaded."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: prototype
+    complexity_budget: "The FIRST JS toolchain in the repo - keep it minimal: Vite scaffold, electron + electron-vite (or equivalent minimal wiring), typescript, one lint/typecheck npm script. app/ SOURCE is committed; node_modules and build output are gitignored; Node is a dev toolchain for app/ only, never a wombat-core dependency. No API spawn here (TK-199), no forms (TK-200), no packaging (DEC-30/DEC-31 dev-launch clause)."
+    acceptance_criteria:
+      - given: "a checkout with Node installed"
+        when: "npm install + npm start run in app/"
+        then: "a window opens rendering the React renderer."
+      - given: "the BrowserWindow construction and index.html"
+        when: "asserted by test"
+        then: "contextIsolation=true, nodeIntegration=false, sandbox=true, the CSP restricts connect-src to the loopback origin, and no remote URL is loaded anywhere."
+      - given: "the renderer page context"
+        when: "probed"
+        then: "no Node globals (require/process) are reachable."
+    non_goals:
+      - "No packaging/installer/auto-update (DEC-30; DEC-31 v1 dev-launch clause)."
+      - "No 3D avatar (flagged future feature - the epic intent carries the traceability)."
+      - "No settings-API spawn (TK-199)."
+    depends_on:
+      - TK-197
+    files_in_scope:
+      - app/package.json
+      - app/electron/main.ts
+      - app/electron/preload.ts
+      - app/src/main.tsx
+      - app/index.html
+      - app/vite.config.ts
+      - .gitignore
+  - id: TK-199
+    kind: ticket
+    parent: EP-32
+    title: "Main-process to settings-API lifecycle - spawn, handshake, contextBridge exposure, kill-on-quit, loud degrade when absent"
+    intent: "As the app boot path (DEC-31 backend seam), the Electron main process spawns python -m wombat.settings_app, parses the single port+token handshake line, exposes port+token to the renderer ONLY via the preload contextBridge (never a URL parameter), terminates the child on quit, and shows a visible error surface (never a silent blank window) when Python or the API is absent or the handshake times out."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "One api-process module in app/electron owning spawn/parse/timeout/teardown + the preload bridge surface. Unit-test the handshake parser and teardown logic with a scripted child stand-in; the real python spawn is exercised by the TK-201 smoke."
+    acceptance_criteria:
+      - given: "app launch with a working python environment"
+        when: "the main process boots"
+        then: "the API child is spawned, the handshake parsed, and the renderer receives port+token exclusively through the contextBridge."
+      - given: "the app quitting (window close or app quit)"
+        when: "teardown runs"
+        then: "the API child process is terminated - no orphan process remains."
+      - given: "python missing, the module absent, or a handshake timeout"
+        when: "the main process boots"
+        then: "a visible error surface explains the failure and the app exits cleanly."
+    non_goals:
+      - "No renderer forms (TK-200)."
+    depends_on:
+      - TK-198
+    files_in_scope:
+      - app/electron/main.ts
+      - app/electron/preload.ts
+      - app/electron/api-process.ts
+      - app/electron/api-process.test.ts
+  - id: TK-200
+    kind: ticket
+    parent: EP-32
+    title: "Settings UI forms - name, provider selects, write-only masked key fields with configured-indicators, voice id, save + restart-to-apply notice; zero analytics"
+    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "Plain React forms over the tokened fetch surface from TK-199's bridge - no state framework, no router, no component library beyond minimal styling. DEC-29 is a binding AC - the app renders configuration read/write ONLY."
+    acceptance_criteria:
+      - given: "the app open against a running API"
+        when: "the form loads"
+        then: "current settings render; key fields show configured/not-configured indicators and NEVER display a stored value."
+      - given: "edits to name/providers/voice id and one key field"
+        when: "save is pressed"
+        then: "settings are PUT, the touched key is PUT write-only, and the restart-to-apply notice appears."
+      - given: "the whole rendered app"
+        when: "reviewed against DEC-29"
+        then: "NO analytics, metrics, event-log, gate-history, or behavior view exists - configuration read/write only."
+    non_goals:
+      - "No provider voice-catalog browsing/preview (flagged creep, excluded)."
+      - "No status/monitoring pane (DEC-29 - requires a new decision)."
+    depends_on:
+      - TK-199
+    files_in_scope:
+      - app/src/App.tsx
+      - app/src/api.ts
+      - app/src/components/
+  - id: TK-201
+    kind: ticket
+    parent: EP-32
+    title: "Launch + e2e smoke - documented npm start path; one Playwright-for-Electron happy path proving a UI edit lands in settings.json + keyring and wombat selects the provider; security assertions"
+    intent: "As the epic's proof, the documented dev launch (npm install + npm start in app/) is smoke-tested end to end - set the assistant name, select fish TTS, enter a fake key in the UI; wombat.settings.json contains the values, the configured key store holds the key, and a subsequent load_config() + build_tts_adapter selection resolves the fish provider (fake transport) - plus the security smoke (tokenless request 401; renderer has no Node globals)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "ONE Playwright-for-Electron happy-path spec (deliberately thin - the load-bearing config round-trip is already covered Python-side in TK-197 tests) + a short launch doc section. The smoke may point the key store at a test keyring service/fake via env so no real vault entry is polluted."
+    acceptance_criteria:
+      - given: "the documented launch steps"
+        when: "followed on a checkout with Node + the settings-app extra"
+        then: "the app opens and the happy path passes - UI edit lands in wombat.settings.json and the key store, and the Python-side selection factory resolves the chosen provider."
+      - given: "the running API during the smoke"
+        when: "a tokenless HTTP request is made"
+        then: "401; and the renderer context exposes no Node globals."
+    non_goals:
+      - "No broad UI test suite (one happy path; the API tests carry the correctness load)."
+      - "No live cloud provider call (DEF-7)."
+    depends_on:
+      - TK-200
+    files_in_scope:
+      - app/e2e/settings.spec.ts
+      - app/package.json
+      - README.md
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -4425,6 +4888,52 @@ governance:
       description: "Facts verified at source 2026-07-09. (1) ItemKind.REFLECTION (gate/models.py) and EventClass.REFLECTION (rating/params.py) ALREADY exist in the closed vocabularies - no vocabulary bump needed for the queue item; TK-185 placed REFLECTION urgency_base at the muted 0.35 band edge (quiet by default). (2) ClaimPredicate (user_model/claims.py) is the CLOSED motive-free StrEnum {BEHAVIOR_OBSERVED, OUTCOME_PENDING, OUTCOME_LOAD_BEARING, OUTCOME_REGRETTED, OUTCOME_IGNORED, RATING_PARAMS} - it has NO member a window summary could ride; adding one is a deliberate, reviewed vocabulary change per the module's own wall doctrine. (3) ObservationWriter (bootstrap.py L616) is EP-11's ONE write seam; DreamOutcomeStage/DreamBehaviorLogStage prove the newest-first ACTIVE claims_about read idiom. (4) The dream graph end-state after Q-98 is dream_consolidate -> dream_outcome -> dream_tune -> dream_behavior_log -> dream_run(terminal); BehaviorEventLog is constructed in bootstrap (L827) with events_between(start,end) as its sole read. (5) gate_item_from_queue_item maps payload item_kind -> ItemKind (invalid/missing -> GENERIC) and UserModel.resolve_event_class reads payload event_class first; PendingSet.add is idempotent on re-add of a held item_id (TK-181). (6) WombatQueue.enqueue is idempotent on idempotency_key (ALREADY_QUEUED) and raises QueueFullError at capacity. (7) pydantic is NOT a runtime dependency (pyproject); pyyaml IS; the Q-46/Q-72 clean-checkout bar forbids a casual new core dep. (8) tz + wombat_today(instant, tz) plumbing already rides bootstrap (DEC-21).",
       resolution: "RULED by architect 2026-07-09 (within authority - the how of EP-21..24 inside DEC-11/DEC-15 behavior-not-motive, DEC-13 gate supremacy, NG-2/NG-3/NG-4; no locked DEC touched). BATCH = TK-115 -> TK-116 -> TK-117 -> TK-112 -> TK-113; TK-114 + TK-118 DEFERRED to the next batch as one coupled pair (TK-114 owns TK-118's per-turn contributor construction and depends on TK-113 anyway; the cog-worx contributor seam gets its own verification pass then). (a) TK-115 KB SHAPE - NO pydantic runtime dep (clean-checkout bar); plain frozen dataclass KBEntry + a module-local ValidationError(ValueError) in kb/schema.py satisfies the AC literally; psychology_kb.yaml PACKAGED and read via importlib.resources (the migrations precedent), loader default = the packaged file with an optional path override; gate_condition.operator is the CLOSED set {>, >=, <, <=, ==} validated at load; the AC2/AC3 CI checks = pytest tests in a new real tests/kb/ package (TK-15 convention) run over the REAL packaged YAML - tests ARE the CI. (b) CLOSED v1 METRIC VOCABULARY (the cross-ticket seam) = {switch_rate, window_count, event_count}; TK-115 seed entries MUST draw gate_condition.metric from this set only; TK-113 derives EXACTLY these from the day's WindowSummaries (switch_rate = max over summaries, window_count = len, event_count = total); TK-116 treats a metric key absent from the metrics dict as condition-not-satisfied (quiet default, never raise), empty KB -> False. (c) TK-112 PERSISTENCE - NEW ClaimPredicate member PRODUCTIVITY_WINDOW (value productivity_window; a deliberate ruled vocabulary change - a pure behavior aggregate, CON-6/NG-1 wall intact, still no motive/intent/why member); ONE claim per nightly run - subject = productivity_window plus colon plus the wombat_today(ctx.clock(), tz) ISO date, value = JSON list of WindowSummary dicts, written via the INJECTED shared ObservationWriter (EP-11's one seam); the reader takes the newest ACTIVE claim for that subject (the DreamOutcomeStage idiom) - a by-date point read, no log scan (AC2). (d) TK-112 DETECTOR - pure detect_productivity_windows(events) -> list[WindowSummary]; windows are a PARTITION of the events - maximal runs split where the inter-event gap exceeds a 30-minute module constant; every event in exactly one window, no overlapping windows; the AC1 covered-time clause = the partition invariant (sum over windows of member duration_seconds with None as 0.0 equals the corpus total); switch_rate = event_type transitions / max(event_count-1, 1); outcome_mix = counts per outcome_label; frozen dataclass, NO motive field; AC4 = a source-scan test asserting no surface/render/dashboard token in the module (NG-3). (e) TK-112 SPLICE - new dream_window stage (WriteWindowSummariesStage) BETWEEN dream_behavior_log and dream_run; DreamBehaviorLogStage.transitions flips to dream_window, the new stage transitions to dream_run which STAYS the one reachable terminal (Q-91/Q-98 posture); reads the trailing 14 days via the SAME bootstrap-constructed BehaviorEventLog instance (injected, never a second one); contentless count report artifact kind wombat.dream_window_report; failure posture = DreamTuneStage parity (caught, logged LOUD, still transitions); no ctx.journal touch, no model call; build_dream_pathway gains a required window arg. (f) TK-113 SPLICE + ENQUEUE - PatternDetectorStage (dream_pattern) BETWEEN dream_window and dream_run (same flip pattern; end-state consolidate -> outcome -> tune -> behavior_log -> window -> pattern -> dream_run); reads the day's summaries claim via the raw EntityKG claims_about idiom; derives the closed metric dict (b); iterates KB entries IN FILE ORDER calling pattern_warrants_nudge(metrics, [entry]) - FIRST match wins, yielding at most ONE candidate and its pattern_id; enqueues via an INJECTED narrow enqueue callable (the TK-99 select_items precedent; bootstrap passes the ONE shared WombatQueue.enqueue - ASMP-2 custody held; unit tests use a recording fake, one pg-gated test proves the real bind); QueueItem idempotency_key = canonical idempotency_key(wombat.reflection, the wombat-date ISO) - the date-keyed key makes once-per-night STRUCTURAL (a same-night re-fire -> ALREADY_QUEUED); payload = {item_kind reflection, event_class reflection, kind pattern_reflection, pattern_id, window_ref = the summary subject, date} and NOTHING else (AC4 - no motive/clinical/why key); QueueFullError caught + logged loud, never blocks the terminal; no summaries / no match / empty KB -> zero enqueues, silent (CON-3). RESIDUAL recorded honestly - if the night's item was already drained AND acked before a crash-refire, a re-enqueue succeeds, but it converges in the pending set via TK-181's idempotent re-add of the same item_id and stays bounded by the per-class daily ceiling; not re-engineered at mvp. (g) NO GATE BYPASS is structural - TK-113 only enqueues; the item rides drain -> gate -> pending like any other, rated via the existing EventClass.REFLECTION params. (h) files_in_scope NORMALIZED - TK-112 += user_model/claims.py + pathways/dream_pathway.py + bootstrap.py; TK-113 += pathways/dream_pathway.py + bootstrap.py.",
       links: ["TK-112","TK-113","TK-115","TK-116","TK-117","Q-98","TK-181","TK-185","TK-99","NG-2","NG-3"] }
+  # --- 2026-07-09 batch-boundary recording: Jim's voice-provider + companion-app direction (Jim-originated; architect proposal recorded at the batch boundary). ---
+  - { id: DEC-28, type: decision, status: accepted, scope: FEAT-12, date_raised: "2026-07-09", title: "Voice egress is per-provider user opt-in; the DEFAULT configuration has exactly ONE egress (the DeepSeek mouth); supersedes-in-part the Q-96/Q-97 local-only absolutes",
+      context: "Jim's 2026-07-09 direction - STT/TTS become pluggable provider slots with LOCAL AND FREE defaults (faster-whisper TK-162, pyttsx3 TK-164; zero-config wombat stays fully offline) and integrated cloud options at launch (ElevenLabs = TTS flagship + Scribe STT; Deepgram = STT flagship + Aura TTS; Fish Audio = TTS + STT; Jim's own setup - Fish Audio TTS, voice id c427a70dbe34432fba546edcde45a2f4). Tension - ASMP-1 accepted DeepSeek as the one egress, and the Q-96/Q-97 rulings + asr.py/tts_adapter.py docstrings state audio/transcripts NEVER leave the machine.",
+      decision: "User-opted-in voice providers (STT and/or TTS) are permitted egress. The DEFAULT configuration has exactly ONE egress - the DeepSeek mouth (ASMP-1 unchanged). Opt-in is STRUCTURAL, not documentary - a cloud voice provider class may only be constructed when the user has (a) explicitly selected it via config AND (b) supplied their own API key; no key, no construction, loud-skip to local. Degrade direction is strictly cloud-to-local; no code path may ever fall back UP to a cloud provider. Audio/transcript payloads go only to the user's chosen provider. Supersedes-in-part Q-96 (pyttsx3 as THE one concrete adapter; no cloud TTS) and Q-97 (no audio/transcript ever leaves the machine) - those statements are rescoped from invariants of wombat to invariants of the DEFAULT configuration; they remain true of the local implementations and of zero-config wombat, and the asr.py/tts_adapter.py module docstrings are amended by the provider tickets accordingly. CST-2/NG-7 (local-first STORAGE) untouched - providers store nothing; calls are transient synthesis/transcription. TK-195 pins the default-zero-egress invariant as a lesion test.",
+      consequences: "(+) Cloud voice quality for users who choose it, with opt-in enforced by construction rather than policy prose. (+) Zero-config wombat is provably offline-but-for-DeepSeek (TK-195). (-) The egress story becomes conditional (one-by-default) and must be stated carefully in posture docs (ARCHITECT.md posture line updated with this recording). (-) A per-provider key-handling surface (TK-188).",
+      alternatives: ["Keep voice local-only forever (rejected - contradicts Jim's stated product direction)", "Allow cloud voice via config alone without a user-supplied key (rejected - the opt-in must be structural)", "Permit local-to-cloud fallback for resilience (rejected - egress must be chosen, never a fallback)"],
+      links: ["ASMP-1","Q-96","Q-97","TK-162","TK-164","TK-193","TK-195","EP-31"] }
+  - { id: DEC-29, type: decision, status: accepted, scope: FEAT-13, date_raised: "2026-07-09", title: "NG-3 CLARIFIED, not superseded - a local configuration surface is not a dashboard; the settings app is admitted with a zero-analytics hard non-goal",
+      context: "Jim directed a desktop app for configuring the assistant name, provider choices, and API keys. NG-3 says no dashboards and no nagging (rationale - no analytics UI), and several done tickets carry no-UI non_goals.",
+      decision: "CLARIFYING decision - NG-3 stands unchanged. NG-3 prohibits analytics/monitoring/behavior surfaces and attention-grabbing UI; it does not prohibit a configuration surface that reads nothing about the user's behavior and pushes nothing at them. The settings app (EP-32) is admitted with a HARD epic-level non-goal - zero analytics, metrics, event-log, gate-history, or behavior views; configuration read/write only (TK-200 carries it as a binding AC). Any future status pane requires a NEW decision. Existing per-ticket no-UI non_goals stand for their own tickets.",
+      consequences: "(+) The quiet-by-character posture survives the first UI. (-) A future status/companion surface needs its own ruling - deliberate friction.",
+      alternatives: ["Treat the app as superseding NG-3 (rejected - would open the analytics door NG-3 exists to keep shut)"],
+      links: ["NG-3","EP-32","TK-200"] }
+  - { id: DEC-30, type: decision, status: accepted, scope: project, date_raised: "2026-07-09", title: "The multi-user/distribution seed is honored in v1 as the CONFIG SURFACE ONLY - no accounts, no multi-tenancy, no packaging/installer/auto-update",
+      context: "The provider + app direction is the first vision seed aimed at people other than Jim (users configure their own providers/keys/assistant name). How much distribution does v1 actually build?",
+      decision: "v1 honors the seed as the config surface only - pluggable providers, user-supplied keys, configurable assistant name, the local settings app. NO accounts, NO multi-tenancy, NO installer/packaging/auto-update, NO hosted anything. ASMP-2 (single host, single process) stands. Packaging is its own future decision (see the dev-launch clause recorded with the shell ADR and RISK-11).",
+      consequences: "(+) The distribution ambition is on the record without speculative machinery. (-) A real distribution push later re-opens packaging, updates, and ASMP-2.",
+      alternatives: ["Build packaging/installer now alongside the Electron shell (rejected - speculative scope; Jim's v1 use is dev-launch)"],
+      links: ["ASMP-2","EP-32","EP-31"] }
+  - { id: DEC-31, type: decision, status: accepted, scope: EP-32, date_raised: "2026-07-09", title: "App shell ADR - Electron + React (Vite + TS), decided by Jim; the app is intended to grow into wombat's front-end (companion/avatar surface); Python settings API stays the entire backend",
+      context: "Jim strongly prefers React and, reviewing the architect's stack ADR, ruled for the FULL Electron app now rather than piecemealing - the app is intended to grow into wombat's front-end with future native-adjacent features (his stated example - rendering a 3D model of the wombat assistant, a companion/avatar surface) that want an app shell with window/GPU control beyond a browser tab.",
+      decision: "Electron + React (Vite + TS) in app/, OPERATOR-DECIDED. ACCEPTED COSTS, recorded - Node becomes a production dependency OF THE APP (never of wombat's Python core); an Electron security-update cadence (pin the version, bump on a schedule - RISK-11); eventual electron-builder packaging when distribution arrives. V1 SCOPE-HONESTY CLAUSE (DEC-30 compatibility) - v1 launches the app in dev mode (npm start); NO installer, NO auto-update, NO electron-builder pipeline in v1; Electron makes a binary possible later, DEC-30 keeps it deferred now. BACKEND SEAM - the loopback token-guarded Python settings API (TK-197) is the app's ENTIRE backend; the Electron main process spawns and owns it (TK-199), with port+token handed to the renderer only via the preload contextBridge; ALL config/keyring logic stays in Python where the TokenStore pattern and mypy-strict discipline live.",
+      consequences: "(+) The shell is sized for the app-as-wombat's-face trajectory (the 3D avatar stays a flagged FUTURE feature, not a v1 ticket - EP-32's intent carries the traceability). (+) One backend, in Python; the API stays independently reusable. (-) A second toolchain (Node) enters the repo, scoped to app/. (-) The Chromium update cadence (RISK-11).",
+      alternatives: ["React SPA + loopback API opened in an Edge --app window - the ARCHITECT'S RECOMMENDATION (no second runtime, smallest surface); CONSIDERED AND REJECTED BY OPERATOR - it caps the app at browser capabilities, contradicting the front-end trajectory; architect dissent recorded here in brief", "Tauri + React (rejected - adds a Rust toolchain as a third language for no capability wombat needs that Electron lacks)", "Node-side keytar/IPC for secrets (rejected - forks keyring logic into a second language; two writers of one vault)"],
+      links: ["EP-32","TK-197","TK-198","TK-199","RISK-11"] }
+  - { id: DEC-32, type: decision, status: accepted, scope: EP-32, date_raised: "2026-07-09", title: "Config mechanism - keyring for secrets, wombat.settings.json for app-editable non-secrets, .env/env-vars as the operator override; restart-to-apply in v1",
+      context: "Today config is a repo-root .env read by pydantic-settings at boot; Google tokens already live in the OS keyring (the TokenStore pattern). The app needs a write path that never scribbles over the operator's .env and never puts a secret in a file.",
+      decision: "Three tiers. (1) SECRETS - provider API keys live in the OS keyring via the existing TokenStore pattern (service wombat, per-provider accounts; TK-188); the app writes them write-only and reads presence booleans only; resolution at provider construction is explicit env/.env value, then keyring, then absent. (2) APP-EDITABLE NON-SECRETS - one gitignored repo-root wombat.settings.json (providers, voice id, stt model, assistant name) added to WombatConfig as a JSON settings source with precedence env var over .env over settings.json over defaults (TK-196); secret fields in the file are ignored loudly. (3) .env stays the operator/dev surface (DeepSeek, DSN, paths) and is NEVER written by the app. PICKUP - restart-to-apply for v1; wombat reads config at boot only and the UI shows a restart notice after save. The app edits voice + persona config ONLY in v1; DeepSeek/Google/DSN editing is a flagged follow-up.",
+      consequences: "(+) Secrets never touch a file; the non-secret precedence is explicit and pinned by test. (+) The operator surface (.env) and the app surface (settings.json) cannot fight. (-) Two config files exist (mitigated by the precedence test). (-) Hot reload deferred until a need exists.",
+      alternatives: ["App writes .env directly (rejected - fragile, clobbers operator comments/keys, tempts secrets-in-file)", "Everything in keyring (rejected - non-secrets in a vault are un-diffable and hostile to headless use)", "Hot-reload config into a running wombat (rejected for v1 - machinery without a driving need)"],
+      links: ["TK-188","TK-196","TK-197","Q-57","Q-65"] }
+  - { id: Q-100, type: open_question, status: resolved, scope: EP-31, date_raised: "2026-07-09", date_updated: "2026-07-09", title: "Cloud voice providers - vendor SDKs or thin REST clients?",
+      description: "ElevenLabs, Deepgram, and Fish Audio all ship Python SDKs; adopting them adds three dependency trees to a lean, mypy-strict core for what are single-POST calls (prerecorded STT upload; TTS synthesis).",
+      resolution: "RESOLVED by architect 2026-07-09 (within authority - a how decision). Thin httpx REST clients, NO vendor SDKs - each provider call is one POST with an auth header; one shared transport helper (TK-189); httpx rides a single voice-cloud optional extra, lazy-imported at construction (the Q-46/Q-72 clean-checkout bar). Rationale - lean core, strict typing without three sets of vendor stubs, uniform fake-transport testing, uniform failure semantics feeding the existing degrade paths.",
+      links: ["TK-189","TK-190","TK-191","TK-192","Q-46","Q-72"] }
+  - { id: Q-101, type: open_question, status: resolved, scope: EP-31, date_raised: "2026-07-09", date_updated: "2026-07-09", title: "JIM-OWNED RESIDUAL - which paid cloud-voice accounts will exist for the per-provider LIVE smokes? (Fish Audio confirmed in principle with a voice id; ElevenLabs/Deepgram TBD)",
+      description: "The provider tickets test on fake transports (Q-100); a live round-trip smoke per provider needs Jim's own paid/free-tier API keys. Jim's setup uses Fish Audio TTS (voice id c427a70dbe34432fba546edcde45a2f4); whether ElevenLabs/Deepgram accounts will exist for live validation is a paid-account choice - the ONE item in this direction that is genuinely Jim's to own.",
+      resolution: "RESOLVED by architect 2026-07-09 by ROUTING, not by deciding - the question is homed as deferral DEF-7 (the clarify-gate rule - every ambiguity resolves into a decision, deferral, or non_goal). Build proceeds on fake transports; each live smoke is armed and loud-skipping until its key exists (the GCAL/GMAIL live-smoke pattern); the residual act (supplying each key) sits on Jim's desk via DEF-7's revisit_trigger. No build ticket blocks on this.",
+      links: ["DEF-7","EP-31","TK-188","TK-189","TK-190","TK-191","TK-192"] }
+  - { id: DEF-7, type: deferral, status: deferred, scope: EP-31, date_raised: "2026-07-09", date_updated: "2026-07-09", title: "Defer cloud-voice-provider LIVE smokes until Jim supplies each provider's API key (CI runs fake transports only)",
+      description: "Per-provider live round-trip smokes (real POST, real transcript/audio) are the residual validation the fake-transport suites cannot give. They join the GCAL/GMAIL live-smoke pattern - armed, env/keyring-gated, loud-skipping when the key is absent.",
+      revisit_trigger: "Jim stores a provider key (keyring or env, TK-188) - run that provider's live smoke once and record the outcome; Fish Audio TTS first (his own setup, voice id on record in Q-101/DEC-28).",
+      links: ["Q-101","TK-188","EP-31"] }
+  - { id: RISK-11, type: risk, status: accepted, scope: EP-32, date_raised: "2026-07-09", date_updated: "2026-07-09", probability: medium, impact: low, title: "The Electron shell carries Chromium's security-update cadence",
+      mitigation: "ACCEPTED-AND-RECORDED with the shell ADR (DEC-31). Exposure is bounded by construction - loopback-only backend, no remote content ever loaded, contextIsolation/nodeIntegration/sandbox/CSP pinned by TK-198's config-assert tests, dev-launch only in v1 (DEC-30). Mitigation - pin the Electron version and bump on a schedule; the TK-198 posture tests keep the security shape honest across bumps.",
+      links: ["DEC-31","TK-198","DEC-30"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -4592,3 +5101,4 @@ changelog:
   - { date: "2026-07-09", version: "1.61", change: "TK-117 DONE (92/103; status todo -> done; independently verified PASS) - THE REFLECTION-ARC BATCH ADVANCES 3/5 (EP-24) - the phrasing-hint extractor lands exactly per the Q-99 build order and the audit weak-atomicity trim. NEW src/wombat/kb/phrasing_hints.py - ONE pure function extract_phrasing_hints(pattern_id, kb) -> list[str], a deterministic first-match-wins lookup over Sequence[KBEntry] (TK-115 schema; loader.py does not enforce pattern_id uniqueness so first-in-kb-order wins is the documented tie-break - the seed KB 7 pattern_ids verified unique today). Unknown pattern_id or empty KB -> [] with no exception (TK-114 falls back to a safe default prompt); always returns a NEW list(entry.phrasing_hints) so callers cannot mutate shared state - identical inputs give equal, non-identical lists. Zero model calls, zero I/O (CON-1/NG-4); the no-verbatim-in-output guard stays TK-114/TK-118 AC territory and the no-clinical-language-in-hint-DATA guard stays the TK-115 linter, exactly as the trimmed AC3 rules. Tests tests/kb/test_phrasing_hints.py - AC1 over the REAL load_psychology_kb() (all 7 seed pattern_ids resolve to non-empty 2-item hint lists, deterministic across double lookup), AC2 (unknown id + empty kb -> []), AC3 (equal-but-fresh lists, purity). VERIFIER (independent) - re-derived every AC under own execution, all pass; uv run pytest -q 945 passed / 55 skipped (all WOMBAT_TEST_PG_DSN gates, unrelated); ruff clean; mypy Success 233 source files; tests/kb 40 passed; scope exactly the two files_in_scope (no contract edit by builder, no scope creep). NEXT in batch: TK-112 (productivity-window detector + nightly write stage, EP-22).", by: "claude" }
   - { date: "2026-07-09", version: "1.62", change: "TK-112 DONE (93/103; status todo -> done; independently verified PASS) - REFLECTION-ARC BATCH ADVANCES 4/5 (EP-21): the productivity-window detector + nightly write land exactly per the Q-99c/e rulings. NEW src/wombat/behavior/window_detector.py - ONE pure detect_productivity_windows(events) -> list[WindowSummary] (sorts by timestamp_utc, splits into maximal runs wherever the inter-event gap strictly exceeds module constant WINDOW_GAP_SECONDS=1800.0; WindowSummary a frozen motive-free dataclass start_utc/end_utc/event_count/switch_rate/outcome_mix - NO motive field, CON-6/NG-1; empty log -> [] no-raise; window_summary_to_dict = the JSON-native wire shape). NEW src/wombat/behavior/stages/write_window_summaries.py - WriteWindowSummariesStage (name=dream_window) reads store.events_between(now-14d, now), runs the detector, and ONLY when non-empty writes ONE Claim via the injected ObservationWriter (subject productivity_window:<wombat-date>, predicate ClaimPredicate.PRODUCTIVITY_WINDOW - the ruled NEW closed-enum member in claims.py; value = JSON list of window dicts) - retrievable by date without a full log scan (AC2 per the audit split fix; TK-113 owns the read). Dream graph takes the Q-99e splice - dream_consolidate -> dream_outcome -> dream_tune -> dream_behavior_log -> dream_window -> dream_run (dream_run stays the ONE reachable terminal; dream_pattern arrives with TK-113); the stage is homed with the event log it reads (wombat.behavior.stages), NOT in dream_pathway.py; bootstrap wires SHARED store/writer instances. VERIFIED (independent) - verifier re-derived and re-executed every AC under own execution: AC1 partition/no-overlap invariant + covered-time sum (None duration -> 0), AC2 date-keyed persistence round-trip of THIS ticket's own write, AC3 empty-log clean continue, AC4 no-surface/render/dashboard guard (NG-3); ruff clean; mypy Success 239 source files (src AND tests strict); uv run pytest -q with throwaway postgres:16 DSN -> 1034 passed / 4 skipped (live-Google only) / 1 failed = tests/integration/test_outbound_wiring_e2e.py::test_ac3_google_less_boot_loud_skips_outbound_wiring, PRE-EXISTING and UNRELATED (verifier stashed all TK-112 changes and it fails identically on the base commit - an environment-dependent Gmail-OAuth-credential warning-branch assertion in a file the builder never touched). Scope exactly the 5 files_in_scope + behavior/__init__ docstring + 6 mechanically-updated regression tests; NO contract edit by builder, NO migrations/, NO new pg table. NEXT in batch: TK-113 (pattern detector + gated once-per-night reflection enqueue, EP-22) - the reflection arc's final nightly ticket.", by: "claude" }
   - { date: "2026-07-09", version: "1.63", change: "TK-113 DONE (94/103; status todo -> done; independently verified PASS) - REFLECTION-ARC NIGHTLY BATCH COMPLETE 5/5 (EP-22): the pattern detector + gated once-per-night reflection enqueue land exactly per the Q-99 rulings. NEW src/wombat/behavior/stages/pattern_detector.py - PatternDetectorStage (name=dream_pattern), a deterministic nightly stage spliced dream_window -> dream_pattern -> dream_run (the second half of the Q-99e double splice; dream_run stays the ONE reachable terminal). It point-reads the ACTIVE productivity_window claim WriteWindowSummariesStage wrote (TK-112 owns the write, THIS ticket owns the read), derives the closed 3-key metrics set {switch_rate, window_count, event_count}, matches the injected psychology KB in file order via TK-116 pattern_warrants_nudge, and enqueues AT MOST ONE pattern_reflection QueueItem per wombat-night through the injected SHARED WombatQueue.enqueue - keyed on idempotency_key('wombat.reflection', date) so a same-night re-fire structurally collapses to ALREADY_QUEUED (once-per-night is STRUCTURAL, not counted). claims_about read/parse failure and QueueFullError are caught, logged loud, counted as errors, and NEVER block the transition to dream_run (CON-3 silence). No gate/pending/journal collaborator anywhere, no model call (NG-4); payload carries exactly {item_kind, event_class, kind, pattern_id, window_ref, date} - NO motive field, NO clinical label, NO why predicate (CON-6/NG-1/NG-2). VERIFIED (independent) - verifier ran the full quality bar under own execution: uv run pytest = 963 passed / 57 skipped (all WOMBAT_TEST_PG_DSN-gated, expected); ruff check src tests all-clean; mypy no issues in 241 source files (tests included); throwaway postgres:16 on :5439 ran EVERY pg-gated test green, including test_pg_gated_real_wombat_queue_enqueue_bind proving real WombatQueue.enqueue returns QUEUED then ALREADY_QUEUED on same-night re-fire (result2 enqueued==0). AC1: in-memory test asserts exactly one enqueue call, report enqueued==1, and item.idempotency_key equals an INDEPENDENTLY computed idempotency_key('wombat.reflection', date); re-fire keeps total QUEUED at 1. AC2: verifier re-derived the KB thresholds - switch_rate 0.8 trips rapid_context_switching (first in file order, > 0.6), the non-matching fixture (0.3/2/10) trips none of the 7 seed entries; both no-claim and non-matching paths show zero enqueues AND Transition(to='dream_run'). AC3: __init__ params == {entity_kg, kb, enqueue, user_id, tz} with no gate/pending/journal token, and the real payload flows gate_item_from_queue_item -> ItemKind.REFLECTION and UserModel.resolve_event_class -> EventClass.REFLECTION - the detector has NO gate-bypass ability; the item takes the standard Urgency x Cognitive Load gate like any other. Scope = files_in_scope (pattern_detector.py NEW, dream_pathway.py + bootstrap.py splice/wiring) + its test module + mechanically-updated regression tests (write_window_summaries transition + dream e2e/schedule/behavior-log/outcome-loop expectations); no contract edit by builder, no migrations, no new pg table. REFLECTION ARC nightly half DONE - remaining reflection work: the deferred TK-114+TK-118 compose/contributor pair (morning render half).", by: "claude" }
+  - { date: "2026-07-09", version: "1.64", change: "BATCH-BOUNDARY GOVERNANCE RECORDING - Jim's voice-provider + companion-app direction lands as the full planning frame. NEW DECISIONS - DEC-28 (voice egress is per-provider user OPT-IN, structural - selected via config AND user-supplied key or no construction; DEFAULT config has exactly ONE egress, the DeepSeek mouth; degrade strictly cloud-to-local; supersedes-in-part the Q-96/Q-97 local-only absolutes, rescoped to default-config invariants; CST-2/NG-7 storage residency untouched); DEC-29 (NG-3 CLARIFIED not superseded - a config surface is not a dashboard; the app carries a zero-analytics hard non-goal); DEC-30 (distribution seed honored in v1 as the CONFIG SURFACE ONLY - no accounts/tenancy/packaging/installer/auto-update; ASMP-2 stands); DEC-31 (app shell ADR - Electron + React Vite/TS, OPERATOR-DECIDED by Jim for the app-as-wombat's-front-end trajectory incl. a future 3D assistant avatar; architect's SPA recommendation recorded considered-and-rejected-by-operator; accepted costs - Node for app/ only, Electron update cadence RISK-11, eventual electron-builder; v1 is npm-start dev-launch only; the loopback token-guarded Python settings API is the ENTIRE backend, spawned/owned by the Electron main); DEC-32 (config mechanism - keyring for secrets on the TokenStore pattern, gitignored wombat.settings.json for app-editable non-secrets as a pydantic-settings JSON source with precedence env over .env over settings.json over defaults, .env never written by the app; restart-to-apply in v1). GOVERNANCE - Q-100 resolved (thin httpx REST clients, no vendor SDKs, one voice-cloud extra); Q-101 resolved-by-routing to NEW DEF-7 (Jim-owned residual - per-provider live-smoke keys; smokes armed + loud-skipping, Fish Audio TTS first); RISK-11 accepted (Electron/Chromium update cadence, bounded by the TK-198 posture tests). NEW NODES - FEAT-13 (configuration surface & companion app); EP-31 (pluggable voice provider slots, FEAT-12) with TK-186 (load_config .env-only boot fix - the pre-pydantic os.environ check bit Jim live 2026-07-09), TK-187 (voice/persona config fields), TK-188 (keyring key vault + env-then-keyring resolution), TK-189 (transport primitive + Deepgram STT pattern-setter), TK-190 (ElevenLabs Scribe + Fish STT), TK-191 (AudioPlayer/winsound playback + Fish Audio TTS - Jim's voice id path), TK-192 (ElevenLabs + Deepgram Aura TTS), TK-193 (selection factories + cloud-to-local fallback wired into bootstrap, loud-skip to local), TK-194 (configurable assistant name in the three steward prompt constants), TK-195 (egress lesion tests - default config constructs ZERO cloud clients); EP-32 (local settings app - Electron shell, FEAT-13) with TK-196 (wombat.settings.json source), TK-197 (loopback settings API + port/token handshake + write-only key PUT), TK-198 (Electron shell scaffold, security posture pinned), TK-199 (main-to-API spawn/handshake/teardown lifecycle), TK-200 (settings UI forms, zero analytics per DEC-29), TK-201 (launch doc + Playwright-Electron happy-path + security smoke). Build order - TK-186 first (live bug), then EP-31 linearly (TK-196 may overlap), EP-32 after TK-193. Scope-creep flags recorded OUT - streaming/wake-word STT, voice-catalog preview, app-editing DeepSeek/Google/DSN, packaging/installer, hot reload, 3D avatar (future feature named in EP-32 intent only), CI gating on app/.", by: "architect" }
