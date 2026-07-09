@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.cost.budget import BudgetExceededError
-from cogworx.loop.result import Done
+from cogworx.loop.result import Transition
 from cogworx.model.base import ModelResponse
 
 from tests.support.stage_context_fake import FakeModel, StageContextFake
@@ -73,7 +73,8 @@ async def test_ac1_success_path_phrases_via_model_and_prompt_excludes_internals(
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     assert result.output.kind == COMPOSED_OUTPUT
     assert result.output.produced_by == "compose"
     text, item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
@@ -109,7 +110,8 @@ async def test_ac2a_provider_error_degrades_to_template_without_raising() -> Non
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -132,7 +134,8 @@ async def test_ac2b_timeout_degrades_to_template_within_bound() -> None:
     elapsed = time.monotonic() - start
 
     assert elapsed < 1.0  # bounded by wait_for's 0.05s timeout, not the model's 5s sleep
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     _text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
 
@@ -150,7 +153,8 @@ async def test_empty_or_whitespace_response_text_degrades(blank_text: str | None
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -166,7 +170,8 @@ async def test_budget_exceeded_error_degrades_not_raises() -> None:
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -204,7 +209,16 @@ async def test_compose_stage_touches_no_ctx_member_beyond_model_last_output_and_
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+
+
+# --- TK-164, Q-96: ComposeStage declares "speak" as its one edge (the EP-30-reserved flip) --------
+
+
+def test_compose_stage_transitions_declares_speak_as_its_only_edge() -> None:
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    assert stage.transitions == ("speak",)
 
 
 # --- wire round-trips: json.dumps + inverse must be lossless (Q-49 regressions) -------------------

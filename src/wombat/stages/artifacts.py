@@ -50,6 +50,13 @@ will produce this wire later through these same helpers (the TK-8/TK-10 pre-defi
 (the stage builds it directly from a ``ScoredItem`` + its stub reason string), so the helpers are a
 thin, lossless identity-shaped pair — kept for the same reason every other wire has one: a single
 named seam future callers can mock/round-trip against instead of hand-parsing ``Artifact.data``.
+
+``spoken_output_to_artifact_data`` / ``spoken_output_from_artifact_data`` (TK-164, Q-96) define
+``SpeakSink``'s terminal wire, ``wombat.spoken_output`` — ``{"item_id", "item_kind": <ItemKind
+.value string>, "spoken", "degraded"}``, mirroring ``composed_output_to_artifact_data``'s
+``item_id``/``item_kind`` shape. ``spoken`` is ``True`` only when the TTS adapter's ``speak()``
+was actually called and returned without raising THIS run; ``degraded`` is ``True`` only on an
+adapter failure (the sink's ``Degraded`` path) — the two are never both ``True``.
 """
 
 from __future__ import annotations
@@ -67,6 +74,8 @@ COMPOSE_REQUEST = "wombat.compose_request"
 COMPOSED_OUTPUT = "wombat.composed_output"
 SURFACED_ITEM = "wombat.surfaced_item"
 HOLD_REPORT = "wombat.hold_report"
+# TK-164, Q-96: SpeakSink's terminal wire kind — the drain pathway's new terminal stage.
+SPOKEN_OUTPUT = "wombat.spoken_output"
 # TK-98, EP-30-ish morning-brief cluster: BriefGatherStage's terminal wire kind (Q-74).
 BRIEF_PAYLOAD = "wombat.brief_payload"
 # TK-99: BriefForceFlushStage's terminal wire kind (Q-75) — a sealed BriefDecisionArtifact.
@@ -251,6 +260,31 @@ def hold_report_from_artifact_data(data: dict[str, Any]) -> list[dict[str, Any]]
     return list(data["holds"])
 
 
+def spoken_output_to_artifact_data(
+    item_id: str, item_kind: ItemKind, spoken: bool, degraded: bool
+) -> dict[str, Any]:
+    """Serialize ``SpeakSink``'s terminal output into an Artifact ``data`` payload (TK-164, Q-96).
+
+    ``{"item_id", "item_kind": <ItemKind .value string>, "spoken", "degraded"}``.
+    """
+    return {
+        "item_id": item_id,
+        "item_kind": item_kind.value,
+        "spoken": spoken,
+        "degraded": degraded,
+    }
+
+
+def spoken_output_from_artifact_data(data: dict[str, Any]) -> tuple[str, ItemKind, bool, bool]:
+    """The inverse of ``spoken_output_to_artifact_data`` — the ONLY path back (TK-164, Q-96)."""
+    return (
+        data["item_id"],
+        ItemKind(data["item_kind"]),
+        data["spoken"],
+        data["degraded"],
+    )
+
+
 def brief_text_to_artifact_data(text: str, degraded: bool, tokens_spent: int) -> dict[str, Any]:
     """Serialize ``BriefComposeStage``'s terminal output into an Artifact ``data`` payload
     (TK-100, Q-77).
@@ -299,6 +333,7 @@ __all__ = [
     "DRAIN_HEARTBEAT",
     "GATE_DECISIONS",
     "HOLD_REPORT",
+    "SPOKEN_OUTPUT",
     "SURFACED_ITEM",
     "GateDecisionEntry",
     "brief_delivered_from_artifact_data",
@@ -316,6 +351,8 @@ __all__ = [
     "hold_report_to_artifact_data",
     "queue_items_from_artifact_data",
     "queue_items_to_artifact_data",
+    "spoken_output_from_artifact_data",
+    "spoken_output_to_artifact_data",
     "surfaced_item_from_artifact_data",
     "surfaced_item_to_artifact_data",
 ]

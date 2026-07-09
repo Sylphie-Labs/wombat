@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.cost.budget import BudgetExceededError, BudgetPolicy
-from cogworx.loop.result import Done
+from cogworx.loop.result import Transition
 from cogworx.model.base import ModelResponse, Usage
 from cogworx.model.guarded import BudgetGuardedModel
 
@@ -110,7 +110,8 @@ async def test_ac1_at_or_over_daily_token_ceiling_degrades_without_calling_the_m
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -134,7 +135,8 @@ async def test_over_ceiling_also_degrades_without_calling_the_model() -> None:
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     _text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert len(model.calls) == 0
@@ -161,7 +163,8 @@ async def test_ac2_successful_call_records_tokens_and_artifact_carries_tokens_sp
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is False
     assert text == "phrased!"
@@ -192,7 +195,8 @@ async def test_a_degraded_call_carries_no_tokens_spent() -> None:
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     _text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert composed_output_tokens_spent_from_artifact_data(result.output.data) is None
@@ -217,7 +221,8 @@ async def test_fail_closed_ledger_read_failure_degrades_without_calling_the_mode
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -244,7 +249,8 @@ async def test_ledger_write_failure_logs_loud_but_composed_output_stands() -> No
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is False  # the call already spent — the composed output stands
     assert text == "phrased!"
@@ -263,7 +269,8 @@ async def test_layer_2_not_wired_preserves_tk8_behavior() -> None:
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is False
     assert text == "phrased!"
@@ -311,7 +318,8 @@ async def test_ac4_real_budget_policy_from_operating_params_exhausts_and_compose
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)

@@ -75,9 +75,10 @@ if not _DSN:
 
 _FIXED_NOW = datetime(2026, 7, 9, 9, 0, tzinfo=UTC)
 
-# The pre-TK-177 baseline drain-graph stage set (byte-identical AC3 check).
+# The pre-TK-177 baseline drain-graph stage set (byte-identical AC3 check), ADDITIVELY updated
+# for TK-164 (Q-96): compose now transitions onward to the new "speak" terminal.
 _BASELINE_DRAIN_STAGES = frozenset(
-    {"drain_queue", "gate", "review_or_speak", "compose_dispatch", "compose"}
+    {"drain_queue", "gate", "review_or_speak", "compose_dispatch", "compose", "speak"}
 )
 
 

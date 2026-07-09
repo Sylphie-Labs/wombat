@@ -54,6 +54,7 @@ from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.gate.pipeline import Gate
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.queue import QueueItem, WombatQueue, ensure_schema
+from wombat.sinks.speak import SpeakSink
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
@@ -145,6 +146,9 @@ def _build_stack(*, model_factory: object) -> tuple[Engine, WombatQueue]:
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    # TK-164 (Q-96): compose now transitions onward to "speak" — voice-off here, this module
+    # isn't testing voice, only that the real Engine drives the drain graph to its new terminal.
+    speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     graph = build_drain_pathway(
         drain_queue_stage,
@@ -152,6 +156,7 @@ def _build_stack(*, model_factory: object) -> tuple[Engine, WombatQueue]:
         review_or_speak_stage,
         compose_dispatch_router,
         compose_stage,
+        speak_stage,
     )
 
     bundle = cold_boot_bundle()
@@ -228,6 +233,8 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    # TK-164 (Q-96): compose now transitions onward to "speak" — voice-off here (see _build_stack).
+    speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     graph = build_drain_pathway(
         drain_queue_stage,
@@ -235,6 +242,7 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
         review_or_speak_stage,
         compose_dispatch_router,
         compose_stage,
+        speak_stage,
     )
 
     bundle = cold_boot_bundle()

@@ -25,9 +25,11 @@ ledger WRITE failure only logs loud — the already-composed output stands (the 
 NO scores/``GateAction``/queue internals may cross it (Q-50) — the prompt the model sees is built
 ONLY from the wire's ``payload`` + ``item_kind``, never from anything else.
 
-``ComposeStage`` is the terminal node of the mvp spine (``transitions = ()``, returns ``Done``);
-a future deliver/voice stage (EP-30) flips ``Done`` -> ``Transition(to="deliver")`` as a one-line
-change.
+TK-164 (Q-96) lands the EP-30-reserved flip: ``ComposeStage`` is no longer the drain spine's
+terminal node. ``transitions`` is now ``("speak",)`` and ``run()`` returns ``Transition(to=
+"speak", output=...)`` carrying the SAME ``wombat.composed_output`` artifact, byte-identical,
+instead of ``Done`` — ``SpeakSink`` (``sinks/speak.py``) is the new terminal, reading this exact
+artifact via ``ctx.last_output("compose")``.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ import asyncio
 import logging
 
 from cogworx.claims.provenance import Artifact, Provenance
-from cogworx.loop.result import Done, StageResult
+from cogworx.loop.result import StageResult, Transition
 from cogworx.loop.stage import StageContext
 from cogworx.model.base import ChatMessage
 
@@ -65,7 +67,9 @@ class ComposeStage:
     """Phrases ONE surfaced item via the DeepSeek mouth; degrades to a terse template (TK-8)."""
 
     name: str = "compose"
-    transitions: tuple[str, ...] = ()
+    # TK-164, Q-96: the EP-30-reserved flip — the mouth transitions onward to the new terminal
+    # voice sink instead of ending the drain spine itself.
+    transitions: tuple[str, ...] = ("speak",)
 
     def __init__(
         self,
@@ -172,7 +176,11 @@ class ComposeStage:
 
         assert text is not None  # either the model's text or the template's render, always a str
 
-        return Done(
+        # TK-164, Q-96: transitions onward to "speak" carrying the SAME artifact, byte-identical
+        # (SpeakSink reads it back via ctx.last_output("compose") + composed_output_from_
+        # artifact_data — this is the one and only wire it consumes).
+        return Transition(
+            to="speak",
             output=Artifact(
                 kind=COMPOSED_OUTPUT,
                 produced_by=self.name,
@@ -180,7 +188,7 @@ class ComposeStage:
                 data=composed_output_to_artifact_data(
                     text, item_id, item_kind, degraded, tokens_spent=tokens_spent
                 ),
-            )
+            ),
         )
 
 

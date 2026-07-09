@@ -56,6 +56,7 @@ from wombat.pathways.dream_pathway import (
 from wombat.queue import WombatQueue
 from wombat.queue import ensure_schema as ensure_queue_schema
 from wombat.rating.rating_tuner import RatingTuner
+from wombat.sinks.speak import SpeakSink
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
@@ -223,6 +224,9 @@ def _build_stack_with_raising_dream(
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    # TK-164 (Q-96): compose now transitions onward to "speak" — voice-off (this module isn't
+    # testing voice, only dream/drain off-path isolation).
+    speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     drain_graph = build_drain_pathway(
         drain_queue_stage,
@@ -230,6 +234,7 @@ def _build_stack_with_raising_dream(
         review_or_speak_stage,
         compose_dispatch_router,
         compose_stage,
+        speak_stage,
     )
 
     # Never reached (the entry always raises first) — throwaway stub outcome/tune stages merely

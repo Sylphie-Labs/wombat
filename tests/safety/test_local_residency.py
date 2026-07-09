@@ -38,7 +38,7 @@ import psycopg
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.cost.budget import BudgetPolicy
-from cogworx.loop.result import Done
+from cogworx.loop.result import Transition
 from cogworx.loop.stage import StageContext
 from cogworx.model.base import Model
 from pydantic import SecretStr
@@ -406,7 +406,8 @@ async def test_ac2_only_the_configured_deepseek_host_is_ever_dialed(
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Done)
+    assert isinstance(result, Transition)
+    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is False  # the real (faked) call succeeded — never fell back to the template
     assert text == "ok"

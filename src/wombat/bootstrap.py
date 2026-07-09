@@ -159,6 +159,8 @@ from .pathways.dream_trigger import (
 )
 from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
+from .sinks.speak import SpeakSink
+from .sinks.tts_adapter import Pyttsx3Adapter, TTSAdapter
 from .sources.bootstrap import (
     _has_google_client_credentials,
     build_brief_fetches,
@@ -382,6 +384,55 @@ def build_brief_deliver_stage(
         voice_enabled=config.wombat_voice_enabled,
         speak=speak,
     )
+
+
+def _construct_tts_adapter() -> TTSAdapter | None:
+    """Attempt to construct the ONE concrete ``TTSAdapter`` (``Pyttsx3Adapter``, Q-96).
+
+    Shared by ``build_speak_sink`` and ``make_speak_callable`` below — both catch a failure here
+    identically: log LOUD naming what broke (missing ``voice`` extra -> ``ImportError``, or any
+    OS TTS engine-init failure) and degrade to ``None`` rather than blocking boot (AC4's lesion
+    bar: no import error, no capability blocked).
+    """
+    try:
+        return Pyttsx3Adapter()
+    except Exception:
+        logger.warning(
+            "voice: TTS adapter failed to construct (is the 'voice' extra installed? "
+            "`uv sync --extra voice`) — voice output disabled for this boot",
+            exc_info=True,
+        )
+        return None
+
+
+def build_speak_sink(config: WombatConfig) -> SpeakSink:
+    """Assemble the drain pathway's terminal ``SpeakSink`` (TK-164, Q-96).
+
+    ``config.wombat_voice_enabled`` gates voice; when it is true, this ALSO attempts to construct
+    the real ``Pyttsx3Adapter`` — a construction failure (lazy import or engine init) degrades to
+    ``adapter=None`` (logged loud) rather than raising, so a voice-off/lib-less boot is unaffected
+    (AC4). ``voice_enabled=False`` never even attempts construction.
+    """
+    adapter = _construct_tts_adapter() if config.wombat_voice_enabled else None
+    return SpeakSink(voice_enabled=config.wombat_voice_enabled, adapter=adapter)
+
+
+def make_speak_callable(config: WombatConfig) -> Callable[[str], None] | None:
+    """Build the voice closure ``BriefDeliverStage``'s injected ``speak`` seam consumes (TK-101,
+    Q-78) — the SAME adapter TYPE ``build_speak_sink`` binds into the drain pathway (Q-96's "ONE
+    adapter, two delivery points").
+
+    Returns a closure over a freshly constructed ``Pyttsx3Adapter`` iff
+    ``config.wombat_voice_enabled`` AND that adapter constructs; otherwise ``None`` (logged loud
+    by ``_construct_tts_adapter``) — ``BriefDeliverStage`` already treats ``speak=None`` as
+    text-only delivery (TK-101), so a voice-off/lib-less boot stays byte-identical to today.
+    """
+    if not config.wombat_voice_enabled:
+        return None
+    adapter = _construct_tts_adapter()
+    if adapter is None:
+        return None
+    return adapter.speak
 
 
 def _epoch_now() -> float:
@@ -682,6 +733,11 @@ def assemble_runtime(
     compose_stage = build_compose_stage(
         config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
     )
+    # TK-164 (Q-96): the new drain-graph terminal — compose now transitions onward to "speak"
+    # (the EP-30-reserved flip) instead of ending the spine itself; ONE SpeakSink instance is
+    # appended to BOTH graph variants below (draft_dispatch stays its own separate terminal,
+    # untouched).
+    speak_stage = build_speak_sink(config)
 
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
@@ -701,7 +757,9 @@ def assemble_runtime(
             "action_trail_writer (both assigned in the SAME wired branch above)"
         )
         draft_dispatch_stage = DraftDispatchStage(writer=action_trail_writer)
-        graph = build_drain_pathway(*pre_dispatch_stages, compose_stage, draft_dispatch_stage)
+        graph = build_drain_pathway(
+            *pre_dispatch_stages, compose_stage, speak_stage, draft_dispatch_stage
+        )
     else:
         graph = build_drain_pathway(
             drain_queue_stage,
@@ -709,6 +767,7 @@ def assemble_runtime(
             review_or_speak_stage,
             compose_dispatch_router,
             compose_stage,
+            speak_stage,
         )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
@@ -775,7 +834,13 @@ def assemble_runtime(
         brief_compose_stage = build_brief_compose_stage(
             config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
         )
-        brief_deliver_stage = build_brief_deliver_stage(config=config, tz=tz)
+        # TK-164 (Q-96): bind the SAME TTS adapter TYPE into the brief's already-built injected
+        # speak seam (TK-101) — discharges the "TK-164 binds real TTS into THIS seam" promise
+        # (Q-78). None unless voice_enabled AND the adapter constructs; a voice-off/lib-less boot
+        # stays byte-identical (seam None, text-only delivery).
+        brief_deliver_stage = build_brief_deliver_stage(
+            config=config, tz=tz, speak=make_speak_callable(config)
+        )
         brief_graph = build_brief_pathway(
             brief_gather_stage, brief_force_flush_stage, brief_compose_stage, brief_deliver_stage
         )

@@ -60,6 +60,7 @@ from wombat.gate.pending_journal_pg import PgPendingJournal
 from wombat.params import load_operating_params
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
+from wombat.sinks.speak import SpeakSink
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.compose import ComposeStage
@@ -135,6 +136,9 @@ def _build_in_memory_stack(
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    # TK-164 (Q-96): compose now transitions onward to "speak" — voice-off (no adapter) here,
+    # this module isn't testing voice, only that the Sweeper/pathway wiring reaches the terminal.
+    speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     graph = build_drain_pathway(
         drain_queue_stage,
@@ -142,6 +146,7 @@ def _build_in_memory_stack(
         review_or_speak_stage,
         compose_dispatch_router,
         compose_stage,
+        speak_stage,
     )
     journal = InMemoryJournal()
     pathways = PathwayRegistry()
@@ -304,6 +309,52 @@ def test_build_brief_deliver_stage_none_path_raises_configuration_error() -> Non
         bootstrap.build_brief_deliver_stage(config=config)
 
 
+# --- TK-164: build_speak_sink / make_speak_callable wiring (Q-96) -------------------------------
+
+
+def _config_voice_enabled() -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_voice_enabled=True,
+    )
+
+
+def test_build_speak_sink_voice_disabled_by_default_carries_no_adapter() -> None:
+    stage = bootstrap.build_speak_sink(_config())
+
+    assert stage.name == "speak"
+    assert stage.transitions == ()
+    assert stage._voice_enabled is False
+    assert stage._adapter is None
+
+
+def test_build_speak_sink_voice_enabled_but_pyttsx3_absent_degrades_to_no_adapter(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Real, unmocked lesion proof (AC4): pyttsx3 rides the optional 'voice' extra, not installed
+    in this environment — construction must not raise, only loud-skip to adapter=None."""
+    with caplog.at_level(logging.WARNING):
+        stage = bootstrap.build_speak_sink(_config_voice_enabled())
+
+    assert stage._voice_enabled is True
+    assert stage._adapter is None
+    assert "voice" in caplog.text.lower()
+
+
+def test_make_speak_callable_returns_none_when_voice_disabled() -> None:
+    assert bootstrap.make_speak_callable(_config()) is None
+
+
+def test_make_speak_callable_returns_none_when_pyttsx3_absent_even_if_voice_enabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        speak = bootstrap.make_speak_callable(_config_voice_enabled())
+
+    assert speak is None
+
+
 # --- AC4: assemble_runtime registers the pathway + wires the real PG PendingJournal ------------
 
 
@@ -317,6 +368,9 @@ def test_ac4_assemble_runtime_registers_drain_pathway_and_wires_pg_pending_journ
     graph = bundle.pathways.get(bundle.drain_pathway_id)
     assert graph is not None
     assert bundle.drain_pathway_id == "wombat.drain"
+    # TK-164 (Q-96): the drain graph now carries the "speak" terminal, reachable from "compose".
+    assert "speak" in graph.names()
+    assert graph.is_terminal("speak")
 
     # The pending journal wired into the gate IS the TK-29 PG adapter (Q-70/RISK-5).
     assert isinstance(bundle.pending_journal, PgPendingJournal)

@@ -22,6 +22,9 @@ dependencies = [
 [project.optional-dependencies]
 # Model providers ride behind cog-worx's S4 `Model` seam — never a hard dep of the app.
 providers = ["anthropic>=0.40.0", "openai>=1.55.0"]
+# Local voice I/O rides behind wombat's own sink/source seams (TK-164, Q-96) — never a hard dep;
+# the concrete adapters lazy-import these, so a checkout without this extra still boots clean.
+voice = ["pyttsx3>=2.90"]
 
 [project.scripts]
 wombat = "wombat:main"
@@ -66,6 +69,12 @@ disallow_untyped_decorators = false
 [[tool.mypy.overrides]]
 # google_auth_oauthlib ships no py.typed marker (google-auth itself does) — TK-71.
 module = ["google_auth_oauthlib.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pyttsx3 ships no py.typed marker/stubs, and is an OPTIONAL extra not installed by default
+# (TK-164, Q-96) — mypy must not fail to resolve it inside Pyttsx3Adapter's lazy import.
+module = ["pyttsx3.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
