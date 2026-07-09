@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
+from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.loop.graph import StageGraph
 from cogworx.loop.pathway import PathwayError, PathwayRegistry
 from cogworx.loop.result import Done, StageResult, Wait
@@ -39,7 +40,12 @@ from cogworx.model.base import ModelResponse
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 from cogworx.runtime.sweeper import Sweeper
-from cogworx.testing.doubles import InMemoryGraphStore, InMemoryJournal, InMemoryLatentStore
+from cogworx.testing.doubles import (
+    InMemoryEntityKG,
+    InMemoryGraphStore,
+    InMemoryJournal,
+    InMemoryLatentStore,
+)
 
 from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat import bootstrap, runtime
@@ -59,6 +65,7 @@ from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
 from wombat.stages.gate_stage import GateStage, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
+from wombat.user_model.observation_writer import ObservationWriter
 
 _PATHWAY_ID = "wombat.drain"
 _URGENCY_THRESHOLD = 0.5
@@ -513,6 +520,12 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
     daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
     pending_journal = PgPendingJournal(_FAKE_DSN)
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    # TK-176: additive RuntimeBundle fields — a mechanical hand-rolled-construction update
+    # (TK-46/TK-52 precedent), not this test's own concern.
+    entity_kg = InMemoryEntityKG()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
 
     bundle = RuntimeBundle(
         engine=engine,
@@ -528,6 +541,8 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         compose_stage=compose_stage,
         brief_pathway_id=None,
         brief_schedule_pathway_id=None,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
     )
     op = load_operating_params().model_copy(
         update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
@@ -618,6 +633,12 @@ def _serve_bundle(
         model_profile="deepseek",
     )
     registry = _RecordingSourceRegistry()
+    # TK-176: additive RuntimeBundle fields — a mechanical hand-rolled-construction update
+    # (TK-46/TK-52 precedent), not this test's own concern.
+    entity_kg = InMemoryEntityKG()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
     bundle = RuntimeBundle(
         engine=engine,
         pathways=pathways,
@@ -632,6 +653,8 @@ def _serve_bundle(
         compose_stage=ComposeStage(config=_config(), template_composer=TemplateComposer()),
         brief_pathway_id=None,
         brief_schedule_pathway_id=schedule_pathway_id,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
     )
     return bundle, registry
 

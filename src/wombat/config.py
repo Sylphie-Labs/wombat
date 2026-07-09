@@ -54,6 +54,12 @@ class WombatConfig(BaseSettings):
     wombat_brief_path: str | None = None
     wombat_voice_enabled: bool = False
 
+    # OPTIONAL (TK-176): the explicit-feedback file channel's path (TK-51's ``FeedbackInputSource``
+    # v1 file channel). Deliberately NOT in REQUIRED_ENV — the drain spine/demo/tests must keep
+    # booting without it; ``sources.bootstrap._maybe_register_feedback`` skips the file channel
+    # with a loud log naming this var when it is missing/blank (the push channel is unaffected).
+    wombat_feedback_file: str | None = None
+
 
 def load_config() -> WombatConfig:
     """Load + validate config from the environment, or raise ConfigurationError loudly."""

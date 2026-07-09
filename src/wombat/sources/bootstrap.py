@@ -27,6 +27,12 @@ TK-96: the wired/unwired poller-construction logic is factored into ``_build_gca
 before — a behavior-preserving extraction, TK-16's own tests are the regression net) so
 ``build_brief_fetches`` can reuse the EXACT SAME wired/unwired decision the drain-side
 ``build_source_registry`` makes, rather than a second copy of the creds/token checks.
+
+TK-176: ``_maybe_register_feedback`` registers TK-51's ``FeedbackInputSource`` under id
+``"feedback"`` following the EXACT SAME loud-skip pattern as ``_maybe_register_gcal``/
+``_maybe_register_gmail`` above — iff ``config.wombat_feedback_file`` is non-blank; otherwise ONE
+loud log naming ``WOMBAT_FEEDBACK_FILE`` and the source is skipped (never raised). Registration-
+not-rewrite (DEC-5/TK-161): ``SourceRegistry`` itself is untouched.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import NoReturn
 from zoneinfo import ZoneInfo
 
@@ -51,6 +58,7 @@ from wombat.integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.sources.registry import Enqueuer, SourceRegistry
+from wombat.user_model.feedback_source import FeedbackInputSource
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +66,7 @@ logger = logging.getLogger(__name__)
 # config field, so these are plain constructor defaults, overridable by an explicit caller arg).
 DEFAULT_GCAL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_GMAIL_POLL_INTERVAL_SECONDS = 300.0
+DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS = 300.0
 
 
 def _utc_now() -> datetime:
@@ -190,6 +199,31 @@ def _maybe_register_gmail(
         registry.register(poller)
 
 
+def _maybe_register_feedback(
+    registry: SourceRegistry,
+    config: WombatConfig,
+    *,
+    poll_interval_seconds: float,
+) -> None:
+    """TK-176: register the explicit-feedback source (``FeedbackInputSource``, TK-51) iff
+    ``config.wombat_feedback_file`` is non-blank — the SAME loud-skip pattern as
+    ``_maybe_register_gcal``/``_maybe_register_gmail`` above. A missing/blank path only disables
+    the v1 file channel; the push channel (the future ASR TK-162 entry) is unaffected either way,
+    so this never raises."""
+    raw_path = (config.wombat_feedback_file or "").strip()
+    if not raw_path:
+        logger.warning(
+            "feedback source not wired: WOMBAT_FEEDBACK_FILE not configured — skipping the "
+            "feedback file channel (boot continues without it)"
+        )
+        return
+    registry.register(
+        FeedbackInputSource(
+            poll_interval_seconds=poll_interval_seconds, feedback_file=Path(raw_path)
+        )
+    )
+
+
 def build_source_registry(
     config: WombatConfig,
     queue: Enqueuer,
@@ -198,20 +232,21 @@ def build_source_registry(
     clock: Callable[[], datetime] = _utc_now,
     gcal_poll_interval_seconds: float = DEFAULT_GCAL_POLL_INTERVAL_SECONDS,
     gmail_poll_interval_seconds: float = DEFAULT_GMAIL_POLL_INTERVAL_SECONDS,
+    feedback_poll_interval_seconds: float = DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS,
     gcal_token_store: GcalTokenStore | None = None,
     gmail_token_store: GmailTokenStore | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
-    of the gcal/gmail sources INDEPENDENTLY when its client credentials AND stored token both
-    exist (Q-61/Q-67). Never raises for missing/absent Google config or tokens — a loud log
-    names what is missing and the source is skipped; the returned registry is always usable,
-    with zero, one, or both sources registered.
+    of the gcal/gmail/feedback sources INDEPENDENTLY when its own configuration is present
+    (Q-61/Q-67 for gcal/gmail; TK-176 for feedback). Never raises for missing/absent config or
+    tokens — a loud log names what is missing and the source is skipped; the returned registry
+    is always usable, with zero or more sources registered.
 
     ``tz``/``clock`` are injected (no config field is read internally here beyond the Google
-    OAuth client id/secret) — callers supply the wombat civil-local tz (DEC-21) and, in tests,
-    a fake clock. ``gcal_token_store``/``gmail_token_store`` default to the real OS-keyring
-    ``TokenStore`` adapters; tests inject in-memory fakes so this function never touches the
-    real vault outside the live smokes.
+    OAuth client id/secret and ``wombat_feedback_file``) — callers supply the wombat civil-local
+    tz (DEC-21) and, in tests, a fake clock. ``gcal_token_store``/``gmail_token_store`` default to
+    the real OS-keyring ``TokenStore`` adapters; tests inject in-memory fakes so this function
+    never touches the real vault outside the live smokes.
     """
     registry = SourceRegistry(queue)
     _maybe_register_gcal(
@@ -228,6 +263,11 @@ def build_source_registry(
         clock=clock,
         poll_interval_seconds=gmail_poll_interval_seconds,
         token_store=gmail_token_store,
+    )
+    _maybe_register_feedback(
+        registry,
+        config,
+        poll_interval_seconds=feedback_poll_interval_seconds,
     )
     return registry
 
@@ -320,6 +360,7 @@ def build_brief_fetches(
 
 
 __all__ = [
+    "DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS",
     "DEFAULT_GCAL_POLL_INTERVAL_SECONDS",
     "DEFAULT_GMAIL_POLL_INTERVAL_SECONDS",
     "BriefFetches",

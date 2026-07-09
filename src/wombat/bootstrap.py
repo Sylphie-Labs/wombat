@@ -45,10 +45,23 @@ dream timer, mirroring TK-97's ``wombat.brief_schedule`` wiring VERBATIM: built 
 ``wombat.brief_schedule``, registration is UNCONDITIONAL (mirrors ``wombat.dream``'s own
 unconditional registration above — the dream scaffold needs no external config). Additive
 ``RuntimeBundle.dream_schedule_pathway_id`` is therefore never ``None``.
+
+TK-176 (Q-90 split of TK-175, EP-12): the drain-side outcome-loop wiring, over ONE shared
+user-scope entity KG instead of TK-53's original throwaway ``InMemoryEntityKG()``. ``entity_kg``/
+``scope_registry``/``observation_writer`` are constructed ONCE here and threaded into BOTH
+``UserModel`` (the read seam TK-42's ``Gate`` scores through) and ``OutcomeLabeler`` (TK-45's
+write seam) — additive ``RuntimeBundle.entity_kg``/``RuntimeBundle.observation_writer`` fields
+expose the SAME instances (AC4). Two closures compose ``GateStage``'s new TK-176 seams: ``_absorb_
+feedback`` parses the TK-51 ``FeedbackSignal`` wire, records ONE ``BEHAVIOR_OBSERVED`` claim, then
+acks the item off the SAME ``WombatQueue.ack`` call ``ReviewOrSpeakStage`` uses (AC1); ``_stamp_
+resolution`` stamps an ``OUTCOME_PENDING`` claim per gate-decided item (AC2) — Q-22 BINDS: never a
+terminal ``OUTCOME_*`` on this hot path. V1 honesty (Q-36/TK-14): the in-memory KG resets per
+process — no persistence is added here.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -61,12 +74,14 @@ from cogworx.capability.registry import Registry
 from cogworx.context.personality import PersonalityProfile
 from cogworx.context.rules import RuleSet
 from cogworx.cost.budget import BudgetPolicy
+from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.loop.pathway import PathwayRegistry
 from cogworx.model.base import ModelCapabilities
 from cogworx.model.providers.config import ProviderConfig
 from cogworx.model.registry import ModelRegistry, ModelSpec
 from cogworx.recall.stack import RecallStack
 from cogworx.runtime.engine import Engine
+from cogworx.substrate.entity_kg import EntityKG
 from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
@@ -77,7 +92,8 @@ from .domain.brief_schedule import BriefRunLedger
 from .domain.daily_ledger import DailyLedger, wombat_today
 from .gate.ceiling import CeilingLedger
 from .gate.decay import DayRollover
-from .gate.models import ItemKind
+from .gate.gate import gate_item_from_queue_item
+from .gate.models import GateAction, GateDecision, ItemKind
 from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
@@ -98,7 +114,7 @@ from .pathways.dream_trigger import (
     DreamTimerStage,
     build_dream_schedule_pathway,
 )
-from .queue import WombatQueue
+from .queue import QueueItem, WombatQueue
 from .sources.bootstrap import build_brief_fetches, build_source_registry
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
@@ -113,6 +129,11 @@ from .stages.drain_queue import DrainQueueStage
 from .stages.gate_stage import GateStage, make_gate_evaluator
 from .stages.review_or_speak import ReviewOrSpeakStage
 from .substrate import SubstrateBundle, build_substrate
+from .user_model.claims import Claim, ClaimPredicate
+from .user_model.feedback_source import FeedbackSignal
+from .user_model.observation_writer import ObservationWriter
+from .user_model.outcome_inference import ItemDisposition
+from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
 
 logger = logging.getLogger(__name__)
@@ -361,6 +382,13 @@ class RuntimeBundle:
     # ``None`` when the brief path was blank/absent (BOTH brief + schedule are skipped together).
     # ``runtime.serve()`` fires a second initial drive on this pathway only when it is non-None.
     brief_schedule_pathway_id: str | None
+    # TK-176: the ONE shared user-scope entity KG (replaces the TK-53 throwaway
+    # InMemoryEntityKG()) — IS the KG UserModel reads through and observation_writer writes
+    # through (AC4). V1 honesty (Q-36/TK-14): in-memory, resets per process.
+    entity_kg: EntityKG
+    # TK-176: the ONE ObservationWriter over entity_kg (S7) — the write seam both the hot-path
+    # feedback-absorb closure and OutcomeLabeler (via stamp_resolution) go through.
+    observation_writer: ObservationWriter
 
 
 def assemble_runtime(
@@ -415,7 +443,18 @@ def assemble_runtime(
     # (ceiling.py precedent) so the exactly-once boundary observation and the per-class ceiling
     # share ONE durable row lifecycle.
     day_rollover = DayRollover(daily_ledger=daily_ledger)
-    user_model = UserModel(entity_kg=InMemoryEntityKG(), user_id=_RUNTIME_USER_ID)
+
+    # TK-176: ONE shared user-scope entity KG (replaces the TK-53 throwaway InMemoryEntityKG())
+    # threaded into BOTH the read seam (UserModel) and the write seam (ObservationWriter, via
+    # OutcomeLabeler) — additive RuntimeBundle.entity_kg/observation_writer expose these SAME
+    # instances (AC4). V1 honesty (Q-36/TK-14): in-memory, resets per process; no persistence.
+    entity_kg = InMemoryEntityKG()
+    scope_registry = ScopeRegistry()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=scope_registry, user_id=_RUNTIME_USER_ID
+    )
+    outcome_labeler = OutcomeLabeler(writer=observation_writer)
+    user_model = UserModel(entity_kg=entity_kg, user_id=_RUNTIME_USER_ID)
     gate = Gate(
         user_model=user_model,
         pending_set=pending_set,
@@ -433,6 +472,52 @@ def assemble_runtime(
         idle_threshold_s=op.presence_idle_threshold_seconds,
     )
 
+    async def absorb_feedback(item: QueueItem) -> None:
+        """TK-176 (AC1): the hot-path feedback-diversion write. Parses the TK-51 ``FeedbackSignal``
+        wire off ``item.payload``, records ONE ``BEHAVIOR_OBSERVED`` claim (subject=item_ref) via
+        the SAME shared ``observation_writer``, then acks the item off the SAME
+        ``WombatQueue.ack`` call ``ReviewOrSpeakStage`` uses. Any exception (a malformed payload
+        or a KG-write failure) propagates to ``GateStage``'s own caught-and-logged fault posture,
+        which deliberately leaves the item un-acked so the at-least-once queue redelivers it.
+        """
+        signal = FeedbackSignal.from_payload(item.payload)
+        await observation_writer.record(
+            Claim(
+                predicate=ClaimPredicate.BEHAVIOR_OBSERVED,
+                subject=signal.item_ref,
+                value=json.dumps({"kind": "feedback", "response": signal.response}),
+                event_id=None,
+                observed_at=_utc_now(),
+            )
+        )
+        assert item.item_id is not None, (
+            "assemble_runtime.absorb_feedback: a drained queue_item must carry a "
+            "server-assigned item_id"
+        )
+        queue.ack(item.item_id)
+
+    def _disposition_for(action: GateAction) -> ItemDisposition:
+        """TK-176: GateAction -> the Q-90 closed ItemDisposition vocabulary — every non-HOLD
+        action is a surface (mirrors review_or_speak's own _SURFACE_ACTIONS closed set)."""
+        return "held" if action is GateAction.HOLD else "surfaced"
+
+    async def stamp_resolution(decision: GateDecision, queue_item: QueueItem) -> None:
+        """TK-176 (AC2): the hot-path OUTCOME_PENDING stamp — Q-22 BINDS, never a terminal
+        OUTCOME_* here. Resolves the SAME EventClass the gate itself scored this item under,
+        stamps 'surfaced'/'held' from the gate's own decision, and carries the item's
+        payload-borne 'event_id' when the source supplied one (None otherwise)."""
+        gate_item = gate_item_from_queue_item(queue_item)
+        event_class = user_model.resolve_event_class(gate_item)
+        raw_event_id = queue_item.payload.get("event_id")
+        event_id = str(raw_event_id) if raw_event_id is not None else None
+        await outcome_labeler.stamp_pending(
+            item_ref=queue_item.idempotency_key,
+            event_class=event_class,
+            disposition=_disposition_for(decision.action),
+            resolved_at=_utc_now(),
+            event_id=event_id,
+        )
+
     _guard_drain_batch_size(_DRAIN_BATCH_SIZE)
     drain_queue_stage = DrainQueueStage(
         queue,
@@ -447,6 +532,8 @@ def assemble_runtime(
             clock=_epoch_now,
         ),
         presence_provider=presence_provider,
+        absorb_feedback=absorb_feedback,
+        stamp_resolution=stamp_resolution,
     )
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
@@ -581,4 +668,6 @@ def assemble_runtime(
         compose_stage=compose_stage,
         brief_pathway_id=brief_pathway_id,
         brief_schedule_pathway_id=brief_schedule_pathway_id,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
     )
