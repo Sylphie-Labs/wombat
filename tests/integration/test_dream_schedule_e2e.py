@@ -96,7 +96,8 @@ def _night_keyed_run_id(now: datetime) -> str:
 @dataclass
 class _PassthroughConsolidateStage:
     """TK-47 mechanical reshape (flagged per the ticket's own sanction): ``wombat.dream``'s entry
-    is now ``dream_consolidate`` -> ``dream_outcome`` -> ``dream_run``, so this suite's own
+    is now ``dream_consolidate`` -> ``dream_outcome`` -> ... -> ``dream_pattern`` -> ``dream_run``,
+    so this suite's own
     doubles (below) — which stand in for the TERMINAL ``DreamScaffoldStage``, the ONLY stage this
     suite's fire-count witnesses care about — need a real entry stage ahead of them. This trivial
     double always transitions straight onward; it carries none of ``DreamConsolidationStage``'s
@@ -190,6 +191,28 @@ class _PassthroughWindowStage:
     TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_window"
+    transitions: tuple[str, ...] = ("dream_pattern",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_pattern",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughPatternStage:
+    """TK-113 mechanical reshape (flagged per the ticket's own sanction, Q-99f):
+    ``wombat.dream``'s sixth stage — always transitions straight onward; it carries none of
+    ``PatternDetectorStage``'s read/match/enqueue behavior (TK-113 owns that, out of scope for the
+    TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_pattern"
     transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -269,7 +292,8 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
             _PassthroughTuneStage(),
             _PassthroughBehaviorLogStage(),
             _PassthroughWindowStage(),
-            stage,
+            _PassthroughPatternStage(),
+            terminal=stage,
         ),
     )
 

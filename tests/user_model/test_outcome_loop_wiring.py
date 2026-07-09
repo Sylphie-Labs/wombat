@@ -30,6 +30,12 @@ Postgres-backed ``BehaviorEventLog``, so ``_build_engine`` wires a third trivial
 always-transitions-onward double instead (TK-112 owns its own acceptance criteria in ``tests/
 behavior/stages/test_write_window_summaries.py``).
 
+TK-113 (mechanical update, flagged per the ticket's own sanction, Q-99f): ``build_dream_pathway``
+now also requires a ``pattern`` stage. A REAL ``PatternDetectorStage`` needs an injected
+``enqueue`` callable and the loaded psychology KB, so ``_build_engine`` wires a fourth trivial
+always-transitions-onward double instead (TK-113 owns its own acceptance criteria in ``tests/
+behavior/stages/test_pattern_detector.py``).
+
   AC1 (e2e): seed the shared KG (via ``OutcomeLabeler``) with PENDING claims for two items across
       two event classes, plus a ``BEHAVIOR_OBSERVED`` 'useful' feedback claim for one of them.
       Drive one ``wombat.dream`` run: the run walks ``dream_outcome`` AND ``dream_run``
@@ -137,13 +143,36 @@ class _PassthroughWindowStage:
     see the module docstring)."""
 
     name: str = "dream_window"
+    transitions: tuple[str, ...] = ("dream_pattern",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_pattern",
+            output=Artifact(
+                kind="wombat.dream_window_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughPatternStage:
+    """TK-113 mechanical reshape (flagged per the ticket's own sanction, Q-99f): a trivial
+    always-transitions-onward double standing in for ``PatternDetectorStage`` — this module's ACs
+    are about the outcome pass, never touching the queue here (a real ``PatternDetectorStage``
+    needs an injected ``enqueue`` callable and the loaded psychology KB; see the module
+    docstring)."""
+
+    name: str = "dream_pattern"
     transitions: tuple[str, ...] = ("dream_run",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_run",
             output=Artifact(
-                kind="wombat.dream_window_report",
+                kind="wombat.dream_pattern_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={},
@@ -187,6 +216,7 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
         _PassthroughTuneStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
+        _PassthroughPatternStage(),
     )
 
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)

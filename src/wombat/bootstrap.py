@@ -128,6 +128,7 @@ from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .behavior.event_log import BehaviorEventLog
+from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
@@ -151,6 +152,8 @@ from .integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from .integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from .integrations.gmail.token_store import TokenStore as GmailTokenStore
 from .integrations.gmail.triage import load_triage_rules
+from .kb.loader import load_psychology_kb
+from .kb.schema import ValidationError as KBValidationError
 from .params import OperatingParams, load_operating_params
 from .pathways.brief_pathway import (
     BRIEF_PATHWAY_ID,
@@ -844,12 +847,37 @@ def assemble_runtime(
     dream_window_stage = WriteWindowSummariesStage(
         store=behavior_event_log, writer=observation_writer, tz=tz
     )
+    # TK-113 (Q-99b/f/g): the psychology KB is loaded ONCE here at boot and injected into
+    # PatternDetectorStage — the stage itself never loads the KB. A load failure (TK-115 AC4:
+    # FileNotFoundError or ValidationError) is caught, logged LOUD, and falls back to an empty
+    # KB — a safe no-nudge default (pattern_warrants_nudge over an empty kb always returns False)
+    # rather than failing the whole boot over a KB problem.
+    try:
+        psychology_kb = load_psychology_kb()
+    except (KBValidationError, FileNotFoundError):
+        logger.error(
+            "assemble_runtime: load_psychology_kb failed; PatternDetectorStage boots with an "
+            "empty KB (no pattern will ever match tonight) rather than failing the whole boot",
+            exc_info=True,
+        )
+        psychology_kb = []
+    # PatternDetectorStage over the SAME shared entity_kg/_RUNTIME_USER_ID/tz trio every other
+    # dream stage here uses, and the ONE shared WombatQueue's bound enqueue (ASMP-2 custody —
+    # never a second queue/connection).
+    dream_pattern_stage = PatternDetectorStage(
+        entity_kg=entity_kg,
+        kb=psychology_kb,
+        enqueue=queue.enqueue,
+        user_id=_RUNTIME_USER_ID,
+        tz=tz,
+    )
     dream_graph = build_dream_pathway(
         dream_consolidation_stage,
         dream_outcome_stage,
         dream_tune_stage,
         dream_behavior_log_stage,
         dream_window_stage,
+        dream_pattern_stage,
     )
     substrate.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 

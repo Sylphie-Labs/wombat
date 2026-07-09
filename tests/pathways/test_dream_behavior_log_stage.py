@@ -323,7 +323,8 @@ async def test_ac5_engine_drive_completes_even_when_the_store_raises(
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
         _PassthroughStage(name="dream_tune", to="dream_behavior_log"),
         behavior_log_stage,
-        _PassthroughStage(name="dream_window", to="dream_run"),
+        _PassthroughStage(name="dream_window", to="dream_pattern"),
+        _PassthroughStage(name="dream_pattern", to="dream_run"),
     )
     bundle.pathways.register(DREAM_PATHWAY_ID, dream_graph)
 
@@ -351,5 +352,5 @@ async def test_ac5_engine_drive_completes_even_when_the_store_raises(
 
     assert final.status is RunStatus.COMPLETED
     stage_names = [step.stage_name for step in final.steps]
-    assert stage_names[-3:] == ["dream_behavior_log", "dream_window", "dream_run"]
+    assert stage_names[-4:] == ["dream_behavior_log", "dream_window", "dream_pattern", "dream_run"]
     assert calls == []  # the store raised — nothing was ever recorded

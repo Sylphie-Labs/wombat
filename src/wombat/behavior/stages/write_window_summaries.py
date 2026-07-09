@@ -22,9 +22,10 @@ a claim (skip-on-empty — an honest "no windows tonight" rather than a claim wi
 
 NEVER touches ``ctx.journal`` and makes NO model call (mirrors ``DreamBehaviorLogStage``'s own
 off-path posture). A detector or write failure is caught, logged LOUD, and the stage STILL
-transitions onward to ``dream_run`` (mirrors ``DreamTuneStage``/``DreamBehaviorLogStage``'s own
-never-block-the-terminal posture) — one bad night's window pass must never block the reachable
-terminal.
+transitions onward to ``dream_pattern`` (TK-113, Q-99e — this stage's downstream neighbor since the
+pattern-detection pass was inserted between the window-detect pass and the terminal; mirrors
+``DreamTuneStage``/``DreamBehaviorLogStage``'s own never-block-the-terminal posture) — one bad
+night's window pass must never block the reachable terminal.
 
 NO DASHBOARD/SURFACE (NG-3): this stage only reads, detects, and writes a claim; it has no
 render/surface/dashboard call anywhere (enforced by ``tests/behavior/stages/
@@ -64,13 +65,13 @@ _LOOKBACK_DAYS = 14
 class WriteWindowSummariesStage:
     """The nightly productivity-window detect + persist pass (TK-112, EP-21, Q-99e).
 
-    ``name`` is ``dream_window``, inserted BETWEEN ``dream_behavior_log`` and the ``dream_run``
-    terminal in the ``wombat.dream`` graph (``build_dream_pathway``, ``pathways/dream_pathway.
+    ``name`` is ``dream_window``, inserted BETWEEN ``dream_behavior_log`` and ``dream_pattern``
+    (TK-113) in the ``wombat.dream`` graph (``build_dream_pathway``, ``pathways/dream_pathway.
     py``).
     """
 
     name: str = "dream_window"
-    transitions: tuple[str, ...] = ("dream_run",)
+    transitions: tuple[str, ...] = ("dream_pattern",)
 
     def __init__(self, *, store: BehaviorEventLog, writer: ObservationWriter, tz: ZoneInfo) -> None:
         self._store = store
@@ -106,7 +107,7 @@ class WriteWindowSummariesStage:
             errors = 1
 
         return Transition(
-            to="dream_run",
+            to="dream_pattern",
             output=Artifact(
                 kind=DREAM_WINDOW_REPORT_KIND,
                 produced_by=self.name,

@@ -13,7 +13,7 @@ monkeypatched to a recording/raising double — the genuine pg round-trip lives 
       ``detect_productivity_windows``' own output (via ``window_summary_to_dict``); the ACTIVE
       claim is retrievable via a direct ``claims_about`` point read (no log scan).
   AC3 (empty log): no events -> the detector returns ``[]``; the stage STILL transitions to
-      ``dream_run``; zero ``writer.record`` calls (skip-on-empty).
+      ``dream_pattern`` (TK-113); zero ``writer.record`` calls (skip-on-empty).
   (never-block): a ``BehaviorEventLog.events_between`` failure is caught, logged LOUD, and the
       stage STILL transitions onward — mirrors ``DreamBehaviorLogStage``'s own AC5 posture.
   AC4 (NG-3, structural): an AST identifier scan over ``write_window_summaries.py`` finds no
@@ -135,7 +135,7 @@ async def test_ac2_writes_one_claim_whose_value_round_trips_the_detected_windows
 
     expected_windows = detect_productivity_windows(fixture)
     assert isinstance(result, Transition)
-    assert result.to == "dream_run"
+    assert result.to == "dream_pattern"
     assert result.output.data == {"windows": len(expected_windows), "errors": 0}
 
     # events_between was called with the fixed 14-day lookback.
@@ -178,7 +178,7 @@ async def test_ac3_empty_event_log_writes_no_claim_and_still_transitions(
     result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_run"
+    assert result.to == "dream_pattern"
     assert result.output.data == {"windows": 0, "errors": 0}
     assert record_calls == []
     assert calls == [(_NOW - timedelta(days=14), _NOW)]
@@ -207,7 +207,8 @@ async def test_events_between_raise_is_caught_logged_and_still_transitions(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_run"  # STILL transitions — one bad night never blocks the terminal
+    # STILL transitions — one bad night never blocks the terminal.
+    assert result.to == "dream_pattern"
     assert result.output.data == {"windows": 0, "errors": 1}
     assert calls  # events_between was in fact called
     assert any(
@@ -302,7 +303,7 @@ async def test_pg_gated_real_events_between_read_path(clean_table: None) -> None
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
         assert isinstance(result, Transition)
-        assert result.to == "dream_run"
+        assert result.to == "dream_pattern"
         assert result.output.data == {"windows": 1, "errors": 0}
 
         subject = f"productivity_window:{wombat_today(_NOW, ZoneInfo('UTC')).isoformat()}"
