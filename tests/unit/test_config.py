@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from wombat.config import REQUIRED_ENV, ConfigurationError, load_config
 
@@ -94,3 +95,75 @@ def test_load_config_prefers_explicit_env_var_over_env_file(
 
     assert config.deepseek_api_key.get_secret_value() == "sk-from-process-env"
     assert config.deepseek_base_url == "https://process-env.example.com"
+
+
+# --- TK-187: voice/persona config surface ----------------------------------------------------
+
+
+def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://example.com")
+
+
+# --- AC1: default environment -> both providers 'local', fully offline ----------------------
+
+
+def test_load_config_voice_persona_defaults_stay_fully_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # no .env in tmp_path -> nothing but process env applies
+    _set_required_env(monkeypatch)
+
+    config = load_config()
+
+    assert config.wombat_stt_provider == "local"
+    assert config.wombat_tts_provider == "local"
+    assert config.wombat_assistant_name == "Steward"
+    assert config.wombat_tts_voice_id is None
+    assert config.wombat_stt_model is None
+    assert config.wombat_elevenlabs_api_key is None
+    assert config.wombat_deepgram_api_key is None
+    assert config.wombat_fish_api_key is None
+
+
+# --- AC2: provider/voice/key vars set -> populated and typed --------------------------------
+
+
+def test_load_config_populates_voice_persona_fields_when_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_STT_PROVIDER", "deepgram")
+    monkeypatch.setenv("WOMBAT_TTS_PROVIDER", "fish")
+    monkeypatch.setenv("WOMBAT_TTS_VOICE_ID", "voice-123")
+    monkeypatch.setenv("WOMBAT_DEEPGRAM_API_KEY", "dg-secret")
+
+    config = load_config()
+
+    assert config.wombat_stt_provider == "deepgram"
+    assert config.wombat_tts_provider == "fish"
+    assert config.wombat_tts_voice_id == "voice-123"
+    assert isinstance(config.wombat_deepgram_api_key, SecretStr)
+    assert config.wombat_deepgram_api_key.get_secret_value() == "dg-secret"
+    assert "dg-secret" not in repr(config.wombat_deepgram_api_key)
+    assert repr(config.wombat_deepgram_api_key) == "SecretStr('**********')"
+    # Unset key fields stay None (and, when set, every *_api_key field is a SecretStr).
+    assert config.wombat_elevenlabs_api_key is None
+    assert config.wombat_fish_api_key is None
+
+
+# --- AC3: unknown provider value -> loud, naming the offending var --------------------------
+
+
+def test_load_config_rejects_unknown_stt_provider_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_STT_PROVIDER", "nonsense")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_STT_PROVIDER" in str(exc_info.value)

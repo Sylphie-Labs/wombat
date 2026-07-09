@@ -6,6 +6,8 @@ silently broken. Reads the model egress credentials only; everything determinist
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -67,6 +69,26 @@ class WombatConfig(BaseSettings):
     wombat_asr_drop_dir: str | None = None
     wombat_asr_model: str = "base"
 
+    # OPTIONAL (TK-187, DEC-28): voice/persona config surface — provider selection, key
+    # overrides, voice id, and assistant name. Selecting a provider here is a structural
+    # opt-in only (DEC-28: selection is necessary but not sufficient); TK-193 owns
+    # constructing the actual STT/TTS clients from these fields, TK-188 owns resolving keys
+    # from the keyring. Deliberately NOT in REQUIRED_ENV — the drain spine/demo/tests must
+    # keep booting fully offline with every field at its default. The provider vocabulary is
+    # closed (a ``Literal``) and enforced at boot: an unrecognized value fails ``load_config``
+    # loudly, naming the offending variable (e.g. ``WOMBAT_STT_PROVIDER``).
+    wombat_stt_provider: Literal["local", "deepgram", "elevenlabs", "fish"] = "local"
+    wombat_tts_provider: Literal["local", "deepgram", "elevenlabs", "fish"] = "local"
+    wombat_tts_voice_id: str | None = None
+    # Cloud-STT model override. Distinct from ``wombat_asr_model`` above (TK-162's local
+    # faster-whisper model name) — this one only applies when ``wombat_stt_provider`` names a
+    # cloud provider.
+    wombat_stt_model: str | None = None
+    wombat_elevenlabs_api_key: SecretStr | None = None
+    wombat_deepgram_api_key: SecretStr | None = None
+    wombat_fish_api_key: SecretStr | None = None
+    wombat_assistant_name: str = "Steward"
+
 
 def load_config() -> WombatConfig:
     """Load + validate config from the environment, or raise ConfigurationError loudly.
@@ -74,6 +96,9 @@ def load_config() -> WombatConfig:
     Env vars and the repo-root ``.env`` (if present) are both read by pydantic-settings,
     with explicit env vars taking precedence over ``.env`` values (TK-186: the pre-pydantic
     ``os.environ`` check used to short-circuit before ``.env`` was ever consulted).
+
+    A non-missing validation failure (e.g. a ``WOMBAT_STT_PROVIDER`` value outside its closed
+    vocabulary) also fails loud, naming the offending variable (TK-187).
     """
     try:
         return WombatConfig()  # populated from the environment (and/or .env) by pydantic-settings
@@ -83,5 +108,11 @@ def load_config() -> WombatConfig:
             if var.lower() in missing:
                 raise ConfigurationError(
                     f"missing required environment variable {var}; wombat will not start"
+                ) from exc
+        for error in exc.errors():
+            if error["loc"]:
+                field = str(error["loc"][0]).upper()
+                raise ConfigurationError(
+                    f"invalid environment variable {field}; wombat will not start"
                 ) from exc
         raise
