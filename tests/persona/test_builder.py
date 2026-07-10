@@ -10,7 +10,11 @@
       DRAFT/REFLECTION output at any level; proactivity changes nothing (equality across its
       three levels, other axes fixed).
   AC3 purity: builder.py imports nothing beyond stdlib enum/dataclasses/typing plus
-      wombat.persona.matrix.
+      wombat.persona.matrix and wombat.persona.expression (the TK-219 seam types).
+
+TK-219 note: instruction_for is now a thin compatibility delegate routing through the
+wombat.persona.expression seam via ClauseAlgebraStrategy + EMPTY_CUES — every assertion below is
+unchanged in substance; only the internal composition path changed.
 """
 
 from __future__ import annotations
@@ -212,7 +216,14 @@ def test_builder_module_has_no_disallowed_imports() -> None:
     source_path = Path(__file__).resolve().parents[2] / "src" / "wombat" / "persona" / "builder.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
-    allowed_modules = {"__future__", "enum", "dataclasses", "typing", "wombat.persona.matrix"}
+    allowed_modules = {
+        "__future__",
+        "enum",
+        "dataclasses",
+        "typing",
+        "wombat.persona.matrix",
+        "wombat.persona.expression",
+    }
     imported_modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

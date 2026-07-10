@@ -10,7 +10,10 @@ env/settings override).
 ``instruction(mouth)`` delegates to the pure TK-207 ``instruction_for`` builder over the CURRENT
 matrix — the four mouth call sites (``ComposeStage``, ``BriefComposeStage``, ``DraftComposer``,
 ``ReflectionComposeStage``) read this at RENDER time each turn via an OPTIONAL constructor arg
-(TK-209), so a matrix change lands on the NEXT rendered turn, no restart.
+(TK-209), so a matrix change lands on the NEXT rendered turn, no restart. ``instruction_for`` itself
+now routes through the TK-219 ``wombat.persona.expression.render_expression`` seam internally (a
+``ClauseAlgebraStrategy`` over ``EMPTY_CUES``) — this class's own signature and behavior are
+unchanged by that refactor; every mouth reroute stays byte-identical.
 
 ``set(matrix)`` swaps the in-memory matrix, THEN best-effort persists ONLY the five
 ``wombat_persona_*`` keys to the ``wombat.settings.json`` tier via a read-modify-write — every
