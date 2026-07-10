@@ -55,6 +55,19 @@ a form submit split across multiple gated calls would never reach the click. The
 the submit control that fails to resolve within the timeout short-circuits the whole call with the
 structured ``{"ok": False, "error": "element_not_found", "role": ..., "name": ...}`` result and NO
 submit click; success returns ``{"ok": True, "snapshot": ...}`` (the post-submit a11y snapshot).
+
+TK-136 (Q-114 rulings (f)-(j)) adds ``_checked_fill`` — the ONE shared checked-fill helper both
+fill call sites (the ``type`` action, via ``_type_action``, and ``submit_form``'s field loop)
+route through. Before ANY fill it reads the LIVE element's ``type`` attribute off the ALREADY-
+RESOLVED locator; ``type == "password"`` returns the structured
+``{"ok": False, "error": "password_field_blocked", "role": ..., "name": ...}`` result plus a
+``logger.warning`` and the fill NEVER happens. This is UNCONDITIONAL deny-always (Q-114 ruling h,
+stricter than the AC text): there is no human-confirm token parameter anywhere in this module or
+its schema that can disable it — ``BROWSER_INPUT_SCHEMA``'s ``additionalProperties: false`` at
+every level already rejects any extra argument a caller might invent to try. Detection of a
+LOGIN PAGE (as opposed to this deny-always fill guard) is a separate, best-effort concern living
+in ``wombat.stages.login_handoff`` — this guard is the strong guarantee; that detector is only
+the courtesy handoff.
 """
 
 from __future__ import annotations
@@ -225,6 +238,48 @@ async def _act_role(
     return {"ok": True, "snapshot": await _capture_snapshot(page)}
 
 
+async def _checked_fill(
+    locator: Locator, role: str, name: str, value: str
+) -> dict[str, Any] | None:
+    """The ONE shared checked-fill helper (TK-136, Q-114 rulings f-j) — every fill in this module
+    (the ``type`` action, via ``_type_action``, and ``submit_form``'s field loop) routes through
+    this and only this. Reads the LIVE, ALREADY-RESOLVED element's ``type`` attribute BEFORE any
+    fill; ``type == "password"`` returns the structured deny-always block below (logging a
+    warning) and the fill NEVER happens. UNCONDITIONAL — no parameter anywhere disables this.
+
+    Returns ``None`` on an ordinary (non-blocked) fill so callers can distinguish "filled" from
+    "blocked"; the caller is responsible for its own ``element_not_found`` handling around the
+    locator resolution and this call (mirrors ``_act_role``'s timeout-catching shape).
+    """
+    field_type = await locator.get_attribute("type", timeout=ELEMENT_TIMEOUT_MS)
+    if field_type == "password":
+        logger.warning(
+            "password_field_blocked: refused to fill role=%r name=%r — password fields are "
+            "deny-always (Q-114 ruling h); no code path may ever bypass this",
+            role,
+            name,
+        )
+        return {"ok": False, "error": "password_field_blocked", "role": role, "name": name}
+    await locator.fill(value, timeout=ELEMENT_TIMEOUT_MS)
+    return None
+
+
+async def _type_action(page: Page, role: str, name: str, value: str) -> dict[str, Any]:
+    """The ``type`` action's own resolution wrapper (mirrors ``_act_role``'s locator-resolve/
+    timeout shape) — routes the actual fill through the shared ``_checked_fill`` guard (TK-136)
+    instead of filling directly."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError  # lazy: see module
+
+    locator = page.get_by_role(role, name=name)  # type: ignore[arg-type]
+    try:
+        blocked = await _checked_fill(locator, role, name, value)
+    except PlaywrightTimeoutError:
+        return {"ok": False, "error": "element_not_found", "role": role, "name": name}
+    if blocked is not None:
+        return blocked
+    return {"ok": True, "snapshot": await _capture_snapshot(page)}
+
+
 async def _submit_form(
     page: Page, fields: list[Mapping[str, Any]], submit: Mapping[str, str]
 ) -> dict[str, Any]:
@@ -232,7 +287,9 @@ async def _submit_form(
     ``page.get_by_role`` (never CSS/XPath) inside ONE call (TK-135, Q-114) — see the module
     docstring for why this must not be split across multiple gated dispatches. The FIRST locator
     (a field or the submit control) that fails to resolve within ``ELEMENT_TIMEOUT_MS`` short-
-    circuits here with the structured ``element_not_found`` result and NO submit click.
+    circuits here with the structured ``element_not_found`` result and NO submit click. Every
+    field fill routes through the shared ``_checked_fill`` guard (TK-136) — a password field among
+    ``fields`` blocks that field (and the whole submit) with NO submit click either.
     """
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError  # lazy: see module
 
@@ -240,9 +297,11 @@ async def _submit_form(
         role, name, value = field["role"], field["name"], field["value"]
         locator = page.get_by_role(role, name=name)
         try:
-            await locator.fill(value, timeout=ELEMENT_TIMEOUT_MS)
+            blocked = await _checked_fill(locator, role, name, value)
         except PlaywrightTimeoutError:
             return {"ok": False, "error": "element_not_found", "role": role, "name": name}
+        if blocked is not None:
+            return blocked
 
     submit_role, submit_name = submit["role"], submit["name"]
     submit_locator = page.get_by_role(submit_role, name=submit_name)  # type: ignore[arg-type]
@@ -281,9 +340,7 @@ class PlaywrightCapability:
             )
         if action == "type":
             role, name, value = args["role"], args["name"], args["value"]
-            return await _act_role(
-                page, role, name, lambda loc: loc.fill(value, timeout=ELEMENT_TIMEOUT_MS)
-            )
+            return await _type_action(page, role, name, value)
         if action == "select":
             role, name, value = args["role"], args["name"], args["value"]
             return await _act_role(
