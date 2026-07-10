@@ -97,6 +97,17 @@ reachable terminal — composes over the SAME shared ``behavior_event_log``/``ob
 instances built above (never a second instance of either) and the SAME configured ``tz``. No new
 ``RuntimeBundle`` field: unlike ``behavior_event_log`` this stage owns no closeable resource of
 its own.
+
+TK-213 (EP-35, DEC-36/DEC-37(h), Q-112(a)): ``assemble_runtime`` builds a persona-feedback
+``recorder`` closure over the SAME ``behavior_event_log`` instance above — NEVER a second
+``BehaviorEventLog``/connection — and threads it into ``build_source_registry`` as
+``persona_feedback_recorder``. This is the SECOND sanctioned writer into
+``wombat_behavior_events`` (the first is the nightly ``DreamBehaviorLogStage``): the Q-112(a)
+row encoding is ``event_type='persona_feedback'``, ``source_id='asr'``, ``outcome_label=`` the
+matched lexicon phrase VERBATIM, ``duration_seconds=None``, and
+``idempotency_key=domain.item_identity.idempotency_key('persona_feedback', <the dropped audio
+file's sha256 event_key>)`` — a re-drop of identical audio bytes upserts the SAME row, while
+distinct recordings of the same phrase stay distinct rows.
 """
 
 from __future__ import annotations
@@ -138,6 +149,7 @@ from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
 from .domain.brief_schedule import BriefRunLedger
 from .domain.daily_ledger import DailyLedger, wombat_today
+from .domain.item_identity import idempotency_key
 from .gate.ceiling import CeilingLedger
 from .gate.decay import DayRollover
 from .gate.gate import gate_item_from_queue_item
@@ -183,6 +195,7 @@ from .pathways.dream_trigger import (
     DreamTimerStage,
     build_dream_schedule_pathway,
 )
+from .persona.feedback import FeedbackToken
 from .persona.live import LivePersona
 from .persona.matrix import matrix_from_config
 from .queue import QueueItem, WombatQueue
@@ -950,6 +963,22 @@ def assemble_runtime(
     dream_behavior_log_stage = DreamBehaviorLogStage(
         store=behavior_event_log, entity_kg=entity_kg, user_id=_RUNTIME_USER_ID
     )
+
+    def _record_persona_feedback(
+        token: FeedbackToken, event_key: str, timestamp: datetime
+    ) -> None:
+        """TK-213 (Q-112(a)): the bootstrap-owned SECOND sanctioned writer into
+        ``wombat_behavior_events`` — writes through the SAME ``behavior_event_log`` instance
+        above, never a second connection. See the module docstring for the full row-encoding
+        ruling."""
+        behavior_event_log.upsert(
+            idempotency_key=idempotency_key("persona_feedback", event_key),
+            event_type="persona_feedback",
+            source_id="asr",
+            timestamp_utc=timestamp,
+            outcome_label=token.phrase,
+            duration_seconds=None,
+        )
     # TK-112 (Q-99e): WriteWindowSummariesStage over the SAME shared behavior_event_log/
     # observation_writer instances built above (never a second instance of either) and the SAME
     # configured tz. UNCONDITIONAL (mirrors dream_behavior_log_stage's own posture) — no external
@@ -1046,6 +1075,7 @@ def assemble_runtime(
         gmail_token_store=gmail_token_store,
         live_persona=live_persona,
         speak=speak,
+        persona_feedback_recorder=_record_persona_feedback,
     )
     if chat_source is not None:
         # TK-222 (Q-110(d) ruling 1): registered exactly like every other source — the registry

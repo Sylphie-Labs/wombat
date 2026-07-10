@@ -50,6 +50,15 @@ never gate-rated, and never reaches a mouth. A hook that is ``None`` or returns 
 this method byte-identical to pre-TK-212 behavior. The hook itself
 (``sources.bootstrap.make_persona_command_hook``) is documented to NEVER raise; this module does
 not additionally guard the call.
+
+TK-213 (EP-35, DEC-36/DEC-37(h)): an optional ctor kwarg ``feedback_hook`` gives ``ASRSource``
+side-channel recording of closed-lexicon persona FEEDBACK (as opposed to a command) — evaluated in
+``_process_one`` AFTER the ``command_hook`` check and ONLY when the utterance was NOT consumed by
+a command. Unlike ``command_hook``, ``feedback_hook`` NEVER consumes: it takes ``(transcript,
+event_key)``, returns nothing, and the ``SourceEvent`` is still built and emitted byte-identically
+either way (AC2) — this is a pure side effect, not a branch. The hook itself
+(``sources.bootstrap.make_persona_feedback_hook``) is documented to NEVER raise (the factory
+guards the call); this module adds no try/except of its own, mirroring the TK-212 pattern.
 """
 
 from __future__ import annotations
@@ -126,12 +135,14 @@ class ASRSource:
         poll_interval_seconds: float,
         clock: Callable[[], datetime] = _utc_now,
         command_hook: Callable[[str], bool] | None = None,
+        feedback_hook: Callable[[str, str], None] | None = None,
     ) -> None:
         self.poll_interval_seconds = poll_interval_seconds
         self._drop_dir = drop_dir
         self._transcriber = transcriber
         self._clock = clock
         self._command_hook = command_hook
+        self._feedback_hook = feedback_hook
 
     async def start(self) -> None:
         """No lifecycle setup needed — the injected transcriber is already constructed."""
@@ -177,7 +188,9 @@ class ASRSource:
         on any caught transcription error (already logged and moved to ``failed/``) OR when
         ``command_hook`` consumes the transcript as a matched persona command (TK-212) — that
         path ALSO moves the file to ``processed/`` (transcription succeeded; the utterance was
-        just handled here instead of enqueued). Never raises — a bad file must never kill this
+        just handled here instead of enqueued). When the utterance was NOT consumed,
+        ``feedback_hook`` (TK-213) runs as a pure side effect before the ``SourceEvent`` is built
+        — it never changes what is returned. Never raises — a bad file must never kill this
         poll or another file's processing (AC4)."""
         try:
             raw = path.read_bytes()
@@ -200,6 +213,10 @@ class ASRSource:
             # a mouth. The file still moves to processed/ since it was successfully handled.
             self._safe_move(path, _PROCESSED_DIRNAME)
             return None
+
+        if self._feedback_hook is not None:
+            # TK-213: a pure side effect — never consumes, never changes the SourceEvent below.
+            self._feedback_hook(transcript, event_key)
 
         self._safe_move(path, _PROCESSED_DIRNAME)
         payload = {"transcript": transcript, "captured_at": self._clock().isoformat()}

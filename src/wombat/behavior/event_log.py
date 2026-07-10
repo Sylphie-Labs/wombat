@@ -8,19 +8,25 @@ DEC-6, no connection attempted at construction), and schema is applied via a pac
 ``.sql`` file executed by module-level ``ensure_schema(conn)`` (callers: tests + the composition
 root; never invoked automatically inside ``upsert``, mirroring every other Q-46 adapter).
 
-Written ONLY by ``DreamBehaviorLogStage`` (``pathways/dream_pathway.py``), the nightly dream
-pass's writer (no hot-path call site, EP-13). ``upsert`` is the sole write path — ``INSERT ...
-ON CONFLICT (idempotency_key) DO UPDATE`` (AC1 idempotency: re-running the nightly pass over the
-SAME terminal claim resolves to the SAME row, never a duplicate). ``events_between`` is the sole
-read path, ordered ascending by ``timestamp_utc`` (AC3) — TK-112's future window detector is the
-only intended reader; there is NO dashboard/analytics query anywhere in this module (NG-3, AC4
-enforced by ``tests/behavior/test_event_log.py``'s import-surface test).
+Written by TWO sanctioned callers (rescoped by TK-213, DEC-36/DEC-37(h), the TK-218 rescope
+precedent): ``DreamBehaviorLogStage`` (``pathways/dream_pathway.py``), the nightly dream pass's
+writer (EP-13); and the ``wombat.bootstrap`` persona-feedback recorder closure
+(``assemble_runtime``'s ``_record_persona_feedback``, Q-112(a)) — an ASR-seam, hot-path-adjacent
+writer that upserts one row per detected closed-lexicon persona-feedback phrase. ``upsert`` is the
+sole write path either way — ``INSERT ... ON CONFLICT (idempotency_key) DO UPDATE`` (AC1
+idempotency: re-running the nightly pass over the SAME terminal claim, or re-dropping the SAME
+audio bytes, resolves to the SAME row, never a duplicate). ``events_between`` is the sole read
+path, ordered ascending by ``timestamp_utc`` (AC3) — TK-112's window detector is the only intended
+reader; there is NO dashboard/analytics query anywhere in this module (NG-3, AC4 enforced by
+``tests/behavior/test_event_log.py``'s import-surface test).
 
 MOTIVE-FREE (CON-6/NG-1, Q-98 ruling f): this module never accepts or stores a motive/why field —
-the migration has no such column, and ``outcome_label`` is expected to be one of TK-43's closed
-``OUTCOME_*`` predicate values (enforced by the caller, ``DreamBehaviorLogStage``, which only ever
-reads terminal ``OUTCOME_*`` claims off the entity KG; this module itself stays a plain typed SQL
-adapter with no second runtime schema-violation mechanism of its own).
+the migration has no such column. ``outcome_label`` is expected to be one of TWO closed
+vocabularies (rescoped by TK-213): TK-43's ``OUTCOME_*`` predicate values for a
+``DreamBehaviorLogStage``-written row, or ``wombat.persona.feedback.FEEDBACK_LEXICON``'s closed
+phrase vocabulary for a persona-feedback row — enforced by each respective caller; this module
+itself stays a plain typed SQL adapter with no second runtime schema-violation mechanism of its
+own.
 """
 
 from __future__ import annotations

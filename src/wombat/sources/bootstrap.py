@@ -65,6 +65,17 @@ reaches a mouth. ``build_source_registry``/``_maybe_register_asr`` gain optional
 ``speak`` kwargs (both default ``None``, behavior-preserving); the hook is constructed and threaded
 into ``ASRSource`` ONLY when ``live_persona`` is not ``None`` — a caller that doesn't wire a
 ``LivePersona`` gets today's ``ASRSource`` exactly, no interception at all.
+
+TK-213 (EP-35, DEC-36/DEC-37(h)): ``make_persona_feedback_hook`` builds ``ASRSource``'s optional
+``feedback_hook`` seam — a matched closed-lexicon feedback phrase is recorded (never consumed;
+the utterance still enqueues normally) via an injected ``recorder`` closure over
+``wombat.persona.feedback.detect_feedback_token``. ``build_source_registry``/
+``_maybe_register_asr`` gain an optional ``persona_feedback_recorder`` kwarg (default ``None``,
+behavior-preserving); the hook is constructed and threaded into ``ASRSource`` ONLY when it is not
+``None`` — a caller that doesn't wire a recorder gets today's ``ASRSource`` exactly, no feedback
+recording at all. This module only ever imports ``wombat.persona.feedback`` — it never imports
+``wombat.behavior.event_log`` itself; the ``recorder`` closure (built by ``bootstrap.py``, over
+the ONE shared ``RuntimeBundle.behavior_event_log`` instance) is handed in fully assembled.
 """
 
 from __future__ import annotations
@@ -92,6 +103,7 @@ from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyr
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
 from wombat.persona.commands import apply, parse_persona_command
+from wombat.persona.feedback import FeedbackToken, detect_feedback_token
 from wombat.persona.live import LivePersona
 from wombat.sources.asr import ASRSource
 from wombat.sources.base import InputSource, SourceEvent
@@ -378,6 +390,34 @@ def make_persona_command_hook(
     return hook
 
 
+def make_persona_feedback_hook(
+    recorder: Callable[[FeedbackToken, str, datetime], None],
+    clock: Callable[[], datetime] = _utc_now,
+) -> Callable[[str, str], None]:
+    """TK-213 (EP-35, DEC-36/DEC-37(h)): build ``ASRSource``'s side-channel persona-feedback
+    recording hook, mirroring ``make_persona_command_hook``'s shape. On a lexicon match
+    (``detect_feedback_token`` — the closed, exact-match-only table) the returned closure calls
+    ``recorder(token, event_key, clock())`` inside a guard: a raise there is caught, logged as
+    ONE loud WARNING, and never propagated — the utterance still enqueues normally regardless
+    (this hook never consumes). No match is a silent no-op. The whole hook NEVER raises."""
+
+    def hook(transcript: str, event_key: str) -> None:
+        token = detect_feedback_token(transcript)
+        if token is None:
+            return
+        try:
+            recorder(token, event_key, clock())
+        except Exception:
+            logger.warning(
+                "asr persona feedback hook: recorder raised recording %r — the utterance still "
+                "enqueues normally (this hook never consumes)",
+                token.phrase,
+                exc_info=True,
+            )
+
+    return hook
+
+
 def _maybe_register_asr(
     registry: SourceRegistry,
     config: WombatConfig,
@@ -385,6 +425,7 @@ def _maybe_register_asr(
     poll_interval_seconds: float,
     live_persona: LivePersona | None = None,
     speak: Callable[[str], None] | None = None,
+    persona_feedback_recorder: Callable[[FeedbackToken, str, datetime], None] | None = None,
 ) -> None:
     """TK-162 (Q-97), rerouted by TK-193: register the ASR drop-directory source (``ASRSource``)
     iff ``config.wombat_asr_drop_dir`` is non-blank AND a ``Transcriber`` is constructible — the
@@ -398,7 +439,11 @@ def _maybe_register_asr(
 
     TK-212: ``command_hook`` is ``make_persona_command_hook(live_persona, speak)`` ONLY when
     ``live_persona`` is not ``None``; otherwise ``None`` — a caller that doesn't wire a
-    ``LivePersona`` gets today's ``ASRSource`` exactly, no interception at all."""
+    ``LivePersona`` gets today's ``ASRSource`` exactly, no interception at all.
+
+    TK-213: ``feedback_hook`` is ``make_persona_feedback_hook(persona_feedback_recorder)`` ONLY
+    when ``persona_feedback_recorder`` is not ``None``; otherwise ``None`` — a caller that doesn't
+    wire a recorder gets today's ``ASRSource`` exactly, no feedback recording at all."""
     raw_dir = (config.wombat_asr_drop_dir or "").strip()
     if not raw_dir:
         logger.warning(
@@ -412,12 +457,18 @@ def _maybe_register_asr(
     command_hook = (
         make_persona_command_hook(live_persona, speak) if live_persona is not None else None
     )
+    feedback_hook = (
+        make_persona_feedback_hook(persona_feedback_recorder)
+        if persona_feedback_recorder is not None
+        else None
+    )
     registry.register(
         ASRSource(
             drop_dir=Path(raw_dir),
             transcriber=transcriber,
             poll_interval_seconds=poll_interval_seconds,
             command_hook=command_hook,
+            feedback_hook=feedback_hook,
         )
     )
 
@@ -436,6 +487,7 @@ def build_source_registry(
     gmail_token_store: GmailTokenStore | None = None,
     live_persona: LivePersona | None = None,
     speak: Callable[[str], None] | None = None,
+    persona_feedback_recorder: Callable[[FeedbackToken, str, datetime], None] | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
     of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
@@ -454,6 +506,10 @@ def build_source_registry(
     ``live_persona``/``speak`` (TK-212) thread into ``_maybe_register_asr`` ONLY, to build the
     ASR pre-queue persona-command interception hook (``make_persona_command_hook``); both default
     ``None``, which constructs today's ``ASRSource`` exactly, no interception.
+
+    ``persona_feedback_recorder`` (TK-213) also threads into ``_maybe_register_asr`` ONLY, to
+    build the ASR side-channel persona-feedback recording hook (``make_persona_feedback_hook``);
+    defaults ``None``, which constructs today's ``ASRSource`` exactly, no feedback recording.
     """
     registry = SourceRegistry(queue)
     _maybe_register_gcal(
@@ -482,6 +538,7 @@ def build_source_registry(
         poll_interval_seconds=asr_poll_interval_seconds,
         live_persona=live_persona,
         speak=speak,
+        persona_feedback_recorder=persona_feedback_recorder,
     )
     return registry
 
@@ -583,4 +640,5 @@ __all__ = [
     "build_brief_fetches",
     "build_source_registry",
     "make_persona_command_hook",
+    "make_persona_feedback_hook",
 ]

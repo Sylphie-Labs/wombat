@@ -18,6 +18,8 @@ monkeypatched to a recording/raising double — the genuine pg round-trip lives 
       stage STILL transitions onward — mirrors ``DreamBehaviorLogStage``'s own AC5 posture.
   AC4 (NG-3, structural): an AST identifier scan over ``write_window_summaries.py`` finds no
       render/surface/dashboard-implying identifier anywhere.
+  TK-213 (writer-owns-honesty rider): rows with event_type=='persona_feedback' are excluded
+      before detect_productivity_windows ever sees the corpus.
 """
 
 from __future__ import annotations
@@ -41,7 +43,11 @@ from tests.support.stage_context_fake import StageContextFake
 from wombat.behavior.event_log import BehaviorEventLog, BehaviorEventRow
 from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
 from wombat.behavior.stages.write_window_summaries import WriteWindowSummariesStage
-from wombat.behavior.window_detector import detect_productivity_windows, window_summary_to_dict
+from wombat.behavior.window_detector import (
+    WindowSummary,
+    detect_productivity_windows,
+    window_summary_to_dict,
+)
 from wombat.domain.daily_ledger import wombat_today
 from wombat.user_model.claims import ClaimPredicate
 from wombat.user_model.observation_writer import ObservationWriter
@@ -217,6 +223,55 @@ async def test_events_between_raise_is_caught_logged_and_still_transitions(
     )
     subject = f"productivity_window:{wombat_today(_NOW, ZoneInfo('UTC')).isoformat()}"
     assert await entity_kg.claims_about(subject, scope=_SCOPE) == ()
+
+
+# ================================================================================================
+# TK-213: persona_feedback rows are excluded before the detector ever sees the corpus
+# ================================================================================================
+
+
+async def test_tk213_persona_feedback_rows_are_excluded_before_detection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entity_kg = InMemoryEntityKG()
+    writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id=_USER_ID
+    )
+    base = _NOW - timedelta(days=1)
+    fixture = [
+        _row(
+            key="a",
+            event_type="draft_reply",
+            timestamp_utc=base,
+            outcome_label="outcome_ignored",
+        ),
+        _row(
+            key="b",
+            event_type="persona_feedback",
+            timestamp_utc=base + timedelta(minutes=5),
+            outcome_label="too chatty",
+        ),
+    ]
+    store, _calls = _fake_store(monkeypatch, events=fixture)
+
+    captured: list[Sequence[BehaviorEventRow]] = []
+
+    def _spy_detect(events: Sequence[BehaviorEventRow]) -> list[WindowSummary]:
+        captured.append(events)
+        return detect_productivity_windows(events)
+
+    monkeypatch.setattr(
+        "wombat.behavior.stages.write_window_summaries.detect_productivity_windows",
+        _spy_detect,
+    )
+
+    stage = WriteWindowSummariesStage(store=store, writer=writer, tz=ZoneInfo("UTC"))
+    result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
+
+    assert isinstance(result, Transition)
+    assert len(captured) == 1
+    assert [event.idempotency_key for event in captured[0]] == ["a"]
+    assert all(event.event_type != "persona_feedback" for event in captured[0])
 
 
 # ================================================================================================

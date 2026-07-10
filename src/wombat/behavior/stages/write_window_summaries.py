@@ -30,6 +30,12 @@ night's window pass must never block the reachable terminal.
 NO DASHBOARD/SURFACE (NG-3): this stage only reads, detects, and writes a claim; it has no
 render/surface/dashboard call anywhere (enforced by ``tests/behavior/stages/
 test_write_window_summaries.py``'s structural scan).
+
+TK-213 (EP-35, DEC-36/DEC-37(h)): rows with ``event_type == 'persona_feedback'`` (the bootstrap
+persona-feedback recorder's writes, ``wombat.bootstrap``) are EXCLUDED before
+``detect_productivity_windows`` ever sees the corpus — a persona-feedback utterance is not a
+behavioral productivity event, and mixing it in would distort ``switch_rate``/window metrics
+that mean something else entirely (writer-owns-honesty).
 """
 
 from __future__ import annotations
@@ -85,6 +91,9 @@ class WriteWindowSummariesStage:
         errors = 0
         try:
             events = self._store.events_between(now - timedelta(days=_LOOKBACK_DAYS), now)
+            # TK-213: persona-feedback rows are not behavioral productivity events — excluded
+            # before the detector ever sees the corpus (writer-owns-honesty).
+            events = [event for event in events if event.event_type != "persona_feedback"]
             summaries = detect_productivity_windows(events)
             window_count = len(summaries)
             if summaries:

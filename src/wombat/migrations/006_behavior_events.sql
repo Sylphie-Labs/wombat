@@ -6,24 +6,31 @@
 -- strictly monotonic and a released slot is never reused, so this is 006, the next free number
 -- after 001/003/004/005.
 --
--- Written ONLY by the nightly dream pass (DreamBehaviorLogStage, EP-13) — no hot-path writer, no
+-- Written by TWO sanctioned callers (rescoped by TK-213, DEC-36/DEC-37(h)): the nightly dream
+-- pass (DreamBehaviorLogStage, EP-13), and the wombat.bootstrap persona-feedback recorder
+-- closure (an ASR-seam writer, Q-112(a), event_type='persona_feedback'). No other writer, no
 -- dashboard/analytics reader (NG-3, structurally enforced by an import-surface test).
 --
 -- MOTIVE-FREE BY CONSTRUCTION (CON-6/NG-1, Q-98 ruling f): there is no motive/why column, and
--- there never can be one added casually — TK-43's ClaimPredicate closed enum is the ONE
--- type-level wall enforcing this upstream, at claim-construction time; this table has no
--- competing runtime schema-violation mechanism of its own.
+-- there never can be one added casually — TK-43's ClaimPredicate closed enum (for a
+-- DreamBehaviorLogStage row) and wombat.persona.feedback's closed FEEDBACK_LEXICON (for a
+-- persona-feedback row) are the type-level walls enforcing this upstream, at write-construction
+-- time; this table has no competing runtime schema-violation mechanism of its own.
 --
 -- Columns:
 --   idempotency_key   PRIMARY KEY — the canonical TK-12 idempotency_key (== the terminal OUTCOME_*
 --                     claim's payload item_ref), NOT an ad-hoc id. Re-running the nightly pass
 --                     over the SAME terminal claim upserts this SAME row (AC1 idempotency).
---   event_type        the EventClass value the claim was scored under (e.g. 'draft_reply').
+--   event_type        the EventClass value the claim was scored under (e.g. 'draft_reply'), OR
+--                      (TK-213) the literal 'persona_feedback' for an ASR-seam feedback row.
 --   source_id         parsed from idempotency_key via domain.item_identity.split_idempotency_key
---                      — the source's own registration id ('calendar', 'gmail', ...).
---   timestamp_utc     the claim payload's resolved_at (aware UTC) — ordering/readability (AC3).
+--                      — the source's own registration id ('calendar', 'gmail', 'asr', ...).
+--   timestamp_utc     the claim payload's resolved_at (aware UTC), OR (TK-213) the aware-UTC
+--                      persona-feedback detection time — ordering/readability (AC3).
 --   outcome_label      the closed OUTCOME_* predicate value the claim carried (load_bearing |
---                      regretted | ignored) — never a free-form string, never a motive.
+--                      regretted | ignored), OR (TK-213) the matched persona-feedback lexicon
+--                      phrase VERBATIM (wombat.persona.feedback.FEEDBACK_LEXICON) — never a
+--                      free-form string, never a motive.
 --   duration_seconds   NULLABLE; NULL in v1 — no duration signal exists yet (recorded honestly,
 --                      not synthesized).
 --   created_at         row creation timestamp, for observability only — NOT used for ordering.
