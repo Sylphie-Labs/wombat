@@ -39,7 +39,10 @@ from pydantic import SecretStr
 
 import wombat.integrations.gcal.session as gcal_session_module
 import wombat.integrations.gmail.session as gmail_session_module
+import wombat.sources.bootstrap as sources_bootstrap_module
 from wombat.config import ConfigurationError, WombatConfig
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.base import SourceEvent
 from wombat.sources.bootstrap import build_brief_fetches, build_source_registry
@@ -430,6 +433,89 @@ def test_asr_source_not_wired_when_faster_whisper_not_installed(
 
     assert not _is_registered(registry, "asr")
     assert "faster-whisper" in caplog.text.lower()
+    assert consent_calls == []
+
+
+# --------------------------------------------------------------------- TK-212: persona hook wiring
+
+
+def _wire_spy_asr_source(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Monkeypatch ``sources.bootstrap``'s ``ASRSource``/``build_transcriber`` names so
+    ``_maybe_register_asr`` constructs a spy instead of a real ``ASRSource`` (no faster-whisper
+    needed) — returns the dict the spy populates with its constructor kwargs (mutated in place,
+    read after the call)."""
+    captured_kwargs: dict[str, Any] = {}
+
+    class _SpyASRSource:
+        id: str = "asr"
+
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+            self.poll_interval_seconds = kwargs.get("poll_interval_seconds", 1.0)
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def poll(self) -> list[SourceEvent]:
+            return []
+
+    monkeypatch.setattr(sources_bootstrap_module, "ASRSource", _SpyASRSource)
+    monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
+    return captured_kwargs
+
+
+def test_build_source_registry_threads_live_persona_and_speak_into_asr_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC4: a supplied ``live_persona`` (plus ``speak``) threads through to a non-``None``
+    ``command_hook`` on the constructed ``ASRSource``."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    captured_kwargs = _wire_spy_asr_source(monkeypatch)
+    config = _make_config(asr_drop_dir=str(tmp_path))
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+    speak_calls: list[str] = []
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        live_persona=live_persona,
+        speak=speak_calls.append,
+    )
+
+    assert _is_registered(registry, "asr")
+    assert captured_kwargs["command_hook"] is not None
+    assert consent_calls == []
+
+
+def test_build_source_registry_defaults_construct_asr_source_with_no_command_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC4: the ``live_persona``/``speak`` defaults (``None``) construct today's ``ASRSource``
+    exactly — ``command_hook`` stays ``None``, no interception wired at all."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    captured_kwargs = _wire_spy_asr_source(monkeypatch)
+    config = _make_config(asr_drop_dir=str(tmp_path))
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+
+    assert _is_registered(registry, "asr")
+    assert captured_kwargs["command_hook"] is None
     assert consent_calls == []
 
 

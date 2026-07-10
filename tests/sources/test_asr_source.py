@@ -22,6 +22,22 @@ test_drain_queue_stage.py`` uses, no Postgres required): missing ASR blocks noth
 AC3 (per-file failure): a ``Transcriber`` that raises for one of two dropped files still emits
 the good file's event, moves the bad file to ``failed/``, logs a warning, and ``poll()`` itself
 never raises.
+
+TK-212 (EP-34, DEC-35 + DEC-37(f)) acceptance criteria — pre-queue persona-command interception:
+
+AC1 (matched command consumed): a fake transcriber returns "be warmer" for a dropped file; after
+``poll()``, a real ``LivePersona`` carries the stepped matrix (``warmth`` moved up one level), a
+recording fake ``speak`` received EXACTLY ONE ack string equal to the pinned template, ``caplog``
+shows the trail line strictly BEFORE ``LivePersona.set`` is called (order-assert), NOTHING was
+emitted as a ``SourceEvent``, and the file sits in ``processed/``.
+
+AC2 (byte-identical unmatched path): a non-command transcript, even WITH a ``command_hook``
+wired, yields a ``SourceEvent`` whose payload is an explicit equality pin against pre-ticket
+behavior — proving the hook is a pure pass-through for anything the grammar doesn't match.
+
+AC3 (degrade): ``LivePersona.set`` raising inside the hook logs ONE loud WARNING, still consumes
+the command (no ``SourceEvent``, file in ``processed/``), and the source keeps processing
+subsequent files; a raising ``speak`` degrades loud the same way, without blocking the apply.
 """
 
 from __future__ import annotations
@@ -44,9 +60,11 @@ import wombat.sources.registry as registry_module
 from tests.support.stage_context_fake import StageContextFake
 from wombat.config import WombatConfig
 from wombat.domain.item_identity import idempotency_key as derive_key
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX, Warmth
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.asr import ASRSource
-from wombat.sources.bootstrap import build_source_registry
+from wombat.sources.bootstrap import build_source_registry, make_persona_command_hook
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.artifacts import queue_items_from_artifact_data
 from wombat.stages.drain_queue import DrainQueueStage
@@ -233,3 +251,205 @@ async def test_one_failing_file_moves_to_failed_the_other_still_emits_and_poll_n
     assert (tmp_path / "processed" / "good.wav").exists()
     assert (tmp_path / "failed" / "bad.wav").exists()
     assert "bad.wav" in caplog.text
+
+
+# --------------------------------------------------------------------------------- TK-212: AC1
+
+
+def _live_persona(tmp_path: Path) -> LivePersona:
+    return LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+
+
+class _RecordingSpeak:
+    def __init__(self) -> None:
+        self.said: list[str] = []
+
+    def __call__(self, text: str) -> None:
+        self.said.append(text)
+
+
+async def test_matched_command_is_consumed_never_enqueued_stepped_matrix_one_ack_trail_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"be-warmer-bytes")
+
+    live_persona = _live_persona(settings_dir)
+    speak = _RecordingSpeak()
+    hook = make_persona_command_hook(live_persona, speak)
+
+    # Order-assert: wrap live_persona.set so we can confirm the trail log already landed BEFORE
+    # the apply lands (the hook is documented to log strictly before calling set()).
+    log_count_at_set: list[int] = []
+    real_set = live_persona.set
+
+    def _spy_set(matrix: object) -> None:
+        log_count_at_set.append(len(caplog.records))
+        real_set(matrix)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(live_persona, "set", _spy_set)
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("be warmer"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=hook,
+    )
+
+    with caplog.at_level(logging.INFO):
+        events = await source.poll()  # must not raise
+
+    assert events == []  # NOTHING emitted as a SourceEvent
+    assert live_persona.matrix.warmth == Warmth.NEUTRAL  # stepped +1 from the default RESERVED
+    assert speak.said == ["Warmth is now neutral."]  # exactly one pinned ack
+    assert (drop_dir / "processed" / "note.wav").exists()
+    assert not (drop_dir / "failed" / "note.wav").exists()
+
+    trail_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(trail_records) == 1
+    assert "be warmer" in trail_records[0].getMessage()
+    # The trail line was ALREADY emitted (count == 1) by the time set() ran.
+    assert log_count_at_set == [1]
+
+
+async def test_matched_reset_command_uses_the_fixed_reset_ack_template(tmp_path: Path) -> None:
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    live_persona = _live_persona(tmp_path)
+    speak = _RecordingSpeak()
+    hook = make_persona_command_hook(live_persona, speak)
+    (drop_dir / "note.wav").write_bytes(b"reset-bytes")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("reset persona"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=hook,
+    )
+
+    events = await source.poll()
+
+    assert events == []
+    assert live_persona.matrix == DEFAULT_MATRIX
+    assert speak.said == ["Persona reset to defaults."]
+
+
+# --------------------------------------------------------------------------------- TK-212: AC2
+
+
+async def test_unmatched_transcript_yields_a_byte_identical_source_event_even_with_hook_wired(
+    tmp_path: Path,
+) -> None:
+    """AC2: a command_hook is wired, but the transcript doesn't match the grammar — the
+    SourceEvent payload is pinned byte-identical to pre-ticket (no command_hook) behavior."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    live_persona = _live_persona(tmp_path)
+    hook = make_persona_command_hook(live_persona, speak=None)
+    audio_bytes = b"unmatched-utterance-bytes"
+    (drop_dir / "note.wav").write_bytes(audio_bytes)
+    expected_event_key = hashlib.sha256(audio_bytes).hexdigest()
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("buy milk tomorrow"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=hook,
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert events[0].event_key == expected_event_key
+    assert events[0].payload == {
+        "transcript": "buy milk tomorrow",
+        "captured_at": _NOW.isoformat(),
+    }  # explicit equality pin — byte-identical to pre-TK-212 behavior
+    assert live_persona.matrix == DEFAULT_MATRIX  # untouched — never a persona-command match
+    assert (drop_dir / "processed" / "note.wav").exists()
+
+
+# --------------------------------------------------------------------------------- TK-212: AC3
+
+
+async def test_live_persona_set_raising_still_consumes_logs_loud_and_keeps_processing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    live_persona = _live_persona(tmp_path)
+    speak = _RecordingSpeak()
+    hook = make_persona_command_hook(live_persona, speak)
+
+    def _boom(matrix: object) -> None:
+        raise RuntimeError("simulated LivePersona.set failure")
+
+    (drop_dir / "a-command.wav").write_bytes(b"warmer-bytes")
+    (drop_dir / "b-plain.wav").write_bytes(b"plain-bytes")
+
+    class _TwoFileTranscriber:
+        def transcribe(self, path: Path) -> str:
+            return "be warmer" if path.name == "a-command.wav" else "just a note"
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_TwoFileTranscriber(),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=hook,
+    )
+
+    monkeypatch.setattr(live_persona, "set", _boom)
+    with caplog.at_level(logging.WARNING):
+        events = await source.poll()  # must not raise
+
+    # The command file was still consumed (no SourceEvent, moved to processed/); the ack still
+    # fired (the resulting/attempted level still acks); the plain file still enqueues normally —
+    # one bad apply never blocks the rest of the poll.
+    assert len(events) == 1
+    assert events[0].payload["transcript"] == "just a note"
+    assert (drop_dir / "processed" / "a-command.wav").exists()
+    assert (drop_dir / "processed" / "b-plain.wav").exists()
+    assert speak.said == ["Warmth is now neutral."]
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "LivePersona.set" in warnings[0].getMessage()
+
+
+async def test_speak_raising_degrades_loud_without_blocking_the_applied_persona_change(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    live_persona = _live_persona(tmp_path)
+
+    def _boom_speak(text: str) -> None:
+        raise RuntimeError("simulated speak failure")
+
+    hook = make_persona_command_hook(live_persona, _boom_speak)
+    (drop_dir / "note.wav").write_bytes(b"warmer-bytes")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("be warmer"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=hook,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        events = await source.poll()  # must not raise
+
+    assert events == []
+    assert live_persona.matrix.warmth == Warmth.NEUTRAL  # the persona change still applied
+    assert (drop_dir / "processed" / "note.wav").exists()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "speak" in warnings[0].getMessage()

@@ -40,6 +40,16 @@ posture, rescoped by DEC-28/TK-218). Opt-in cloud STT providers (``ElevenLabsScr
 ``FishAudioTranscriber``, TK-190) live in ``wombat.voice.stt`` and implement this SAME
 ``Transcriber`` Protocol; they are constructed ONLY by the structural opt-in seam
 ``wombat.voice.select.build_transcriber`` (DEC-28) — never here.
+
+TK-212 (EP-34, DEC-35 + DEC-37(f)): an optional ctor kwarg ``command_hook`` gives ``ASRSource``
+PRE-QUEUE interception of matched persona voice commands. Evaluated in ``_process_one`` right
+after ``transcribe()`` succeeds and BEFORE the ``SourceEvent`` is built: a hook that returns
+``True`` means the utterance was CONSUMED — the file still moves to ``processed/`` (transcription
+itself succeeded), but NO ``SourceEvent`` is emitted, so a matched command never enqueues, is
+never gate-rated, and never reaches a mouth. A hook that is ``None`` or returns ``False`` leaves
+this method byte-identical to pre-TK-212 behavior. The hook itself
+(``sources.bootstrap.make_persona_command_hook``) is documented to NEVER raise; this module does
+not additionally guard the call.
 """
 
 from __future__ import annotations
@@ -115,11 +125,13 @@ class ASRSource:
         transcriber: Transcriber,
         poll_interval_seconds: float,
         clock: Callable[[], datetime] = _utc_now,
+        command_hook: Callable[[str], bool] | None = None,
     ) -> None:
         self.poll_interval_seconds = poll_interval_seconds
         self._drop_dir = drop_dir
         self._transcriber = transcriber
         self._clock = clock
+        self._command_hook = command_hook
 
     async def start(self) -> None:
         """No lifecycle setup needed — the injected transcriber is already constructed."""
@@ -162,8 +174,11 @@ class ASRSource:
 
     def _process_one(self, path: Path) -> SourceEvent | None:
         """Transcribe and move a single file. Returns its ``SourceEvent`` on success; ``None``
-        on any caught error (already logged and moved to ``failed/``). Never raises — a bad
-        file must never kill this poll or another file's processing (AC4)."""
+        on any caught transcription error (already logged and moved to ``failed/``) OR when
+        ``command_hook`` consumes the transcript as a matched persona command (TK-212) — that
+        path ALSO moves the file to ``processed/`` (transcription succeeded; the utterance was
+        just handled here instead of enqueued). Never raises — a bad file must never kill this
+        poll or another file's processing (AC4)."""
         try:
             raw = path.read_bytes()
             event_key = hashlib.sha256(raw).hexdigest()
@@ -177,6 +192,13 @@ class ASRSource:
                 exc_info=True,
             )
             self._safe_move(path, _FAILED_DIRNAME)
+            return None
+
+        if self._command_hook is not None and self._command_hook(transcript):
+            # TK-212 (DEC-35, EP-34): a matched persona command is CONSUMED pre-queue — it never
+            # becomes a SourceEvent, so it never enqueues, is never gate-rated, and never reaches
+            # a mouth. The file still moves to processed/ since it was successfully handled.
+            self._safe_move(path, _PROCESSED_DIRNAME)
             return None
 
         self._safe_move(path, _PROCESSED_DIRNAME)

@@ -955,6 +955,10 @@ def assemble_runtime(
     # posture, but decided HERE so a Google-less/sink-less boot still starts rather than raising).
     raw_brief_path = config.wombat_brief_path
     brief_pathway_id: str | None = None
+    # TK-212 (EP-34): built ONCE and shared between the brief-deliver stage below and the
+    # source-registry ASR persona-command-hook seam further down — never a second/third TTS
+    # adapter construction (Q-96's "ONE adapter, N delivery points").
+    speak = make_speak_callable(config)
     if raw_brief_path is None or not raw_brief_path.strip():
         logger.warning(
             "assemble_runtime: WOMBAT_BRIEF_PATH is missing/blank; skipping wombat.brief "
@@ -984,9 +988,7 @@ def assemble_runtime(
         # speak seam (TK-101) — discharges the "TK-164 binds real TTS into THIS seam" promise
         # (Q-78). None unless voice_enabled AND the adapter constructs; a voice-off/lib-less boot
         # stays byte-identical (seam None, text-only delivery).
-        brief_deliver_stage = build_brief_deliver_stage(
-            config=config, tz=tz, speak=make_speak_callable(config)
-        )
+        brief_deliver_stage = build_brief_deliver_stage(config=config, tz=tz, speak=speak)
         brief_graph = build_brief_pathway(
             brief_gather_stage, brief_force_flush_stage, brief_compose_stage, brief_deliver_stage
         )
@@ -997,7 +999,12 @@ def assemble_runtime(
         substrate, config=config, params=op, capability_registry=capability_registry
     )
     source_registry = build_source_registry(
-        config, queue, tz=tz, gmail_token_store=gmail_token_store
+        config,
+        queue,
+        tz=tz,
+        gmail_token_store=gmail_token_store,
+        live_persona=live_persona,
+        speak=speak,
     )
 
     # TK-97 (Q-80): register wombat.brief_schedule — the once-daily brief timer — inside the SAME

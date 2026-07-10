@@ -57,6 +57,14 @@ all (TK-193: delegated to ``voice.select.build_transcriber``, which already logs
 exact gap — local faster-whisper absent, or a selected cloud provider's key/extra/voice_id gap
 falling through to a local build that itself fails) — either skips the source, never raises.
 Registration-not-rewrite (DEC-5/TK-161): ``SourceRegistry``/``sources/base.py`` are untouched.
+
+TK-212 (EP-34, DEC-35 + DEC-37(f), Q-109(c)): ``make_persona_command_hook`` builds ``ASRSource``'s
+optional ``command_hook`` seam — a matched persona voice command is intercepted AFTER
+transcription and BEFORE enqueue, so it never enters the queue, is never gate-rated, and never
+reaches a mouth. ``build_source_registry``/``_maybe_register_asr`` gain optional ``live_persona``/
+``speak`` kwargs (both default ``None``, behavior-preserving); the hook is constructed and threaded
+into ``ASRSource`` ONLY when ``live_persona`` is not ``None`` — a caller that doesn't wire a
+``LivePersona`` gets today's ``ASRSource`` exactly, no interception at all.
 """
 
 from __future__ import annotations
@@ -83,6 +91,8 @@ from wombat.integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
+from wombat.persona.commands import apply, parse_persona_command
+from wombat.persona.live import LivePersona
 from wombat.sources.asr import ASRSource
 from wombat.sources.base import InputSource, SourceEvent
 from wombat.sources.registry import Enqueuer, SourceRegistry
@@ -296,11 +306,85 @@ def _maybe_register_feedback(
     )
 
 
+def make_persona_command_hook(
+    live_persona: LivePersona, speak: Callable[[str], None] | None
+) -> Callable[[str], bool]:
+    """TK-212 (EP-34, DEC-35 + DEC-37(f), Q-109(c)): build ``ASRSource``'s pre-queue persona-
+    command interception hook. On a match (``parse_persona_command`` — TK-211's closed grammar,
+    exact-match only) the returned closure:
+
+    (a) logs ONE human-readable ``logger.info`` trail line, BEFORE the apply, naming the matched
+    phrase, axis, and old -> new level (this IS the CON-4 trail per Q-107(d) — the pg
+    ``ActionTrail`` stays scoped to external-tier dispatches; this hook never touches
+    ``trail/writer.py``);
+    (b) calls ``live_persona.set(...)`` inside a guard — a raise there is caught, logged as ONE
+    loud WARNING, and never propagated (the command is still consumed, never enqueued as
+    garbage);
+    (c) delivers a fixed, deterministic spoken ack via ``speak`` (zero model calls): either
+    ``"<Axis> is now <level>."`` or, for a reset, ``"Persona reset to defaults."``. A ``None``
+    ``speak``, or one that raises, degrades to ONE loud log line and never blocks — the persona
+    change is already applied regardless.
+
+    Returns ``True`` (consumed) for a match, ``False`` for anything else. The whole hook NEVER
+    raises."""
+
+    def hook(transcript: str) -> bool:
+        command = parse_persona_command(transcript)
+        if command is None:
+            return False
+
+        current = live_persona.matrix
+        new_matrix = apply(current, command)
+        if command.reset:
+            logger.info("asr persona command matched %r: reset persona -> defaults", transcript)
+            ack = "Persona reset to defaults."
+        else:
+            axis = command.axis
+            assert axis is not None  # PersonaCommand.__post_init__ guarantees this for non-reset
+            old_level = getattr(current, axis)
+            new_level = getattr(new_matrix, axis)
+            logger.info(
+                "asr persona command matched %r: axis=%s %s -> %s",
+                transcript,
+                axis,
+                old_level,
+                new_level,
+            )
+            ack = f"{axis.capitalize()} is now {new_level}."
+
+        try:
+            live_persona.set(new_matrix)
+        except Exception:
+            logger.warning(
+                "asr persona command hook: LivePersona.set raised applying %r — the command is "
+                "still consumed (never enqueued)",
+                transcript,
+                exc_info=True,
+            )
+
+        if speak is not None:
+            try:
+                speak(ack)
+            except Exception:
+                logger.warning(
+                    "asr persona command hook: speak raised delivering the ack %r — degrading "
+                    "silently (the persona change is already applied)",
+                    ack,
+                    exc_info=True,
+                )
+
+        return True
+
+    return hook
+
+
 def _maybe_register_asr(
     registry: SourceRegistry,
     config: WombatConfig,
     *,
     poll_interval_seconds: float,
+    live_persona: LivePersona | None = None,
+    speak: Callable[[str], None] | None = None,
 ) -> None:
     """TK-162 (Q-97), rerouted by TK-193: register the ASR drop-directory source (``ASRSource``)
     iff ``config.wombat_asr_drop_dir`` is non-blank AND a ``Transcriber`` is constructible — the
@@ -310,7 +394,11 @@ def _maybe_register_asr(
     (or an absent/blocked cloud key/extra falling through to that same local gap), or one with no
     drop directory configured, still boots clean with every other source intact. Transcriber
     construction is delegated to ``voice.select.build_transcriber`` (TK-193), which already logs
-    LOUD naming the exact gap on any skip path — nothing further to log here."""
+    LOUD naming the exact gap on any skip path — nothing further to log here.
+
+    TK-212: ``command_hook`` is ``make_persona_command_hook(live_persona, speak)`` ONLY when
+    ``live_persona`` is not ``None``; otherwise ``None`` — a caller that doesn't wire a
+    ``LivePersona`` gets today's ``ASRSource`` exactly, no interception at all."""
     raw_dir = (config.wombat_asr_drop_dir or "").strip()
     if not raw_dir:
         logger.warning(
@@ -321,11 +409,15 @@ def _maybe_register_asr(
     transcriber = build_transcriber(config)
     if transcriber is None:
         return
+    command_hook = (
+        make_persona_command_hook(live_persona, speak) if live_persona is not None else None
+    )
     registry.register(
         ASRSource(
             drop_dir=Path(raw_dir),
             transcriber=transcriber,
             poll_interval_seconds=poll_interval_seconds,
+            command_hook=command_hook,
         )
     )
 
@@ -342,6 +434,8 @@ def build_source_registry(
     asr_poll_interval_seconds: float = DEFAULT_ASR_POLL_INTERVAL_SECONDS,
     gcal_token_store: GcalTokenStore | None = None,
     gmail_token_store: GmailTokenStore | None = None,
+    live_persona: LivePersona | None = None,
+    speak: Callable[[str], None] | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
     of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
@@ -356,6 +450,10 @@ def build_source_registry(
     fake clock. ``gcal_token_store``/``gmail_token_store`` default to the real OS-keyring
     ``TokenStore`` adapters; tests inject in-memory fakes so this function never touches the
     real vault outside the live smokes.
+
+    ``live_persona``/``speak`` (TK-212) thread into ``_maybe_register_asr`` ONLY, to build the
+    ASR pre-queue persona-command interception hook (``make_persona_command_hook``); both default
+    ``None``, which constructs today's ``ASRSource`` exactly, no interception.
     """
     registry = SourceRegistry(queue)
     _maybe_register_gcal(
@@ -382,6 +480,8 @@ def build_source_registry(
         registry,
         config,
         poll_interval_seconds=asr_poll_interval_seconds,
+        live_persona=live_persona,
+        speak=speak,
     )
     return registry
 
@@ -482,4 +582,5 @@ __all__ = [
     "GmailWithReplyIntents",
     "build_brief_fetches",
     "build_source_registry",
+    "make_persona_command_hook",
 ]
