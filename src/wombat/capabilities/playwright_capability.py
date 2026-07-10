@@ -42,6 +42,19 @@ not-found signal has to be a return value, not a raise. ``screenshot`` is the cl
 pixel fallback (CST-5: the a11y tree is the workhorse) — it returns raw PNG bytes and logs a
 ``"screenshot-fallback used"`` record so its (expected-rare) use is auditable; deciding WHEN to
 fall back to it is the caller's call, never automatic here.
+
+TK-135 (Q-114) adds ONE more atomic action, ``submit_form``: ``fields`` (a list of
+``{role, name, value}`` objects) and ``submit`` (a ``{role, name}`` object) join ``url`` in the
+``allOf`` requirement for this action. A single ``invoke`` call performs ``page.goto(url)``, fills
+every field in order via ``page.get_by_role`` (the same locator strategy as ``_act_role`` — never
+CSS/XPath), then clicks the submit locator, all bounded by the existing ``ELEMENT_TIMEOUT_MS``.
+This is deliberately ONE dispatch, not fill-then-separately-click: Q-113(c)/Q-114(d) rule that the
+first external dispatch on a drive taints it and every subsequent external dispatch is then
+refused with ``TierViolation`` (the same reason ``navigate`` returns its snapshot in one call) —
+a form submit split across multiple gated calls would never reach the click. The FIRST field or
+the submit control that fails to resolve within the timeout short-circuits the whole call with the
+structured ``{"ok": False, "error": "element_not_found", "role": ..., "name": ...}`` result and NO
+submit click; success returns ``{"ok": True, "snapshot": ...}`` (the post-submit a11y snapshot).
 """
 
 from __future__ import annotations
@@ -68,12 +81,42 @@ BROWSER_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["navigate", "snapshot", "click", "type", "select", "screenshot"],
+            "enum": [
+                "navigate",
+                "snapshot",
+                "click",
+                "type",
+                "select",
+                "screenshot",
+                "submit_form",
+            ],
         },
         "url": {"type": "string"},
         "role": {"type": "string"},
         "name": {"type": "string"},
         "value": {"type": "string"},
+        "fields": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string"},
+                    "name": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["role", "name", "value"],
+                "additionalProperties": False,
+            },
+        },
+        "submit": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string"},
+                "name": {"type": "string"},
+            },
+            "required": ["role", "name"],
+            "additionalProperties": False,
+        },
     },
     "required": ["action"],
     "additionalProperties": False,
@@ -94,12 +137,18 @@ BROWSER_INPUT_SCHEMA: dict[str, Any] = {
             "if": {"properties": {"action": {"const": "select"}}},
             "then": {"required": ["action", "role", "name", "value"]},
         },
+        {
+            "if": {"properties": {"action": {"const": "submit_form"}}},
+            "then": {"required": ["action", "url", "fields", "submit"]},
+        },
     ],
 }
-"""Hand-authored (Q-113(b)/(e)): a top-level ``action`` enum plus per-action fields — ``url`` for
-``navigate``; ``role``/``name`` (the a11y locator) for ``click``; ``role``/``name``/``value`` for
-``type``/``select``; ``screenshot`` needs nothing beyond ``action``. ``additionalProperties:
-false`` so ``dispatch_one``'s framework-side jsonschema validation rejects anything else."""
+"""Hand-authored (Q-113(b)/(e), Q-114): a top-level ``action`` enum plus per-action fields —
+``url`` for ``navigate``; ``role``/``name`` (the a11y locator) for ``click``; ``role``/``name``/
+``value`` for ``type``/``select``; ``screenshot`` needs nothing beyond ``action``; ``url``/
+``fields``/``submit`` for ``submit_form`` (TK-135). ``additionalProperties: false`` at every
+level — top-level and each ``fields`` entry — so ``dispatch_one``'s framework-side jsonschema
+validation rejects anything else."""
 
 
 class BrowserSession:
@@ -176,6 +225,35 @@ async def _act_role(
     return {"ok": True, "snapshot": await _capture_snapshot(page)}
 
 
+async def _submit_form(
+    page: Page, fields: list[Mapping[str, Any]], submit: Mapping[str, str]
+) -> dict[str, Any]:
+    """Fill every field in ``fields`` (in order) then click the ``submit`` locator, all via
+    ``page.get_by_role`` (never CSS/XPath) inside ONE call (TK-135, Q-114) — see the module
+    docstring for why this must not be split across multiple gated dispatches. The FIRST locator
+    (a field or the submit control) that fails to resolve within ``ELEMENT_TIMEOUT_MS`` short-
+    circuits here with the structured ``element_not_found`` result and NO submit click.
+    """
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError  # lazy: see module
+
+    for field in fields:
+        role, name, value = field["role"], field["name"], field["value"]
+        locator = page.get_by_role(role, name=name)
+        try:
+            await locator.fill(value, timeout=ELEMENT_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            return {"ok": False, "error": "element_not_found", "role": role, "name": name}
+
+    submit_role, submit_name = submit["role"], submit["name"]
+    submit_locator = page.get_by_role(submit_role, name=submit_name)  # type: ignore[arg-type]
+    try:
+        await submit_locator.click(timeout=ELEMENT_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        return {"ok": False, "error": "element_not_found", "role": submit_role, "name": submit_name}
+
+    return {"ok": True, "snapshot": await _capture_snapshot(page)}
+
+
 class PlaywrightCapability:
     """The ``browser`` external-tier ``Capability`` (Q-113(b)/(c)) — see the module docstring
     for the taint mechanic that shapes ``invoke``'s ``navigate`` branch."""
@@ -214,6 +292,12 @@ class PlaywrightCapability:
                 name,
                 lambda loc: loc.select_option(value, timeout=ELEMENT_TIMEOUT_MS),
             )
+        if action == "submit_form":
+            url = args["url"]
+            fields = args["fields"]
+            submit = args["submit"]
+            await page.goto(url)
+            return await _submit_form(page, fields, submit)
         if action == "screenshot":
             logger.warning(
                 "screenshot-fallback used (CST-5: a11y tree is the workhorse, pixels are the "
