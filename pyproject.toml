@@ -30,6 +30,11 @@ voice = ["pyttsx3>=2.90", "faster-whisper>=1.0"]
 # vendor SDKs (Q-100). Separate from `voice` (local/offline) since cloud providers are an
 # explicit opt-in, never installed by default.
 voice-cloud = ["httpx>=0.27"]
+# The Electron renderer's CONFIG backend (TK-197, EP-32, DEC-31/32) — a standalone loopback-only
+# process (`python -m wombat.settings_app`) that imports NOTHING from the wombat runtime. Kept
+# out of the base dependency set for the same reason as `voice`/`voice-cloud`: a checkout that
+# never runs the settings app still boots clean without it.
+settings-app = ["fastapi>=0.115", "uvicorn>=0.30"]
 
 [project.scripts]
 wombat = "wombat:main"
@@ -47,6 +52,12 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=1.4.0",
     "types-PyYAML>=6.0",
+    # TK-197 (EP-32): mypy strict covers files=[src, tests], so wombat.settings_app's deps must
+    # resolve in the dev env even though they're an optional extra for end users; FastAPI's
+    # TestClient rides httpx (tests/settings_app/test_api.py).
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
 ]
 
 [build-system]
