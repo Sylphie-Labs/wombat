@@ -9,6 +9,8 @@ unchanged.
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -167,3 +169,111 @@ def test_load_config_rejects_unknown_stt_provider_naming_the_var(
         load_config()
 
     assert "WOMBAT_STT_PROVIDER" in str(exc_info.value)
+
+
+# --- TK-196: wombat.settings.json — app-editable, non-secret, pinned precedence -------------
+
+
+def _write_settings_file(tmp_path: Path, data: dict[str, object]) -> None:
+    (tmp_path / "wombat.settings.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+# --- AC1: settings.json < .env < explicit env var, all CWD-relative and chdir-isolated ------
+
+
+def test_load_config_settings_json_is_lowest_of_the_three_live_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(tmp_path, {"wombat_assistant_name": "Marvin"})
+
+    config = load_config()
+    assert config.wombat_assistant_name == "Marvin"
+
+    # A .env value in the same tmp cwd wins over the settings file.
+    (tmp_path / ".env").write_text(
+        "DEEPSEEK_API_KEY=sk-test\nDEEPSEEK_BASE_URL=https://example.com\n"
+        "WOMBAT_ASSISTANT_NAME=Env\n",
+        encoding="utf-8",
+    )
+    config = load_config()
+    assert config.wombat_assistant_name == "Env"
+
+    # An explicit process env var wins over both.
+    monkeypatch.setenv("WOMBAT_ASSISTANT_NAME", "FromProcessEnv")
+    config = load_config()
+    assert config.wombat_assistant_name == "FromProcessEnv"
+
+
+# --- AC2: a secret field named in the file is dropped, loudly, and never loads --------------
+
+
+def test_load_config_settings_json_drops_secret_field_with_one_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(tmp_path, {"wombat_fish_api_key": "sekrit"})
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()
+
+    assert config.wombat_fish_api_key is None
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat_fish_api_key" in warnings[0].message
+
+
+# --- AC3: absent file is byte-unchanged behavior; malformed file is one loud warning + absent
+
+
+def test_load_config_no_settings_file_is_a_silent_no_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    # No wombat.settings.json in tmp_path at all.
+
+    config = load_config()
+
+    assert config.wombat_assistant_name == "Steward"
+
+
+def test_load_config_malformed_settings_file_warns_once_and_is_treated_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    (tmp_path / "wombat.settings.json").write_text("{not valid json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()
+
+    assert config.wombat_assistant_name == "Steward"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat.settings.json" in warnings[0].message
+
+
+@pytest.mark.parametrize("raw", ["[1, 2, 3]", "null"])
+def test_load_config_non_object_settings_file_warns_once_and_is_treated_as_absent(
+    raw: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    (tmp_path / "wombat.settings.json").write_text(raw, encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()
+
+    assert config.wombat_assistant_name == "Steward"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat.settings.json" in warnings[0].message
+
+
+def test_gitignore_excludes_wombat_settings_json() -> None:
+    gitignore = Path(__file__).resolve().parents[2] / ".gitignore"
+    lines = {line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()}
+    assert "wombat.settings.json" in lines

@@ -15,6 +15,9 @@ wheels/
 .env.*
 !.env.example
 
+# App-editable settings file (TK-196) — non-secret, machine-local, never committed.
+wombat.settings.json
+
 # Tooling caches
 .mypy_cache/
 .pytest_cache/

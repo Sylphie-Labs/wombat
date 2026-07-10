@@ -6,10 +6,20 @@ silently broken. Reads the model egress credentials only; everything determinist
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+import logging
+from pathlib import Path
+from typing import Any, Literal, get_args
 
 from pydantic import SecretStr, ValidationError
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    JsonConfigSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigurationError(RuntimeError):
@@ -18,6 +28,78 @@ class ConfigurationError(RuntimeError):
 
 # Declared in the order they are reported as missing (AC2 names the FIRST missing one).
 REQUIRED_ENV: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
+
+# The gitignored, app-editable, CWD-relative settings file (TK-196, EP-32, DEC-32). NOTHING
+# writes this file yet — TK-197 owns the write path; this ticket only wires it in as a read
+# source under the pinned precedence: env > .env > wombat.settings.json > defaults.
+WOMBAT_SETTINGS_FILE = "wombat.settings.json"
+
+# The documented admitted-field schema for wombat.settings.json (TK-196, Q-106(b)): keys named
+# here are the ONLY ones the app-editable file may populate. TK-208 will append its persona
+# fields to this SAME tuple; TK-197 validates PUTs against it.
+APP_EDITABLE_FIELDS: tuple[str, ...] = (
+    "wombat_stt_provider",
+    "wombat_tts_provider",
+    "wombat_tts_voice_id",
+    "wombat_stt_model",
+    "wombat_assistant_name",
+)
+
+
+class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
+    """Reads ``wombat.settings.json`` (TK-196) for ``WombatConfig``.
+
+    Two structural guards, both loud-not-silent:
+      * no secrets load from this file — a loaded key naming a ``SecretStr``-typed
+        ``WombatConfig`` field (the ``*_api_key`` fields, ``deepseek_api_key``,
+        ``google_oauth_client_secret``) is dropped with exactly one ``logger.warning`` naming
+        the field; the value never reaches the model.
+      * a malformed file can never fail boot (CON-3) — a ``json.JSONDecodeError`` while reading
+        is caught, one ``logger.warning`` is logged, and the file is treated as absent. A
+        genuinely-missing file is already a silent no-op (inherited from the base class).
+      * a syntactically-valid file whose top level isn't a JSON object (an array, string,
+        number, bool, or ``null``) is the same treated-as-absent posture: one ``logger.warning``
+        is logged and the file is treated as empty, rather than letting the base class's
+        ``dict``-only merge raise ``TypeError``/``ValueError`` and brick boot.
+
+    Any other loaded key that isn't in ``APP_EDITABLE_FIELDS`` (and isn't a secret field) is
+    dropped silently — only the admitted-field schema may come from this file.
+    """
+
+    def _read_file(self, file_path: Path) -> dict[str, Any]:
+        try:
+            loaded = super()._read_file(file_path)
+        except json.JSONDecodeError as exc:
+            logger.warning("%s is malformed JSON (%s); ignoring it", WOMBAT_SETTINGS_FILE, exc)
+            return {}
+        if not isinstance(loaded, dict):
+            logger.warning(
+                "%s does not contain a JSON object at the top level; ignoring it",
+                WOMBAT_SETTINGS_FILE,
+            )
+            return {}
+        return loaded
+
+    def __call__(self) -> dict[str, Any]:
+        loaded = super().__call__()
+        secret_fields = {
+            name
+            for name, field in self.settings_cls.model_fields.items()
+            if field.annotation is SecretStr or SecretStr in get_args(field.annotation)
+        }
+        filtered: dict[str, Any] = {}
+        for key, value in loaded.items():
+            if key in APP_EDITABLE_FIELDS:
+                filtered[key] = value
+            elif key in secret_fields:
+                logger.warning(
+                    "%s contains %r, a secret field; ignoring it "
+                    "(secrets never load from the app-editable settings file)",
+                    WOMBAT_SETTINGS_FILE,
+                    key,
+                )
+            # else: not an admitted field — dropped silently.
+        return filtered
 
 
 class WombatConfig(BaseSettings):
@@ -88,6 +170,25 @@ class WombatConfig(BaseSettings):
     wombat_deepgram_api_key: SecretStr | None = None
     wombat_fish_api_key: SecretStr | None = None
     wombat_assistant_name: str = "Steward"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Pin precedence (TK-196): init kwargs > env > .env > wombat.settings.json > defaults.
+
+        Sources are consulted in the returned order — earlier wins. Direct-construction kwargs
+        (``init_settings``, used by many existing tests calling ``WombatConfig(...)`` directly)
+        stay highest, so this addition is behavior-preserving for every caller that doesn't touch
+        ``wombat.settings.json``.
+        """
+        json_settings = _AppEditableJsonSettingsSource(settings_cls, json_file=WOMBAT_SETTINGS_FILE)
+        return init_settings, env_settings, dotenv_settings, json_settings, file_secret_settings
 
 
 def load_config() -> WombatConfig:
