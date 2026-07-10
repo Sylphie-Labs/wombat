@@ -12,8 +12,10 @@
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import itertools
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +29,7 @@ from wombat.persona.matrix import (
     Proactivity,
     Warmth,
     from_strings,
+    matrix_from_config,
     to_strings,
 )
 
@@ -128,3 +131,66 @@ def test_module_doc_names_excluded_axes_and_constitution_ids() -> None:
     constitution_ids = ["CON-1", "CON-2", "CON-3", "CON-5", "CON-6", "NG-2", "NG-3"]
     for con_id in constitution_ids:
         assert con_id in doc
+
+
+# --------------------------------------------------------------- matrix_from_config (TK-208)
+
+
+@dataclasses.dataclass
+class _FakePersonaConfig:
+    """Duck-typed stand-in for WombatConfig's five persona fields (Q-106(c)) — this module must
+    never import ``wombat.config`` to build one."""
+
+    wombat_persona_brevity: str = "terse"
+    wombat_persona_warmth: str = "reserved"
+    wombat_persona_directness: str = "plain"
+    wombat_persona_humor: str = "none"
+    wombat_persona_proactivity: str = "balanced"
+
+
+def test_matrix_from_config_defaults_match_default_matrix() -> None:
+    assert matrix_from_config(_FakePersonaConfig()) == DEFAULT_MATRIX
+
+
+def test_matrix_from_config_reads_each_field() -> None:
+    config = _FakePersonaConfig(
+        wombat_persona_brevity="expansive",
+        wombat_persona_warmth="warm",
+        wombat_persona_directness="blunt",
+        wombat_persona_humor="dry",
+        wombat_persona_proactivity="forward",
+    )
+
+    result = matrix_from_config(config)
+
+    assert result == PersonaMatrix(
+        brevity=Brevity.EXPANSIVE,
+        warmth=Warmth.WARM,
+        directness=Directness.BLUNT,
+        humor=Humor.DRY,
+        proactivity=Proactivity.FORWARD,
+    )
+
+
+def test_matrix_from_config_unknown_value_raises_naming_axis_and_value() -> None:
+    config = _FakePersonaConfig(wombat_persona_warmth="nonsense")
+    with pytest.raises(ValueError) as excinfo:
+        matrix_from_config(config)
+    message = str(excinfo.value)
+    assert "warmth" in message
+    assert "nonsense" in message
+
+
+def test_matrix_module_does_not_import_wombat_config() -> None:
+    """Q-106(c): matrix.py stays a pure domain module — no import of wombat.config (no cycle)."""
+
+    import wombat.persona.matrix as matrix_module
+
+    tree = ast.parse(
+        Path(matrix_module.__file__).read_text(encoding="utf-8"), filename=matrix_module.__file__
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert not any(alias.name.startswith("wombat.config") for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module != "wombat.config" and node.module != "wombat"

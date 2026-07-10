@@ -2,7 +2,10 @@
 
 TK-206 (EP-33, DEC-33 as amended by DEC-37). A pure domain module: zero IO, zero config/env
 reads, zero new dependencies. No prompt text lives here (that's TK-207) and no ``WombatConfig``
-fields live here (that's TK-208).
+fields live here (TK-208 puts them on ``WombatConfig`` itself). TK-208 does add
+``matrix_from_config`` here — it builds a matrix from anything structurally shaped like the five
+``wombat_persona_*`` fields (a ``Protocol``, Q-106(c)), so this module still never imports
+``wombat.config`` (no cycle).
 
 FIVE AXES, each a closed named-level enum (DEC-33, amended by DEC-37):
     - ``Brevity``:     terse | balanced | expansive
@@ -35,6 +38,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 
 class Brevity(StrEnum):
@@ -136,3 +140,45 @@ def to_strings(matrix: PersonaMatrix) -> dict[str, str]:
         "humor": matrix.humor.value,
         "proactivity": matrix.proactivity.value,
     }
+
+
+class _PersonaConfigLike(Protocol):
+    """Structural shape ``matrix_from_config`` needs (TK-208, Q-106(c)) — duck-typed so this
+    module never imports ``wombat.config`` (no cycle; persona stays a pure domain module).
+
+    Read-only properties (rather than plain attributes) so narrower types — e.g.
+    ``WombatConfig``'s ``Literal["terse", "balanced", "expansive"]`` fields — still satisfy this
+    Protocol structurally (plain attributes are invariant; properties are covariant).
+    """
+
+    @property
+    def wombat_persona_brevity(self) -> str: ...
+    @property
+    def wombat_persona_warmth(self) -> str: ...
+    @property
+    def wombat_persona_directness(self) -> str: ...
+    @property
+    def wombat_persona_humor(self) -> str: ...
+    @property
+    def wombat_persona_proactivity(self) -> str: ...
+
+
+def matrix_from_config(config: _PersonaConfigLike) -> PersonaMatrix:
+    """Build a ``PersonaMatrix`` from the five ``wombat_persona_*`` fields on ``config``.
+
+    ``config`` is anything exposing the five ``wombat_persona_*`` string attributes (typically a
+    ``WombatConfig``) — matched structurally via ``_PersonaConfigLike`` so this module never
+    imports ``wombat.config`` (TK-208, Q-106(c): no cycle). Delegates to ``from_strings``, so an
+    unrecognized value on any axis raises ``ValueError`` naming both the axis and the offending
+    value, exactly as ``from_strings`` does.
+    """
+
+    return from_strings(
+        {
+            "brevity": config.wombat_persona_brevity,
+            "warmth": config.wombat_persona_warmth,
+            "directness": config.wombat_persona_directness,
+            "humor": config.wombat_persona_humor,
+            "proactivity": config.wombat_persona_proactivity,
+        }
+    )

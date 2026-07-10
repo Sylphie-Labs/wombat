@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from wombat.config import REQUIRED_ENV, ConfigurationError, load_config
+from wombat.config import APP_EDITABLE_FIELDS, REQUIRED_ENV, ConfigurationError, load_config
+from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Humor, matrix_from_config
 
 
 def _write_env_file(tmp_path: Path, *, api_key: str | None, base_url: str | None) -> None:
@@ -277,3 +278,76 @@ def test_gitignore_excludes_wombat_settings_json() -> None:
     gitignore = Path(__file__).resolve().parents[2] / ".gitignore"
     lines = {line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()}
     assert "wombat.settings.json" in lines
+
+
+# --- TK-208: persona matrix config surface ---------------------------------------------------
+
+
+def test_load_config_persona_defaults_match_default_matrix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1: with no persona env vars, load_config() -> matrix_from_config() == DEFAULT_MATRIX."""
+
+    monkeypatch.chdir(tmp_path)  # no .env/settings.json in tmp_path -> nothing but process env
+    _set_required_env(monkeypatch)
+
+    config = load_config()
+
+    assert matrix_from_config(config) == DEFAULT_MATRIX
+
+
+def test_load_config_populates_persona_fields_when_set_others_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2: setting humor + brevity leaves warmth/directness/proactivity at DEFAULT_MATRIX."""
+
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_PERSONA_HUMOR", "dry")
+    monkeypatch.setenv("WOMBAT_PERSONA_BREVITY", "expansive")
+
+    config = load_config()
+    matrix = matrix_from_config(config)
+
+    assert matrix.humor == Humor.DRY
+    assert matrix.brevity == Brevity.EXPANSIVE
+    assert matrix.warmth == DEFAULT_MATRIX.warmth
+    assert matrix.directness == DEFAULT_MATRIX.directness
+    assert matrix.proactivity == DEFAULT_MATRIX.proactivity
+
+
+def test_load_config_rejects_unknown_persona_warmth_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC3: an out-of-vocabulary WOMBAT_PERSONA_WARMTH fails load_config loudly, naming it."""
+
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_PERSONA_WARMTH", "nonsense")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_PERSONA_WARMTH" in str(exc_info.value)
+
+
+def test_settings_json_persona_field_is_app_editable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC4: a settings.json carrying a persona field loads, riding the TK-196 app-editable tier."""
+
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(tmp_path, {"wombat_persona_humor": "dry"})
+
+    config = load_config()
+
+    assert config.wombat_persona_humor == "dry"
+    for name in (
+        "wombat_persona_brevity",
+        "wombat_persona_warmth",
+        "wombat_persona_directness",
+        "wombat_persona_humor",
+        "wombat_persona_proactivity",
+    ):
+        assert name in APP_EDITABLE_FIELDS

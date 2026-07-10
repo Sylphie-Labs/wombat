@@ -35,14 +35,20 @@ REQUIRED_ENV: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
 WOMBAT_SETTINGS_FILE = "wombat.settings.json"
 
 # The documented admitted-field schema for wombat.settings.json (TK-196, Q-106(b)): keys named
-# here are the ONLY ones the app-editable file may populate. TK-208 will append its persona
-# fields to this SAME tuple; TK-197 validates PUTs against it.
+# here are the ONLY ones the app-editable file may populate. TK-197 validates PUTs against it.
 APP_EDITABLE_FIELDS: tuple[str, ...] = (
     "wombat_stt_provider",
     "wombat_tts_provider",
     "wombat_tts_voice_id",
     "wombat_stt_model",
     "wombat_assistant_name",
+    # TK-208 (EP-33, DEC-37(g)): the persona matrix tier — app-editable so a settings UI can
+    # hot-apply persona changes without an env var/restart.
+    "wombat_persona_brevity",
+    "wombat_persona_warmth",
+    "wombat_persona_directness",
+    "wombat_persona_humor",
+    "wombat_persona_proactivity",
 )
 
 
@@ -170,6 +176,20 @@ class WombatConfig(BaseSettings):
     wombat_deepgram_api_key: SecretStr | None = None
     wombat_fish_api_key: SecretStr | None = None
     wombat_assistant_name: str = "Steward"
+
+    # OPTIONAL (TK-208, EP-33, DEC-33/DEC-37): the five-axis persona matrix config surface
+    # (``wombat.persona.matrix.PersonaMatrix``). Deliberately NOT in REQUIRED_ENV — the drain
+    # spine/demo/tests must keep booting fully offline with every field at its default, which is
+    # ``DEFAULT_MATRIX`` exactly (proactivity's default is BALANCED per DEC-37(a), superseding
+    # DEC-33's original "minimal" default text). Nothing reads these fields yet — TK-209 owns
+    # hot-applying them into a live persona, TK-215 owns proactivity's gate-side actuation. Each
+    # axis's vocabulary is closed (a ``Literal``) and enforced at boot: an unrecognized value
+    # fails ``load_config`` loudly, naming the offending variable (e.g. ``WOMBAT_PERSONA_HUMOR``).
+    wombat_persona_brevity: Literal["terse", "balanced", "expansive"] = "terse"
+    wombat_persona_warmth: Literal["reserved", "neutral", "warm"] = "reserved"
+    wombat_persona_directness: Literal["gentle", "plain", "blunt"] = "plain"
+    wombat_persona_humor: Literal["none", "dry"] = "none"
+    wombat_persona_proactivity: Literal["minimal", "balanced", "forward"] = "balanced"
 
     @classmethod
     def settings_customise_sources(
