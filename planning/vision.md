@@ -191,6 +191,22 @@ nothing side-effectful happens off a reviewable trail.
 - This is the first **distribution seed** — people other than Jim configuring their own
   wombat — honored in v1 as the config surface only (DEC-30).
 
+### Personality matrix (added 2026-07-09, Jim's direction)
+- The personality is **tunable** — "a way to tune the personality so people can have fun
+  with it." Name + voice + services + personality = the user-facing identity kit.
+- Jim's verbatim framing: **"observant, learns to fit in the right way."**
+- Five closed axes (brevity, warmth, directness, humor, proactivity) as named levels —
+  never free-text personas; the default IS today's quiet steward, byte-for-byte.
+  Personality modulates expression WITHIN the locked frame: the deterministic gate still
+  owns whether/when anything surfaces (proactivity only shifts the gate's willingness
+  inside a recorded, human-edited band in `wombat_params.yaml` — never a new surfacing,
+  never a raised cap), and the constitution bars (no motive talk, no clinical register,
+  no nagging, no autonomy creep) are immutable at every setting (DEC-33..37).
+- Tunable by voice ("be warmer") through a closed deterministic grammar with a one-line
+  deterministic acknowledgment, by the settings app (hot-applied), and — slowly, visibly,
+  reversibly — by explicit feedback ("too chatty") folded in nightly; an explicit choice
+  always outranks learning (DEC-35/36, DEF-8).
+
 ## Open decision (shapes everything downstream)
 
 Define what **"necessary"** means concretely for the first integration (calendar or inbox).

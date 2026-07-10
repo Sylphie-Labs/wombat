@@ -108,7 +108,7 @@ nodes:
   - { id: FEAT-11, kind: feature, parent: null, title: "Privacy, safety & action trail", intent: "Local data residency, no action without a reviewable trail, review-before-send for high-consequence outbound, no unattended sensitive auth — privacy as character.", status: todo, priority: P1 }
   - { id: FEAT-12, kind: feature, parent: null, title: "Voice & interaction (in v1, as a registered input source)", intent: "Voice is in v1 'out the box' — but built as one registered input source on the loop's input queue (not a special path), plus terse load-bearing spoken/text output on rare speak-events. Full capability without speech.", status: todo, priority: P2 }
   - { id: FEAT-13, kind: feature, parent: null, title: "Configuration surface & companion app (Electron + React)", intent: "The user-facing configuration surface - assistant name, voice provider choices, user-supplied API keys - as a local Electron + React app over a loopback Python settings API; intended to grow into wombat's front-end (future companion/avatar surface, DEC-31). Config only in v1 - zero analytics (DEC-29), no accounts/packaging (DEC-30).", status: todo, priority: P2 }
-  - { id: FEAT-14, kind: feature, parent: null, title: "Persona - tunable personality matrix (the identity kit completes)", intent: "A way to tune the personality so people can have fun with it - name + voice + services + personality = the user-facing identity kit (name TK-194, voice EP-31, services = the configured providers; this feature adds the personality). Five named-level axes (DEC-33) rendered by a PURE-FUNCTION prompt builder whose DEFAULT reproduces today's prompts byte-for-byte (TK-207), hot-applied via LivePersona (DEC-34), driveable by a closed voice-command grammar (DEC-35) and nightly feedback-token learning (DEC-36/DEF-8). The persona shapes only HOW gate-cleared output reads - never whether/when anything surfaces (CON-2/CON-3).", status: todo, priority: P2 }
+  - { id: FEAT-14, kind: feature, parent: null, title: "Persona - tunable personality matrix (the identity kit completes)", intent: "A way to tune the personality so people can have fun with it - name + voice + services + personality = the user-facing identity kit (name TK-194, voice EP-31, services = the configured providers; this feature adds the personality). Five named-level axes (DEC-33) rendered by a PURE-FUNCTION prompt builder whose DEFAULT reproduces today's prompts byte-for-byte (TK-207), hot-applied via LivePersona (DEC-34), driveable by a closed voice-command grammar (DEC-35) and nightly feedback-token learning (DEC-36/DEF-8). The persona shapes HOW gate-cleared output reads plus - via DEC-37's restored proactivity band ONLY - a bounded deterministic offset on the gate's willingness inside a recorded human-custody band; never a new surfacing, never a raised cap (CON-2/CON-3). Jim's verbatim framing - 'observant, learns to fit in the right way'.", status: todo, priority: P2 }
   - { id: EP-1, kind: epic, parent: FEAT-1, title: "Engine assembly & wombat bootstrap", intent: "Construct the cog-worx Engine with wombat's ModelRegistry/BudgetPolicy/Registry/RecallStack/personality/rules; one composition root.", status: todo, priority: P1 }
   - { id: EP-2, kind: epic, parent: FEAT-1, title: "Durable work queue (WombatQueue)", intent: "Bounded, persisted enqueue/drain with idempotent items; queue is wombat domain state, journal stays run authority.", status: todo, priority: P1 }
   - { id: EP-3, kind: epic, parent: FEAT-1, title: "Source registry & registration contract", intent: "Pluggable input-source contract (id/poll/push/map) + lifecycle; adding a source is registration, not a rewrite (DEC-5).", status: todo, priority: P1 }
@@ -141,7 +141,7 @@ nodes:
   - { id: EP-30, kind: epic, parent: FEAT-12, title: "Terse spoken/text output sink", intent: "Speak only on rare speak-events the gate decided; full capability without speech (CON-3).", status: todo, priority: P2 }
   - { id: EP-31, kind: epic, parent: FEAT-12, title: "Pluggable voice provider slots (STT/TTS)", intent: "Cloud STT/TTS providers (ElevenLabs, Deepgram, Fish Audio) behind the EXISTING Transcriber/TTSAdapter seams; local-free defaults stand; egress is structural per-provider user opt-in with strictly cloud-to-local degrade (DEC-28, Q-100).", status: todo, priority: P2 }
   - { id: EP-32, kind: epic, parent: FEAT-13, title: "Local settings app (Electron shell)", intent: "Electron + React settings app over the loopback Python settings API - v1 is the configuration surface ONLY (DEC-29/DEC-30); the shell is deliberately sized for the app's stated trajectory as wombat's front-end (future 3D assistant avatar - flagged future feature, NOT a v1 ticket) (DEC-31/DEC-32).", status: todo, priority: P2 }
-  - { id: EP-33, kind: epic, parent: FEAT-14, title: "Persona core - matrix type, pure prompt builder, config, hot-apply, output-effect eval", intent: "PersonaMatrix (5 named-level axes, DEC-33) + the pure clause-algebra builder instruction_for(mouth, matrix) whose DEFAULT reproduces today's prompts BYTE-FOR-BYTE, the config/persistence surface riding the existing config tiers, the LivePersona hot-apply seam (DEC-34), and the env-gated live-eval harness proving each axis has a MEASURABLE output effect - no placebo axes (the epic does not close while an axis ships unmeasured and unflagged).", status: todo, priority: P2 }
+  - { id: EP-33, kind: epic, parent: FEAT-14, title: "Persona core - matrix type, pure prompt builder, config, hot-apply, output-effect eval", intent: "PersonaMatrix (5 named-level axes, DEC-33) + the pure clause-algebra builder instruction_for(mouth, matrix) whose DEFAULT reproduces today's prompts BYTE-FOR-BYTE, the config/persistence surface riding the existing config tiers, the LivePersona hot-apply seam (DEC-34), and the env-gated live-eval harness proving each axis has a MEASURABLE output effect - no placebo axes (the epic does not close while an axis ships unmeasured and unflagged). RESTORED v1.84 (DEC-37) - the gate personality_band actuation for proactivity (TK-215), the deterministic degrade-path brevity/warmth variants with the recorded directness/humor model-path-only asymmetry (TK-216), and reflection as the FOURTH persona mouth.", status: todo, priority: P2 }
   - { id: EP-34, kind: epic, parent: FEAT-14, title: "Voice persona commands - closed grammar, pre-queue interception", intent: "Spoken persona tuning ('be more brief') via a deterministic CLOSED grammar intercepted at ASRSource BEFORE the queue - matched utterances never enter the queue/gate/mouth; unmatched speech flows unchanged (DEC-35, CON-1/CON-2).", status: todo, priority: P2 }
   - { id: EP-35, kind: epic, parent: FEAT-14, title: "Persona learning - feedback tokens into dream_persona (bounded)", intent: "Explicit deterministic feedback tokens aggregated nightly by a dream_persona stage under RatingTuner-pattern custody (bounded, clamped, journaled - DEC-36); automatic tone-adaptation from implicit behavior is DEFERRED (DEF-8). Sequenced LAST: EP-33 (TK-196 pulled forward as the persistence prerequisite) -> EP-34 -> the EP-32 remainder -> EP-35.", status: todo, priority: P3 }
   - id: TK-1
@@ -4320,7 +4320,7 @@ nodes:
     kind: ticket
     parent: EP-32
     title: "Settings UI forms - name, provider selects, persona axis selects (FEAT-14 amendment), write-only masked key fields with configured-indicators, voice id, save + restart-to-apply notice; zero analytics"
-    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save. FEAT-14 AMENDMENT (v1.81): five persona axis selects (the DEC-33 named levels) join the form, saved to the persona fields like any non-secret; the restart notice still shows for persona edits from the app (the DEC-34 hot-apply carve-out is in-process actuation only)."
+    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save. FEAT-14 AMENDMENT (v1.81): five persona axis selects (the DEC-33 named levels) join the form, saved to the persona fields like any non-secret; CORRECTED v1.84 (DEC-37) - persona edits from the app HOT-APPLY (the TK-209 mtime poll picks them up on the next timer beat): the persona selects show an 'applies on the next turn' hint, NOT the restart notice; the restart notice remains for providers/keys/name."
     status: todo
     priority: P2
     estimate: M
@@ -4338,7 +4338,7 @@ nodes:
         then: "NO analytics, metrics, event-log, gate-history, or behavior view exists - configuration read/write only."
       - given: "the five persona axis selects (FEAT-14 amendment, v1.81)"
         when: "levels are changed and saved"
-        then: "the persona fields are PUT as DEC-33 level names and land in wombat.settings.json; the restart-to-apply notice shows (the app is cross-process - the DEC-34 hot-apply carve-out covers in-process actuation only)."
+        then: "the persona fields are PUT as DEC-33 level names and land in wombat.settings.json; the persona selects show the 'applies on the next turn' hot-apply hint, NOT the restart notice (DEC-37 - the TK-209 mtime poll); provider/key/name edits keep the restart notice."
     non_goals:
       - "No provider voice-catalog browsing/preview (flagged creep, excluded)."
       - "No status/monitoring pane (DEC-29 - requires a new decision)."
@@ -4379,7 +4379,7 @@ nodes:
     kind: ticket
     parent: EP-33
     title: "PersonaMatrix domain type - 5 axes as named enum levels, DEFAULT_MATRIX constant, parse/serialize, constitution-excluded axes NAMED in the module doc"
-    intent: "As the persona foundation (DEC-33), src/wombat/persona/matrix.py holds five closed axis enums - Brevity terse|balanced|expansive, Warmth reserved|neutral|warm, Directness gentle|plain|blunt, Humor none|dry|playful, Proactivity minimal|balanced|forward - a frozen PersonaMatrix dataclass over them, DEFAULT_MATRIX = (terse, reserved, plain, none, minimal) = today's steward, and parse/serialize helpers (round-trip via plain strings for config/settings.json). The module docstring NAMES the constitution-excluded axes verbatim per DEC-33 so the exclusion is code-adjacent, not lore."
+    intent: "As the persona foundation (DEC-33), src/wombat/persona/matrix.py holds five closed axis enums - Brevity terse|balanced|expansive, Warmth reserved|neutral|warm, Directness gentle|plain|blunt, Humor none|dry (exactly TWO levels - DEC-37 struck the recorder-added 'playful'), Proactivity minimal|balanced|forward - a frozen PersonaMatrix dataclass over them, DEFAULT_MATRIX = (terse, reserved, plain, none, balanced) = today's steward (balanced proactivity = ZERO gate offset = today's gate exactly, DEC-37), and parse/serialize helpers (round-trip via plain strings for config/settings.json). The module docstring NAMES the constitution-excluded axes verbatim per DEC-33 so the exclusion is code-adjacent, not lore."
     status: todo
     priority: P2
     estimate: S
@@ -4388,13 +4388,13 @@ nodes:
     acceptance_criteria:
       - given: "the five axis enums"
         when: "inspected by test"
-        then: "each axis has EXACTLY the DEC-33 named levels, PersonaMatrix is frozen/hashable, and DEFAULT_MATRIX is (terse, reserved, plain, none, minimal)."
+        then: "each axis has EXACTLY the DEC-33 named levels as amended by DEC-37 (humor = none|dry only), PersonaMatrix is frozen/hashable, and DEFAULT_MATRIX is (terse, reserved, plain, none, balanced)."
       - given: "any PersonaMatrix"
         when: "serialized to strings and parsed back"
         then: "the round-trip is identity; an unknown axis value parses to a loud ValueError naming the axis and the offending value."
       - given: "the module docstring"
         when: "read"
-        then: "the DEC-33 excluded axes (interruption-eagerness, empathy-as-motive-inference, persuasion/sycophancy, action-initiative) are named as excluded with their constitution reasons."
+        then: "the excluded axes per DEC-33 + DEC-37 (interruption-eagerness, empathy-as-motive-inference, persuasion/sycophancy, action-initiative, coaching/clinical register, persistence/reminder-frequency) are named as excluded with their constitution reasons (CON-2/3, CON-6, CON-1, CON-5, NG-2, NG-3)."
     non_goals:
       - "No prompt rendering (TK-207)."
       - "No config/persistence (TK-208)."
@@ -4409,25 +4409,25 @@ nodes:
     kind: ticket
     parent: EP-33
     title: "Pure-function persona builder - instruction_for(mouth, matrix, name) as composable clause algebra; DEFAULT reproduces today's prompts BYTE-FOR-BYTE; immutable guard suffix"
-    intent: "Jim's frame, recorded verbatim-in-spirit: the persona builder is a PURE FUNCTION ('math algo') - matrix values in, prompt text out. src/wombat/persona/builder.py composes instruction_for(mouth, matrix, assistant_name) = base_role + length_clause + register_clause + hedging_clause + humor_clause + immutable guard_suffix, where mouth is a closed enum over the three TK-194 name-threaded mouths (compose, brief, draft). Today's per-mouth instruction text is SPLIT at a recorded seam into base_role + guard_suffix; every DEFAULT-level clause renders EMPTY, so instruction_for(mouth, DEFAULT_MATRIX, name) equals today's TK-194 builder output BYTE-FOR-BYTE (pinned test importing the live constants, no fixture copies). The guard_suffix (the steward non-negotiables already in today's text - no deciding to interrupt, no motive language, terse-degrade discipline) is IMMUTABLE: present in the output for EVERY matrix value; no level can render it away."
+    intent: "Jim's frame, recorded verbatim-in-spirit: the persona builder is a PURE FUNCTION ('math algo') - matrix values in, prompt text out. src/wombat/persona/builder.py composes instruction_for(mouth, matrix, assistant_name) = base_role + length_clause + register_clause + hedging_clause + humor_clause + immutable guard_suffix, where mouth is a closed enum over FOUR mouths - the three TK-194 name-threaded mouths (compose, brief, draft) PLUS reflection (DEC-37 restores the recovered fourth site; the reflection call-site reroute itself belongs to TK-209). The humor_clause renders ONLY for compose and brief - NEVER for draft (the user's outbound voice) or reflection (NG-2 adjacency), at any level (DEC-37). Proactivity renders NO prompt text at any level - its actuation is gate-side (TK-215), a designed no-op at the prompt layer, not a placebo. Today's per-mouth instruction text is SPLIT at a recorded seam into base_role + guard_suffix; every DEFAULT-level clause renders EMPTY, so instruction_for(mouth, DEFAULT_MATRIX, name) equals today's live instruction text BYTE-FOR-BYTE - the TK-194 builder output for the three named mouths, reflection_compose.py's live _SYSTEM_INSTRUCTION for the fourth (pinned tests importing the live constants, no fixture copies). The guard_suffix (the steward non-negotiables already in today's text - no deciding to interrupt, no motive language, terse-degrade discipline; for reflection, its CON-6/NG-1 motive/clinical bars ARE the guard_suffix) is IMMUTABLE: present in the output for EVERY matrix value; no level can render it away."
     status: todo
     priority: P2
     estimate: M
     engineering_level: production
-    complexity_budget: "One pure module - no IO, no config reads, no model calls; clause text as module-level tables. Property tests over the FULL matrix space (3^5 = 243 combinations per mouth - exhaustive, not sampled): guard containment, determinism, byte-identity at DEFAULT. Prompt-DELTA verification only; output-EFFECT verification is TK-210's job."
+    complexity_budget: "One pure module - no IO, no config reads, no model calls; clause text as module-level tables. Property tests over the FULL matrix space (3*3*3*2*3 = 162 combinations per mouth - exhaustive, not sampled): guard containment, determinism, byte-identity at DEFAULT. Prompt-DELTA verification only; output-EFFECT verification is TK-210's job."
     acceptance_criteria:
-      - given: "each of the three mouths and the live TK-194 builders"
+      - given: "each of the FOUR mouths and the live instruction sources (the TK-194 builders; reflection's live constant)"
         when: "instruction_for(mouth, DEFAULT_MATRIX, name) is compared against today's instruction text for the same name"
-        then: "the outputs are BYTE-IDENTICAL for all three mouths (test imports the live constants; no fixture copies)."
-      - given: "all 243 matrix combinations for each mouth"
+        then: "the outputs are BYTE-IDENTICAL for all four mouths (test imports the live constants; no fixture copies)."
+      - given: "all 162 matrix combinations for each mouth"
         when: "rendered"
-        then: "every output contains the immutable guard_suffix verbatim, rendering is deterministic (same input -> same bytes), and each non-default level changes the output relative to DEFAULT (no silent no-op level at the prompt layer)."
+        then: "every output contains the immutable guard_suffix verbatim, rendering is deterministic (same input -> same bytes), and each non-default level of the four prompt axes changes the output of every mouth it applies to relative to DEFAULT (humor applies to compose/brief only and its text is asserted ABSENT from draft and reflection at EVERY level; proactivity's prompt no-op is by design - DEC-37)."
       - given: "the builder module"
         when: "inspected"
         then: "it is pure - zero IO, zero config/env reads, zero model calls; clause text lives in module-level tables."
     non_goals:
       - "No call-site rewiring (TK-209 owns the LivePersona reroute)."
-      - "No reflection-mouth persona (ReflectionComposeStage keeps its fixed clinical-guard prompt; out of persona scope in v1)."
+      - "No humor in the draft or reflection mouths at ANY level (DEC-37); reflection's motive/clinical bars are immutable at every matrix value."
       - "No output-effect measurement (TK-210)."
     depends_on:
       - TK-206
@@ -4470,7 +4470,7 @@ nodes:
     kind: ticket
     parent: EP-33
     title: "LivePersona hot-apply seam - one runtime matrix authority; mouth stages read instruction_for at RENDER time; set() applies next turn + persists to the settings.json tier"
-    intent: "Per DEC-34 (Jim authority), src/wombat/persona/live.py holds LivePersona - the ONE composition-root-owned runtime authority for the current PersonaMatrix: instruction(mouth) delegates to the pure builder over the CURRENT matrix; set(matrix) swaps it atomically (single-process asyncio - a plain attribute swap) and persists the five persona fields to the app-editable settings.json tier so the change survives restart (never .env, never secrets). The three mouth call sites (ComposeStage, BriefComposeStage, DraftComposer via its bootstrap builder) stop freezing instruction text at construction and read LivePersona per turn - a matrix change applies on the NEXT rendered turn, no restart. assemble_runtime constructs LivePersona from matrix_from_config and exposes it on the runtime bundle (the TK-212 and TK-214 write seam)."
+    intent: "Per DEC-34 (Jim authority), src/wombat/persona/live.py holds LivePersona - the ONE composition-root-owned runtime authority for the current PersonaMatrix: instruction(mouth) delegates to the pure builder over the CURRENT matrix; set(matrix) swaps it atomically (single-process asyncio - a plain attribute swap) and persists the five persona fields to the app-editable settings.json tier so the change survives restart (never .env, never secrets). The three mouth call sites (ComposeStage, BriefComposeStage, DraftComposer via its bootstrap builder) stop freezing instruction text at construction and read LivePersona per turn - a matrix change applies on the NEXT rendered turn, no restart. assemble_runtime constructs LivePersona from matrix_from_config and exposes it on the runtime bundle (the TK-212 and TK-214 write seam). RESTORED v1.84 (DEC-37) - (a) the FOURTH mouth: ReflectionComposeStage reads its instruction through LivePersona too (bars immutable per TK-207); (b) app edits hot-apply: LivePersona refreshes from an mtime poll on wombat.settings.json's persona keys riding the EXISTING timer beat (no new scheduler; the settings API keeps its zero-runtime-imports invariant, TK-197 untouched; last-write-wins on the single-user local file ruled acceptable); (c) the gate reads the CURRENT proactivity level through LivePersona at scoring time (the TK-215 seam)."
     status: todo
     priority: P2
     estimate: M
@@ -4486,6 +4486,9 @@ nodes:
       - given: "a settings.json write failure"
         when: "set() runs"
         then: "the in-memory matrix still applies, exactly one loud WARNING names the persistence failure, and nothing raises into the drain loop (CON-3 discipline)."
+      - given: "an external write to wombat.settings.json's persona keys (the settings-app path)"
+        when: "the next existing timer beat runs"
+        then: "LivePersona carries the new matrix without restart (the DEC-37 mtime poll) and the next rendered turn uses it."
     non_goals:
       - "No gate/queue influence - persona changes NEVER touch ratings, thresholds, or surfacing (CON-2/CON-3)."
       - "No voice commands (EP-34), no learning (EP-35)."
@@ -4500,7 +4503,9 @@ nodes:
       - src/wombat/stages/brief_compose_stage.py
       - src/wombat/integrations/gmail/draft_composer.py
       - src/wombat/bootstrap.py
+      - src/wombat/behavior/stages/reflection_compose.py
       - tests/persona/test_live.py
+      - tests/behavior/stages/test_reflection_compose.py
       - tests/unit/test_compose_stage.py
       - tests/stages/test_brief_compose_stage.py
       - tests/integrations/gmail/test_draft_composer.py
@@ -4508,7 +4513,7 @@ nodes:
     kind: ticket
     parent: EP-33
     title: "Output-EFFECT verification - env-gated live-eval harness sampling real mouth output per matrix level; measurable per-axis assertions; unmeasurable axes FLAGGED, never shipped as placebo"
-    intent: "Jim's frame, recorded verbatim-in-spirit: verify the personality by its OUTPUT EFFECTS, not just prompt deltas. An env-gated live-eval harness (the DEF-7 armed-and-loud-skipping pattern, keyed on the DeepSeek mouth credentials; ride cog-worx's eval/_live machinery where it fits) samples REAL mouth output per matrix level over a fixed payload set and asserts MEASURABLE properties - brevity: output length/line-count MONOTONE terse < balanced < expansive; warmth: greeting presence on the brief at warm vs absence at reserved; directness: hedge-lexicon presence at gentle vs absence at plain/blunt; humor: aside presence ONLY when the level permits AND the item is non-urgent; ALL levels: the existing forbidden-term classifiers still pass. Any axis whose effect cannot be measured honestly is FLAGGED in governance (an issue naming the axis), not shipped as placebo."
+    intent: "Jim's frame, recorded verbatim-in-spirit: verify the personality by its OUTPUT EFFECTS, not just prompt deltas. An env-gated live-eval harness (the DEF-7 armed-and-loud-skipping pattern, keyed on the DeepSeek mouth credentials; ride cog-worx's eval/_live machinery where it fits) samples REAL mouth output per matrix level over a fixed payload set and asserts MEASURABLE properties - brevity: output length/line-count MONOTONE terse < balanced < expansive; warmth: greeting presence on the brief at warm vs absence at reserved; directness: hedge-lexicon presence at gentle vs absence at plain/blunt; humor: aside presence ONLY when the level permits AND the item is non-urgent; ALL levels: the existing forbidden-term classifiers still pass. Any axis whose effect cannot be measured honestly is FLAGGED in governance (an issue naming the axis), not shipped as placebo. DEC-37 - humor is additionally asserted ABSENT from draft and reflection samples at every level; proactivity is EXEMPT from this LLM harness (its effect is deterministic at the gate and proven by TK-215's tests, not sampled)."
     status: todo
     priority: P2
     estimate: M
@@ -4520,7 +4525,7 @@ nodes:
         then: "every eval loud-skips naming the missing key (DEF-7 pattern); nothing silently passes."
       - given: "credentials present and the fixed payload set"
         when: "the harness samples each axis at each level"
-        then: "the per-axis measurable assertions hold under the recorded verdict rule (brevity monotonicity, warmth greeting presence/absence, directness hedge-lexicon presence/absence, humor aside only when permitted and non-urgent), and the forbidden-term classifiers pass at EVERY level."
+        then: "the per-axis measurable assertions hold under the recorded verdict rule (brevity monotonicity, warmth greeting presence/absence, directness hedge-lexicon presence/absence, humor aside only when permitted and non-urgent AND humor asserted absent from draft/reflection samples at every level - DEC-37), and the forbidden-term classifiers pass at EVERY level."
       - given: "an axis that fails its measurability bar"
         when: "the run is closed out"
         then: "a governance issue is raised NAMING the axis as unmeasured (the no-placebo rule) - the axis does not ship silently."
@@ -4564,7 +4569,7 @@ nodes:
     kind: ticket
     parent: EP-34
     title: "Pre-queue interception at ASRSource - matched persona commands are consumed (applied via LivePersona + trailed), never enqueued; unmatched speech flows byte-unchanged"
-    intent: "Per DEC-35, the ASR source gains ONE interception point: after transcription and BEFORE enqueue mapping, parse_persona_command runs on the transcript; a match writes one human-readable action-trail line BEFORE applying (CON-4), applies the delta through LivePersona.set (hot-apply + persist, DEC-34), and the utterance is CONSUMED - it never enters the queue, is never gate-rated, and never reaches the mouth. A parse of None leaves the existing path byte-unchanged. Failures in apply/persist degrade loud and never break transcription (CON-3)."
+    intent: "Per DEC-35, the ASR source gains ONE interception point: after transcription and BEFORE enqueue mapping, parse_persona_command runs on the transcript; a match writes one human-readable action-trail line BEFORE applying (CON-4), applies the delta through LivePersona.set (hot-apply + persist, DEC-34), and the utterance is CONSUMED - it never enters the queue, is never gate-rated, and never reaches the mouth. A parse of None leaves the existing path byte-unchanged. Failures in apply/persist degrade loud and never break transcription (CON-3). RESTORED v1.84 (DEC-37, superseding-in-part the DEC-35 silence clause) - apply ends with ONE deterministic one-line acknowledgment ('Warmth is now warm.') through the EXISTING speak/degrade output path: fixed template text, ZERO model calls, no AwaitHuman (the user's own explicit reversible command earns its direct echo; it is not a gate surfacing and competes with nothing). Ack failure degrades loud and never blocks."
     status: todo
     priority: P2
     estimate: S
@@ -4573,7 +4578,7 @@ nodes:
     acceptance_criteria:
       - given: "a transcript matching the grammar"
         when: "the ASR source processes it"
-        then: "LivePersona carries the stepped matrix, a trail line was written before the apply, and NOTHING was enqueued for that utterance."
+        then: "LivePersona carries the stepped matrix, a trail line was written before the apply, NOTHING was enqueued for that utterance, and exactly ONE deterministic one-line acknowledgment went out via the existing speak/degrade path with zero model calls (DEC-37)."
       - given: "a non-command transcript"
         when: "processed"
         then: "it is enqueued exactly as today - payload byte-identical to the pre-ticket behavior."
@@ -4581,7 +4586,7 @@ nodes:
         when: "a command is intercepted"
         then: "one loud WARNING, the utterance is still consumed (not enqueued as garbage), and the source keeps transcribing."
     non_goals:
-      - "No spoken confirmation reply (surfacing anything is the gate's monopoly - CON-2/CON-3; silence is the acknowledgment)."
+      - "No model-rendered or freeform acknowledgment - the DEC-37 ack is a fixed deterministic template through the existing speak/degrade path, never a mouth call and never a gate item."
       - "No grammar changes (TK-211 owns the table)."
     depends_on:
       - TK-211
@@ -4595,7 +4600,7 @@ nodes:
     kind: ticket
     parent: EP-35
     title: "Feedback tokens - closed-lexicon deterministic detection of explicit persona feedback, recorded motive-free as durable persona_feedback events"
-    intent: "Per DEC-36, src/wombat/persona/feedback.py holds a CLOSED feedback lexicon ('too chatty', 'too long', 'too stiff', 'loved that', per-axis variants) - distinct from the imperative command grammar (TK-211 acts NOW; a token is EVIDENCE for the nightly pass) - and a pure detect_feedback_token(transcript) -> FeedbackToken | None. Detected tokens are recorded at the same ASRSource seam as durable events riding the existing behavior-event machinery (event_type persona_feedback - idempotent, timestamped, axis + direction + the matched phrase ONLY; no motive, no inference, CON-6); the utterance otherwise flows as normal speech."
+    intent: "Per DEC-36, src/wombat/persona/feedback.py holds a CLOSED feedback lexicon ('too chatty', 'too long', 'too stiff', 'loved that', per-axis variants) - distinct from the imperative command grammar (TK-211 acts NOW; a token is EVIDENCE for the nightly pass) - and a pure detect_feedback_token(transcript) -> FeedbackToken | None. Detected tokens are recorded at the same ASRSource seam as durable events riding the existing behavior-event machinery (event_type persona_feedback - idempotent, timestamped, axis + direction + the matched phrase ONLY; no motive, no inference, CON-6); the utterance otherwise flows as normal speech. The lexicon extends the TK-51 closed-feedback-grammar discipline with expression tokens (the recovered proposal's stated seam) - deterministic, motive-free (DEC-37)."
     status: todo
     priority: P3
     estimate: S
@@ -4625,7 +4630,7 @@ nodes:
     kind: ticket
     parent: EP-35
     title: "dream_persona stage - nightly bounded aggregation of feedback tokens into at most one clamped matrix step per axis, RatingTuner-pattern custody, journaled"
-    intent: "Per DEC-36, a dream_persona stage joins the nightly dream pathway (sibling discipline: failures caught, LOUD, still transitions - never blocks the terminal): it reads the window's persona_feedback events and emits AT MOST ONE step per axis per night, only on a clear net signal meeting a recorded threshold, clamped to the level ends - the RatingTuner custody pattern (bounded, floored/ceilinged, deterministic, no LLM). An applied step goes through the same persistence as LivePersona.set and writes a human-readable journal line stating axis, direction, and the counts that drove it (CON-4) - inspectable drift, never silent."
+    intent: "Per DEC-36, a dream_persona stage joins the nightly dream pathway (sibling discipline: failures caught, LOUD, still transitions - never blocks the terminal): it runs AFTER dream_tune (the recorded order, DEC-37), reads the window's persona_feedback events and emits AT MOST ONE step per axis per night, only on a clear net signal meeting the recorded threshold (AT LEAST 2 consistent in-window signals, DEC-37), clamped to the level ends - the RatingTuner custody pattern (bounded, floored/ceilinged, deterministic, no LLM). An applied step goes through the same persistence as LivePersona.set and writes a human-readable journal line stating axis, direction, and the counts that drove it (CON-4) - inspectable drift, never silent. DEC-37 restores the explicit-beats-learning pin: an axis explicitly set by the user (voice command TK-212 or settings UI TK-200) is PINNED against nightly nudges for 7 days; the pin persists alongside the persona fields."
     status: todo
     priority: P3
     estimate: M
@@ -4638,6 +4643,9 @@ nodes:
       - given: "mixed or below-threshold signals"
         when: "dream_persona runs"
         then: "NO change - the tuner is conservative by construction (property test over random event sets: never more than one step per axis per run)."
+      - given: "an axis explicitly set by the user within the last 7 days"
+        when: "dream_persona runs with any signal on that axis"
+        then: "NO step lands on it (the DEC-37 pin; unpinned axes move normally)."
       - given: "the stage failing for any reason"
         when: "the dream run executes"
         then: "the failure is caught and loud and the pathway still reaches its terminal (sibling parity)."
@@ -4652,6 +4660,74 @@ nodes:
       - src/wombat/pathways/dream_pathway.py
       - src/wombat/bootstrap.py
       - tests/persona/test_tuner.py
+  - id: TK-215
+    kind: ticket
+    parent: EP-33
+    title: "Gate personality_band - proactivity actuates as a bounded deterministic urgency_threshold offset recorded in wombat_params.yaml (hard floor/cap, human custody); the gate reads the live level at scoring time"
+    intent: "Per DEC-37(a) - restoring the recovered Jim-approved actuation the v1.81 summary-based record dropped - src/wombat/wombat_params.yaml gains a REQUIRED personality_band block (per-level offsets minimal +0.10 / balanced 0.00 / forward -0.10, PROVISIONAL under DEF-1 calibration; hard band floor 0.60 / cap 0.95), loaded by params.py into the frozen OperatingParams under the file's fail-loud discipline with a version bump. The gate's single worth predicate evaluates against effective_threshold = clamp(urgency_threshold + offset(current proactivity level), floor, cap), the level read through LivePersona at scoring time (next-scored-item semantics, RatingTuner parity). Config-read arithmetic, ZERO LLM (NG-4/CON-1); composes with RatingTuner's per-class params and the band floor/cap bound the COMBINED effect; per_class_daily_ceiling and every other cap stay untouched (NG-3); every surfaced item still clears the deterministic gate (CON-3)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One params block + one pure offset/clamp helper + threading the live level into the existing predicate call path; no new stage, no new store. The band is HUMAN-EDITED ONLY - no tuner or runtime path may write it (same custody as every other gate constant in the file)."
+    acceptance_criteria:
+      - given: "wombat_params.yaml without the personality_band block"
+        when: "load_operating_params runs"
+        then: "it fails LOUD naming the missing block (the file's required-field discipline; the file version is bumped with the change)."
+      - given: "proactivity at balanced (the DEC-37 DEFAULT)"
+        when: "items are scored"
+        then: "effective threshold == urgency_threshold exactly and gate behavior is identical to pre-ticket (regression pin - the zero-config gate is today's gate)."
+      - given: "any combination of band offset, RatingTuner-adapted per-class params, and matrix value"
+        when: "the effective threshold is computed (property test)"
+        then: "it NEVER leaves the [floor, cap] band, minimal only ever LOWERS willingness and forward only ever RAISES it relative to balanced, and per_class_daily_ceiling plus every other cap/ceiling is byte-untouched."
+      - given: "LivePersona.set changing proactivity between two scored items"
+        when: "the second item is scored"
+        then: "it scores under the NEW offset without restart (next-scored-item semantics)."
+    non_goals:
+      - "No prompt clause for proactivity - it renders NO text at any level (TK-207); actuation is gate-side only."
+      - "No cap/ceiling/never-send/taint reachability from any axis (NG-3, DEC-26)."
+      - "No tuner ownership - RatingTuner never writes the band (human-edited, versioned)."
+    depends_on:
+      - TK-209
+    files_in_scope:
+      - src/wombat/wombat_params.yaml
+      - src/wombat/params.py
+      - src/wombat/gate/trigger.py
+      - src/wombat/stages/gate_stage.py
+      - src/wombat/bootstrap.py
+      - tests/gate/test_trigger.py
+      - tests/persona/test_personality_band.py
+  - id: TK-216
+    kind: ticket
+    parent: EP-33
+    title: "Degrade-path persona deltas - deterministic brevity wrapper variants + warm-brief greeting line in the no-model path; directness/humor recorded as model-path-only (honest asymmetry)"
+    intent: "Per DEC-37(e), the deterministic degrade path honors the two axes a template can honestly express: brevity selects a per-level deterministic wrapper variant in TemplateComposer.render and in the brief's fixed degrade lines (terse = today's EXACT bytes), and warmth=warm adds ONE fixed greeting line to the brief degrade (reserved/neutral add nothing). Directness and humor have NO degrade variant BY RULING - a template cannot honestly hedge or joke; the asymmetry is recorded and pinned, never silent. Levels are read through LivePersona at render time like every mouth."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "Per-level fixed template variants + one greeting constant + LivePersona reads at the two degrade render sites; zero model calls, zero new deps, zero gate/queue touch. DEFAULT output stays byte-identical to today (regression pin)."
+    acceptance_criteria:
+      - given: "the DEFAULT matrix"
+        when: "the degrade path renders (TemplateComposer and the brief's fixed lines)"
+        then: "output is BYTE-IDENTICAL to today (pinned against the live pre-ticket templates)."
+      - given: "brevity balanced/expansive and warmth warm"
+        when: "the degrade path renders"
+        then: "each brevity level yields its documented deterministic wrapper variant, and warm adds exactly the one fixed greeting line to the brief degrade (absent at reserved/neutral)."
+      - given: "any directness or humor level"
+        when: "the degrade path renders"
+        then: "output is UNCHANGED - the model-path-only asymmetry is pinned as a test, honest by record (DEC-37)."
+    non_goals:
+      - "No hedging or humor simulation in templates (the ruled asymmetry)."
+      - "No model calls anywhere in the degrade path."
+    depends_on:
+      - TK-209
+    files_in_scope:
+      - src/wombat/compose/templates.py
+      - src/wombat/compose/brief_template.py
+      - src/wombat/stages/brief_compose_stage.py
+      - tests/persona/test_degrade_variants.py
+      - tests/compose/test_brief_template.py
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -5365,6 +5441,12 @@ governance:
       description: "The learning loop v1 admits only explicit closed-lexicon feedback tokens (DEC-36). Adapting the matrix from implicit signals (response latency, dismissals, engagement shape) is deferred - it risks silent drift and motive-adjacent inference (CON-6) and has no honest eval yet (the TK-210 harness measures output effects of levels, not preference inference).",
       revisit_trigger: "EP-35 landed AND several weeks of persona_feedback data exist to design against - or Jim asks; any revisit must state its CON-6 boundary and bring its own output-effect eval before build.",
       links: ["DEC-36","TK-213","TK-214","EP-35"] }
+  - { id: DEC-37, type: decision, status: accepted, scope: FEAT-14, date_raised: "2026-07-09", title: "Persona recording-fidelity restoration - the RECOVERED full Jim-approved proposal supersedes the v1.81 summary-based record where they diverge (proactivity gate-band actuation, degrade deltas, fourth mouth, per-mouth humor bars, exclusions, command ack, app-edit hot-apply, learning pins)",
+      context: "v1.81 recorded the personality matrix from the orchestrator's SUMMARY after the approving architect session was lost to a power cut. The full proposal text has since been RECOVERED from the proposing architect's transcript, and a substance audit found the summary-based record dropped or inverted several Jim-approved elements - most severely the proactivity actuation mechanism, leaving proactivity a placebo axis (the exact thing the recorded no-placebo rule forbids). Nothing below is new architect scope: every clause is the recovered, Jim-approved text. The v1.81 decision texts stand untouched (append-only) and are superseded ONLY where named here.",
+      decision: "(a) PROACTIVITY ACTUATION (supersedes-in-part DEC-33's 'never gate thresholds' clause, which inverted the approved design): proactivity acts as a bounded DETERMINISTIC offset on the gate's urgency_threshold, recorded in a new personality_band block in src/wombat/wombat_params.yaml - per-level offsets (minimal +0.10 quieter / balanced 0.00 / forward -0.10 more willing; PROVISIONAL under DEF-1 calibration) inside a hard band floor 0.60 / cap 0.95 - human-edited, versioned, the SAME custody as every other gate constant (no tuner or runtime path ever writes it). Effective threshold = clamp(urgency_threshold + offset(level), floor, cap), pure config-read arithmetic with ZERO LLM (NG-4/CON-1); it composes with RatingTuner's per-class params and the band floor/cap bound the COMBINED effect. CON-3 stands - no axis creates a surfacing; every surfaced item still clears the deterministic gate. NG-3 stands - no axis raises per_class_daily_ceiling or ANY cap (minimal may only LOWER effective willingness). DEFAULT proactivity level moves to balanced (zero offset = today's gate behavior exactly); the gate reads the live level at scoring time (next-scored-item semantics). Carried by NEW TK-215. (b) EXCLUSION LIST COMPLETED (augments DEC-33): the approved exclusions ALSO include coaching/clinical register (NG-2) and persistence/reminder-frequency (NG-3 - nagging by another name); the union with the v1.81 four is the full list. (c) HUMOR = exactly TWO levels, none|dry (the v1.81 'playful' was recorder-added, unapproved - struck); the humor clause renders ONLY for the compose and brief mouths, NEVER for Gmail drafts (the user's outbound voice) or reflection (NG-2 adjacency), at any level. (d) REFLECTION IS THE FOURTH PERSONA MOUTH (supersedes TK-207's v1.81 exclusion non-goal): reflection_compose.py joins the pure builder; its motive/clinical bars (CON-6/NG-1) ARE its immutable guard_suffix - byte-identical at every matrix value, pinned by test; no humor ever. (e) DEGRADE-PATH DELTAS (restored, with the recorded honest asymmetry): brevity gets deterministic wrapper variants in TemplateComposer.render + the brief's fixed lines (terse = today's exact bytes); warmth=warm adds one fixed greeting line to the brief degrade; directness and humor have NO degrade variant - a template cannot honestly hedge or joke; model-path-only, recorded not silent. Carried by NEW TK-216. (f) COMMAND ACKNOWLEDGMENT (supersedes-in-part DEC-35's 'silence is the acknowledgment' clause): a matched voice command ends with ONE deterministic one-line acknowledgment ('Warmth is now warm.') through the EXISTING speak/degrade output path - fixed template, zero model calls, no AwaitHuman; the user's own explicit reversible command earns its direct echo and is not a gate surfacing. (g) APP-EDIT HOT-APPLY (supersedes-in-part DEC-34's cross-process restart carve-out FOR PERSONA FIELDS ONLY): LivePersona refreshes from an mtime poll on wombat.settings.json's persona keys riding the EXISTING timer beat - settings-app persona edits apply without restart; last-write-wins on the single-user local file is ruled acceptable; the settings API keeps its zero-runtime-imports invariant (TK-197 untouched); providers/keys/name and all other fields REMAIN restart-to-apply (DEC-32/DEC-34 stand there). TK-200's persona selects show hot-apply, not the restart notice. (h) LEARNING CUSTODY COMPLETED (augments DEC-36): the recorded nightly threshold is AT LEAST 2 consistent in-window signals; an axis explicitly set by the user (voice command or settings UI) is PINNED against nightly nudges for 7 days - explicit always outranks learning; dream_persona runs AFTER dream_tune.",
+      consequences: "(+) The record now matches what Jim approved - proactivity is a real, bounded, deterministically-proven axis instead of a placebo. (+) The persona survives model-down operation honestly (degrade deltas + recorded asymmetry). (+) Spoken tuning is acknowledged and app tuning is live - the feature's point survives. (-) Two tickets added (TK-215/TK-216) and eight nodes amended; readers of DEC-33/34/35 must follow the supersedes-in-part pointers here.",
+      alternatives: ["Leave the v1.81 record as-is (rejected - it inverts Jim-approved substance: a placebo proactivity axis, a silenced command channel, a restart-gated settings app, humor reachable in the user's outbound drafts)", "Re-escalate the recovered proposal to Jim for re-approval (rejected - the proposal WAS approved; the gap is transcription loss, and re-routing answered questions to Jim violates the standing routing protocol)"],
+      links: ["DEC-33","DEC-34","DEC-35","DEC-36","DEF-1","FEAT-14","EP-33","TK-206","TK-207","TK-209","TK-210","TK-212","TK-213","TK-214","TK-215","TK-216","TK-200","CON-1","CON-3","CON-6","NG-2","NG-3","NG-4"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -5552,3 +5634,4 @@ changelog:
   - { date: "2026-07-09", version: "1.81", change: "PERSONALITY MATRIX RECORDED (Jim-APPROVED; the approving session was lost to a power cut before recording - re-recorded by the architect from the orchestrator's authoritative summary). NEW FEAT-14 (persona - 'a way to tune the personality so people can have fun with it'; name + voice + services + personality = the user-facing identity kit) with EP-33 persona core (TK-206 PersonaMatrix type, TK-207 pure-function clause-algebra builder - Jim's emphasis 1 recorded verbatim-in-spirit: instruction_for(mouth, matrix) is a 'math algo', base_role + length/register/hedging/humor clauses + immutable guard_suffix, DEFAULT byte-identical to today's prompts; TK-208 config fields; TK-209 LivePersona hot-apply; TK-210 output-EFFECT live-eval harness - Jim's emphasis 2 recorded verbatim-in-spirit: env-gated DEF-7-pattern sampling of REAL mouth output per level asserting brevity length monotonicity terse<balanced<expansive, warmth greeting presence/absence, directness hedge-lexicon presence/absence, humor aside only when permitted AND non-urgent, forbidden-term classifiers at ALL levels; unmeasurable axes FLAGGED, never placebo), EP-34 voice persona commands (TK-211 closed grammar, TK-212 pre-queue ASRSource interception), EP-35 persona learning (TK-213 feedback tokens, TK-214 dream_persona bounded tuner). DECISIONS - DEC-33 five named-level axes + NAMED constitution exclusions; DEC-34 (JIM AUTHORITY) LivePersona hot-apply, supersedes-in-part DEC-32 restart-to-apply for IN-PROCESS persona actuation only; DEC-35 deterministic closed voice grammar with pre-queue interception; DEC-36 feedback-token-only learning under RatingTuner-pattern custody + DEF-8 deferring automatic tone-adaptation. TK-200 AMENDED - five persona axis selects join the settings UI form (restart-notice honesty per the DEC-34 cross-process carve-out); depends_on += TK-208. SEQUENCING - EP-33 (TK-196 pulled forward as the persistence prerequisite) -> EP-34 -> EP-32 remainder -> EP-35. TK-205 deliberately unassigned (the approved proposal's id block starts at TK-206). Board 107/131 (ticket count 122 -> 131). Working-tree note: the in-flight TK-194 src/tests changes were untouched - this is a planning-only commit.", by: "architect (recording the Jim-approved proposal; governance only)" }
   - { date: "2026-07-09", version: "1.82", change: "TK-194 DONE (108/131) - Configurable assistant name lands per the Q-105(e) ruling (EP-31, P3) - the three fixed steward system-instruction constants become tiny pure builders taking the configured name. config.wombat_assistant_name (TK-187 field, default Steward) threads into stages/compose.py, compose/brief_template.py (consumed by brief_compose_stage.py), and gmail/draft_composer.py (OPTIONAL assistant_name arg, threaded via bootstrap alongside the two stage builders); default rendering inserts exactly the name slot - verifier reconstructed all three pre-ticket literals from git HEAD and compared programmatically, remainder BYTE-IDENTICAL on all three, and BRIEF_SYSTEM_INSTRUCTION module constant == brief_system_instruction(Steward) so the DEC-27 substring pins in test_brief_template.py stay green untouched. The name is DISPLAY/persona ONLY - under WOMBAT_ASSISTANT_NAME=Marvin the name appears in the built system instruction of all three mouths and is asserted ABSENT from user_msg.content; never parsed, never in the gate, never an event field (non_goal held). reflection_compose.py own _SYSTEM_INSTRUCTION correctly untouched per the ruled out-of-scope. INDEPENDENTLY VERIFIED PASS - the verifier re-derived and executed every AC under own execution (the original builder session died before reporting; nothing was trusted). Quality bar (verifier + architect closeout re-run) - uv run pytest -q 1092 passed / 61 documented WOMBAT_TEST_PG_DSN skips / 0 failed; ruff clean; mypy strict Success 264 files src+tests. Scope exactly the 9 files_in_scope (5 src, 4 test), no contract-shape drift. NEXT and LAST in the Q-105 batch - TK-195 (egress lesion proof) closes EP-31.", by: "claude" }
   - { date: "2026-07-09", version: "1.83", change: "TK-195 DONE (109/131) - EP-31 IS CLOSED (all ten TK-186..TK-195 done) - the voice egress lesion suite lands per the Q-105(f) scoping and delivers the DEC-28 structural proof - the DEFAULT configuration is PROVABLY offline-but-for-DeepSeek. Tests ONLY - NEW tests/voice/test_egress_lesion.py, ZERO src edits (complexity_budget held; the builder bound to the as-built TK-193 names build_transcriber/build_tts_adapter/FallbackTranscriber/FallbackTTSAdapter). AC1 default-zero-egress proven NON-VACUOUSLY on two independent axes - a raise-on-__init__ sentinel over all SIX cloud classes proves zero cloud construction while all five voice-surface builders (build_source_registry, build_speak_sink, make_speak_callable, build_transcriber, build_tts_adapter) run under the default config (provider local, voice_enabled False), and a subprocess proof shows httpx ABSENT from sys.modules after the full default voice assembly - the verifier empirically confirmed httpx is installed (0.28.1) and that constructing a real DeepgramTranscriber DOES pull httpx in via HttpxVoiceTransport.__init__, so the assertion is load-bearing not vacuous; env/.env leakage is fail-safe via chdir + in-subprocess default-config asserts (a leak FAILS the subprocess, never false-passes). AC2 cloud-STT outage proven for BOTH fallback slots - local-present degrades via exactly ONE fallback call with the file landing in processed/, local-absent (_fallback None) routes two files to failed/ with no crash and siblings unaffected. AC3 cloud-TTS outage proven for BOTH slots - local-present speaks Done with exactly one call, local-absent returns Degraded(to=None) spoken False degraded True with the composed_output artifact byte-unaffected (TK-165 parity). BRIEFING CORRECTION recorded - the Q-105(f) briefing cited a subprocess-proof precedent in tests/voice/test_stt_deepgram.py that does not exist (that file uses an in-process meta-path absence shim; repo-wide grep found zero subprocess tests) - the citation was wrong, the ruling substance right, and the builder proceeded correctly. INDEPENDENTLY VERIFIED PASS - scope re-derived from git status = exactly the one declared new file, no src/contract/unrelated touch; quality bar under the verifier own execution - uv run pytest -q 1098 passed / 61 documented WOMBAT_TEST_PG_DSN skips / 0 failed; ruff check src tests all-clean; mypy strict Success 265 files src+tests; targeted suite 6 passed. Architect closeout gate re-run green pre-commit. Board 109/131. NEXT - the EP-31 arc-close review pass per cadence, then EP-33 (persona core, TK-196 pulled forward as the persistence prerequisite) per the v1.81 sequencing.", by: "architect (closeout on independent verifier PASS)" }
+  - { date: "2026-07-09", version: "1.84", change: "governance: persona recording gap-fix vs the RECOVERED full proposal (DEC-37; NEW TK-215/TK-216; TK-206/207/209/210/212/213/214/200 + FEAT-14/EP-33 amended; vision.md + ARCHITECT.md persona section synced). The v1.81 record was reconstructed from the orchestrator's SUMMARY after the power cut; the proposing architect's full Jim-approved proposal has since been recovered and a substance audit found ten gaps. HEADLINE - proactivity had been recorded as a placebo (prompt-side 'optional content' with NO carrying ticket; DEC-33's 'never gate thresholds' clause inverted the approved design): DEC-37(a) restores the actuation as a bounded deterministic urgency_threshold offset in a recorded personality_band block in wombat_params.yaml (minimal +0.10 / balanced 0.00 / forward -0.10 PROVISIONAL under DEF-1; hard floor 0.60 / cap 0.95; human-edited/versioned - gate-constant custody, never tuner-written; composes with RatingTuner, band bounds the combined effect; CON-3 intact - no axis creates a surfacing; NG-3 intact - no cap raised; DEFAULT proactivity moves to balanced = zero offset = today's gate), carried by NEW TK-215 with the gate reading the live level through LivePersona at scoring time. ALSO RESTORED - degrade-path brevity/warmth variants + the recorded directness/humor model-path-only asymmetry (NEW TK-216); reflection as the FOURTH persona mouth with its CON-6/NG-1 bars as the immutable guard_suffix (TK-207/TK-209); humor barred from Gmail drafts and reflection at every level AND trimmed to the approved TWO levels none|dry (the v1.81 'playful' was recorder-added, struck); the exclusion list completed with coaching/clinical register (NG-2) + persistence/reminder-frequency (NG-3); the deterministic one-line command acknowledgment (supersedes-in-part the DEC-35 silence clause); settings-app persona edits hot-apply via an mtime poll on the existing timer beat, last-write-wins ruled acceptable (supersedes-in-part the DEC-34 cross-process carve-out for persona fields only; TK-200 shows hot-apply, not the restart notice); learning custody completed (at least 2 consistent in-window signals, 7-day explicit-set pin - explicit outranks learning, dream_persona AFTER dream_tune); Jim's verbatim 'observant, learns to fit in the right way' framing added to FEAT-14 + vision.md. All v1.81 decision texts stand untouched (append-only) - DEC-37 supersedes only where named. Board 109/133 (tickets 131 -> 133).", by: "architect (gap audit vs the recovered Jim-approved proposal; governance only)" }
