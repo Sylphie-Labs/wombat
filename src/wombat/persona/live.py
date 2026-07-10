@@ -25,11 +25,19 @@ logs EXACTLY ONE loud WARNING naming the failure.
 ``poll_settings_file()`` (DEC-37(g)) is the app-edit hot-apply seam: a cheap ``os.stat`` mtime
 check on the settings file. On a changed mtime, it reloads whichever of the five persona keys are
 PRESENT in the file (any key absent keeps its current in-memory value — a partial app-edit is
-never fatal) and swaps the matrix. ANY exception (malformed JSON, an unknown axis value, a
-vanished file, ...) is caught and logged as one loud WARNING; this method NEVER raises — it rides
+never fatal) and swaps the matrix. This method NEVER raises (CON-3) — it rides
 ``wombat.runtime``'s existing Sweeper clock beat (``runtime.py``'s ``clock=`` callable), so a raise
 here would break the standing sweep. Last-write-wins on this single-user local file is the accepted
 DEC-37(g) posture — no lock, no merge beyond the plain key-level overlay above.
+
+TK-227: the mtime cursor advances ONLY after a successful generation — a vanished file (``mtime is
+None``, a legitimate observation) or a reload that completed (including a valid dict that carries
+none of the five persona keys — still a successful read). A malformed generation — any exception
+during read/parse/apply, OR a non-dict top level (JSON that parses to e.g. a list or scalar) — is
+now classified as malformed and leaves the cursor standing, so the NEXT Sweeper beat retries rather
+than the edit being silently and permanently dropped. A ``_last_warned_mtime`` guard keeps a
+persistently malformed file's WARNING to once per failing mtime generation; a subsequent DIFFERENT
+mtime re-warns.
 """
 
 from __future__ import annotations
@@ -70,6 +78,7 @@ class LivePersona:
         self._assistant_name = assistant_name
         self._settings_path = Path(settings_path)
         self._last_mtime = self._current_mtime()
+        self._last_warned_mtime: float | None = None
 
     @property
     def matrix(self) -> PersonaMatrix:
@@ -99,17 +108,19 @@ class LivePersona:
 
     def poll_settings_file(self) -> None:
         """Cheap mtime check (DEC-37(g)) — reload + swap on change. NEVER raises (CON-3); rides
-        the existing Sweeper clock beat (``runtime.py``)."""
+        the existing Sweeper clock beat (``runtime.py``). TK-227: the cursor advances only after
+        a successful generation (or an observed vanished file) — a malformed generation leaves it
+        standing so the next beat retries instead of silently dropping the edit forever."""
+        mtime = self._current_mtime()
+        if mtime == self._last_mtime:
+            return
+        if mtime is None:
+            self._last_mtime = mtime  # the file vanished — a legitimate observation
+            return  # keep the current in-memory matrix
         try:
-            mtime = self._current_mtime()
-            if mtime == self._last_mtime:
-                return
-            self._last_mtime = mtime
-            if mtime is None:
-                return  # the file vanished — keep the current in-memory matrix
             loaded = json.loads(self._settings_path.read_text(encoding="utf-8"))
             if not isinstance(loaded, dict):
-                return
+                raise ValueError("settings file top level is not a JSON object")
             bare = to_strings(self._matrix)
             found_any = False
             for key in _PERSONA_KEYS:
@@ -119,12 +130,16 @@ class LivePersona:
             if found_any:
                 self._matrix = from_strings(bare)
         except Exception:
-            logger.warning(
-                "LivePersona.poll_settings_file: failed to reload the persona matrix from %s; "
-                "the current in-memory matrix stands",
-                self._settings_path,
-                exc_info=True,
-            )
+            if mtime != self._last_warned_mtime:
+                logger.warning(
+                    "LivePersona.poll_settings_file: failed to reload the persona matrix from "
+                    "%s; the current in-memory matrix stands, retrying on the next poll",
+                    self._settings_path,
+                    exc_info=True,
+                )
+                self._last_warned_mtime = mtime
+        else:
+            self._last_mtime = mtime  # advance the cursor ONLY on a successful generation
 
     def _current_mtime(self) -> float | None:
         try:

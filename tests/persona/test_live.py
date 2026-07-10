@@ -10,12 +10,18 @@
   AC4 beat pickup: poll_settings_file() reloads + swaps the matrix on a changed mtime; an
       unchanged mtime never even re-reads the file; ANY exception is caught, logged loud, and
       never raised, leaving the current in-memory matrix standing.
+  AC5 (TK-227) cursor-defer: the mtime cursor advances ONLY after a successful reload (or an
+      observed vanished file) — a malformed generation (a transient read/parse failure, malformed
+      JSON, a non-dict top level) leaves the cursor standing so the NEXT Sweeper beat retries
+      instead of the edit being silently and permanently dropped. A persistently malformed file
+      still logs only ONE warning per failing mtime generation.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -246,3 +252,82 @@ def test_poll_settings_file_absent_file_after_a_prior_write_never_raises(tmp_pat
     live_persona.poll_settings_file()  # must not raise
 
     assert live_persona.matrix == DEFAULT_MATRIX  # unchanged — no crash on a vanished file
+
+
+# ---------------------------------------------------------------------------------- AC5 (TK-227)
+
+
+def test_poll_settings_file_transient_read_failure_then_retry_recovers_the_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A ONE-shot transient read failure on a settled (unchanged-since) file must NOT permanently
+    drop that edit generation — the cursor stays put so the next poll retries and applies it."""
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    settings_path.write_text(json.dumps({"wombat_persona_humor": "dry"}), encoding="utf-8")
+
+    real_read_text = Path.read_text
+    calls = {"n": 0}
+
+    def _flaky_once(self: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("transient read failure (simulated)")
+        return real_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", _flaky_once)
+
+    with caplog.at_level(logging.WARNING, logger="wombat.persona.live"):
+        live_persona.poll_settings_file()  # the first read raises — cursor must NOT advance
+
+    assert live_persona.matrix == DEFAULT_MATRIX  # not yet applied
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+    live_persona.poll_settings_file()  # same mtime generation retried — now succeeds
+
+    assert live_persona.matrix.humor is Humor.DRY  # the edit is applied, not permanently dropped
+
+
+def test_poll_settings_file_warns_once_per_failing_mtime_generation_then_rewarns_on_new_mtime(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    settings_path.write_text("{not valid json", encoding="utf-8")
+    os.utime(settings_path, (1_700_000_000, 1_700_000_000))
+
+    with caplog.at_level(logging.WARNING, logger="wombat.persona.live"):
+        for _ in range(5):  # many Sweeper beats over the SAME failing generation
+            live_persona.poll_settings_file()
+
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+    caplog.clear()
+
+    # bump the mtime to a NEW generation — still malformed — this re-warns exactly once.
+    settings_path.write_text("{still not valid json", encoding="utf-8")
+    os.utime(settings_path, (1_700_000_100, 1_700_000_100))
+
+    with caplog.at_level(logging.WARNING, logger="wombat.persona.live"):
+        for _ in range(3):
+            live_persona.poll_settings_file()
+
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
+def test_poll_settings_file_valid_dict_without_persona_keys_is_a_successful_generation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A valid JSON object that carries none of the five persona keys is a successful read (not
+    malformed) — the cursor advances quietly and no WARNING fires."""
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    settings_path.write_text(json.dumps({"wombat_tts_provider": "fish"}), encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="wombat.persona.live"):
+        live_persona.poll_settings_file()
+
+    assert live_persona.matrix == DEFAULT_MATRIX  # no persona keys present — nothing to apply
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 0
