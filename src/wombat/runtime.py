@@ -53,7 +53,7 @@ from cogworx.runtime.sweeper import Sweeper
 
 from wombat.bootstrap import RuntimeBundle, assemble_runtime
 from wombat.chat.surface import ChatSurface
-from wombat.config import ConfigurationError, load_config
+from wombat.config import ConfigurationError, load_config, resolve_wombat_zone
 from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
@@ -221,6 +221,11 @@ async def serve() -> None:
     Requires ``WOMBAT_PG_DSN`` (Q-36: the queue is pg-only) — fails loud with
     ``ConfigurationError`` naming it when absent, rather than starting silently broken. It is
     deliberately NOT part of ``REQUIRED_ENV`` so tests and the demo stay bootable without it.
+
+    ``resolve_wombat_zone(config)`` (TK-228, DEC-40) is resolved EXACTLY ONCE here and threaded
+    explicitly into ``assemble_runtime`` — the ONE place a real wall-clock zone enters the
+    composition, so the brief timer, the daily/dream civil-day boundary, and every other tz
+    consumer downstream agree on the SAME zone (never a caller independently defaulting to UTC).
     """
     config = load_config()
     check_config(config)
@@ -229,8 +234,9 @@ async def serve() -> None:
         raise ConfigurationError(
             "missing required environment variable WOMBAT_PG_DSN; wombat will not start"
         )
+    tz = resolve_wombat_zone(config)
     params = load_operating_params()
-    bundle = assemble_runtime(config=config, dsn=dsn, params=params)
+    bundle = assemble_runtime(config=config, dsn=dsn, params=params, tz=tz)
     await _drive_and_serve(bundle, params=params)
 
 

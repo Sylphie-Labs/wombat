@@ -311,7 +311,9 @@ def test_ac3_build_engine_carries_a_non_default_real_budget_policy() -> None:
 
 def test_ac3_build_compose_stage_carries_a_non_none_spend_ledger() -> None:
     op = load_operating_params()
-    compose_stage = bootstrap.build_compose_stage(config=_config(), dsn=_FAKE_DSN, params=op)
+    compose_stage = bootstrap.build_compose_stage(
+        config=_config(), dsn=_FAKE_DSN, params=op, tz=ZoneInfo("UTC")
+    )
 
     assert compose_stage._spend_ledger is not None
 
@@ -322,7 +324,7 @@ def test_ac3_build_compose_stage_carries_a_non_none_spend_ledger() -> None:
 def test_build_brief_compose_stage_carries_a_non_none_spend_ledger_and_same_ceiling() -> None:
     op = load_operating_params()
     brief_compose_stage = bootstrap.build_brief_compose_stage(
-        config=_config(), dsn=_FAKE_DSN, params=op
+        config=_config(), dsn=_FAKE_DSN, params=op, tz=ZoneInfo("UTC")
     )
 
     assert brief_compose_stage._spend_ledger is not None
@@ -344,7 +346,7 @@ def test_build_brief_deliver_stage_with_configured_path_returns_a_stage(tmp_path
     sink = tmp_path / "brief.txt"
     config = _config_with_brief_path(str(sink))
 
-    stage = bootstrap.build_brief_deliver_stage(config=config)
+    stage = bootstrap.build_brief_deliver_stage(config=config, tz=ZoneInfo("UTC"))
 
     assert stage.name == "brief_deliver"
     assert stage.transitions == ()
@@ -354,7 +356,7 @@ def test_build_brief_deliver_stage_blank_path_raises_configuration_error() -> No
     config = _config_with_brief_path("")
 
     with pytest.raises(ConfigurationError):
-        bootstrap.build_brief_deliver_stage(config=config)
+        bootstrap.build_brief_deliver_stage(config=config, tz=ZoneInfo("UTC"))
 
 
 def test_build_brief_deliver_stage_none_path_raises_configuration_error(
@@ -363,7 +365,7 @@ def test_build_brief_deliver_stage_none_path_raises_configuration_error(
     config = _config()  # wombat_brief_path defaults to None
 
     with pytest.raises(ConfigurationError):
-        bootstrap.build_brief_deliver_stage(config=config)
+        bootstrap.build_brief_deliver_stage(config=config, tz=ZoneInfo("UTC"))
 
 
 # --- TK-164: build_speak_sink / make_speak_callable wiring (Q-96) -------------------------------
@@ -431,7 +433,7 @@ def test_make_speak_callable_returns_none_when_pyttsx3_absent_even_if_voice_enab
 def test_ac4_assemble_runtime_registers_drain_pathway_and_wires_pg_pending_journal() -> None:
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     # pathways.get resolves the drain pathway id (raises PathwayError if not registered).
@@ -459,7 +461,7 @@ def test_assemble_runtime_with_brief_path_registers_wombat_brief(tmp_path: Path)
     config = _config_with_brief_path(str(tmp_path / "brief.txt"))
 
     bundle = bootstrap.assemble_runtime(
-        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     assert bundle.brief_pathway_id == "wombat.brief"
@@ -478,7 +480,7 @@ def test_assemble_runtime_blank_brief_path_skips_registration_and_warns(
 
     with caplog.at_level(logging.WARNING):
         bundle = bootstrap.assemble_runtime(
-            config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+            config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
         )
 
     assert bundle.brief_pathway_id is None
@@ -530,7 +532,7 @@ def test_assemble_runtime_with_brief_path_registers_schedule(tmp_path: Path) -> 
     config = _config_with_brief_path(str(tmp_path / "brief.txt"))
 
     bundle = bootstrap.assemble_runtime(
-        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     assert bundle.brief_schedule_pathway_id == "wombat.brief_schedule"
@@ -548,7 +550,7 @@ def test_assemble_runtime_blank_brief_path_skips_schedule(
 
     with caplog.at_level(logging.WARNING):
         bundle = bootstrap.assemble_runtime(
-            config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+            config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
         )
 
     # BOTH brief and schedule are skipped together (one conditional, no crash).
@@ -856,7 +858,7 @@ async def test_daily_ledger_lifecycle_every_constructed_instance_closed_after_te
     op = load_operating_params()
     config = _config_with_brief_path(str(tmp_path / "brief.txt"))
     bundle = bootstrap.assemble_runtime(
-        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     assert len(constructed) >= 1  # sanity: assembly actually built at least one
@@ -963,6 +965,7 @@ def test_assemble_runtime_with_google_creds_and_token_exposes_action_trail_write
         dsn=_FAKE_DSN,
         params=op,
         replay_pending=False,
+        tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeGmailTokenStore(initial="fake-stored-token"),
     )
 
@@ -977,7 +980,7 @@ def test_assemble_runtime_google_less_boot_action_trail_writer_is_none(
     (CR2-10's other half: runtime's teardown must be a no-op for this seam in that case)."""
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     assert bundle.action_trail_writer is None
@@ -1153,7 +1156,7 @@ def test_assemble_runtime_threads_the_same_live_persona_into_compose_and_reflect
     field of its own) both hold the SAME LivePersona instance bundle.live_persona exposes."""
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     assert bundle.compose_stage._live_persona is bundle.live_persona
@@ -1171,7 +1174,7 @@ def test_assemble_runtime_with_brief_path_threads_live_persona_into_brief_compos
     config = _config_with_brief_path(str(tmp_path / "brief.txt"))
 
     bundle = bootstrap.assemble_runtime(
-        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     assert bundle.brief_pathway_id is not None
@@ -1193,6 +1196,7 @@ def test_assemble_runtime_with_google_creds_threads_live_persona_into_draft_comp
         dsn=_FAKE_DSN,
         params=op,
         replay_pending=False,
+        tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeGmailTokenStore(initial="fake-stored-token"),
     )
 
@@ -1213,7 +1217,7 @@ def test_assemble_runtime_default_config_live_persona_renders_byte_identical_ins
 
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
     )
 
     live_persona = bundle.live_persona

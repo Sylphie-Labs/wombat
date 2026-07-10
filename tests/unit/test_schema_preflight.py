@@ -21,6 +21,7 @@ test_serve_boot.py``): absent it, tests are skipped LOUDLY. Spin up a throwaway 
 from __future__ import annotations
 
 import os
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -116,7 +117,7 @@ def test_ac1_incident_repro_assemble_runtime_survives_a_fresh_database(
     empty Postgres must no longer raise UndefinedTable at the eager pending-journal replay."""
     assert _DSN is not None
     op = load_operating_params()
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         assert bundle.pathways.get(bundle.drain_pathway_id) is not None
     finally:
@@ -138,6 +139,7 @@ def test_ac2_replay_pending_false_stays_connection_free_over_an_unreachable_dsn(
         dsn="postgresql://nonexistent-host-should-never-be-dialed:1/db",
         params=op,
         replay_pending=False,
+        tz=ZoneInfo("UTC"),
     )
     assert bundle.pathways.get(bundle.drain_pathway_id) is not None
 

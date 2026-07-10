@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -173,7 +174,7 @@ def test_ac1_boot_replay_restores_pending_set_from_a_prior_processs_journal(
         writer.close()
 
     captured_pending_sets = _spy_on_gate_pending_set(monkeypatch)
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         assert len(captured_pending_sets) == 1
         gate_pending_set = captured_pending_sets[0]
@@ -203,7 +204,7 @@ async def test_ac2_held_item_survives_a_restart_into_a_second_assembled_runtime(
 
     # 1. FIRST runtime: enqueue a low-priority item that scores well below urgency_threshold
     #    (a non-timed, automated-sender GENERIC item) -- it is always HELD, never surfaced.
-    bundle1 = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle1 = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     bundle1.queue.enqueue(
         QueueItem(
             idempotency_key="held-1",
@@ -230,7 +231,7 @@ async def test_ac2_held_item_survives_a_restart_into_a_second_assembled_runtime(
     #    requires nothing be torn down between the two assemblies.
 
     # 3. SECOND runtime boots over the SAME dsn (default replay_pending=True).
-    bundle2 = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle2 = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         assert len(captured_pending_sets) == 2
         gate2_pending_set = captured_pending_sets[-1]  # the SECOND bundle's own gate

@@ -258,10 +258,6 @@ _DRAIN_POLL_INTERVAL_SECONDS = 5.0
 # process's UserModel reads/writes under.
 _RUNTIME_USER_ID = "wombat-user"
 
-# Module-level singleton (ruff B008 — a ZoneInfo() call cannot live in a default arg). The
-# DailyLedger day-boundary tz; demo_drain.py's own real-DailyLedger wiring uses the same UTC.
-_UTC_ZONE = ZoneInfo("UTC")
-
 _lock = threading.Lock()
 _engine: Engine | None = None
 
@@ -356,7 +352,7 @@ def build_compose_stage(
     config: WombatConfig,
     dsn: str,
     params: OperatingParams | None = None,
-    tz: ZoneInfo = _UTC_ZONE,
+    tz: ZoneInfo,
     daily_ledger: DailyLedger | None = None,
     live_persona: LivePersona | None = None,
 ) -> ComposeStage:
@@ -393,7 +389,7 @@ def build_brief_compose_stage(
     config: WombatConfig,
     dsn: str,
     params: OperatingParams | None = None,
-    tz: ZoneInfo = _UTC_ZONE,
+    tz: ZoneInfo,
     daily_ledger: DailyLedger | None = None,
     live_persona: LivePersona | None = None,
 ) -> BriefComposeStage:
@@ -427,7 +423,7 @@ def build_brief_compose_stage(
 def build_brief_deliver_stage(
     *,
     config: WombatConfig,
-    tz: ZoneInfo = _UTC_ZONE,
+    tz: ZoneInfo,
     speak: Callable[[str], None] | None = None,
 ) -> BriefDeliverStage:
     """Assemble the morning brief's terminal ``BriefDeliverStage`` (TK-101, Q-78).
@@ -609,7 +605,7 @@ def assemble_runtime(
     config: WombatConfig,
     dsn: str,
     params: OperatingParams | None = None,
-    tz: ZoneInfo = _UTC_ZONE,
+    tz: ZoneInfo,
     replay_pending: bool = True,
     gmail_token_store: GmailTokenStore | None = None,
 ) -> RuntimeBundle:
@@ -937,7 +933,7 @@ def assemble_runtime(
     # SAME shared entity_kg constructed above + the SAME deepseek descriptor _deepseek_registry
     # registers).
     dream_spec = _deepseek_spec(config)
-    dream_substrate = build_dream_substrate(entity_kg=entity_kg, spec=dream_spec, params=op)
+    dream_substrate = build_dream_substrate(entity_kg=entity_kg, spec=dream_spec, params=op, tz=tz)
     dream_reconciler = CoherenceReconciler(
         entity_kg=entity_kg, store=dream_substrate.store, oracle=dream_substrate.oracle
     )

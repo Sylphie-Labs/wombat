@@ -36,6 +36,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -347,6 +348,7 @@ async def test_ac2_draft_surfaces_parks_and_approve_dispatches_with_one_capabili
         config=_config(with_google=True),
         dsn=_DSN,
         params=op,
+        tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
     )
     try:
@@ -446,6 +448,7 @@ async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_looku
         config=_config(with_google=True),
         dsn=_DSN,
         params=op,
+        tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
     )
     try:
@@ -503,6 +506,7 @@ async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup(
         config=_config(with_google=True),
         dsn=_DSN,
         params=op,
+        tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
     )
     try:
@@ -552,7 +556,9 @@ async def test_ac3_google_less_boot_loud_skips_outbound_wiring(
     op = load_operating_params()
 
     with caplog.at_level("WARNING"):
-        bundle = bootstrap.assemble_runtime(config=_config(with_google=False), dsn=_DSN, params=op)
+        bundle = bootstrap.assemble_runtime(
+            config=_config(with_google=False), dsn=_DSN, params=op, tz=ZoneInfo("UTC")
+        )
     try:
         assert "gmail outbound wiring not wired" in caplog.text
         assert "GOOGLE_OAUTH_CLIENT_ID" in caplog.text

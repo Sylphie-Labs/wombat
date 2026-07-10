@@ -12,11 +12,19 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import SecretStr
 
-from wombat.config import APP_EDITABLE_FIELDS, REQUIRED_ENV, ConfigurationError, load_config
+from wombat.config import (
+    APP_EDITABLE_FIELDS,
+    REQUIRED_ENV,
+    ConfigurationError,
+    WombatConfig,
+    load_config,
+    resolve_wombat_zone,
+)
 from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Humor, matrix_from_config
 
 
@@ -495,3 +503,77 @@ def test_load_config_rejects_unknown_persona_humor_env_var_naming_it_unchanged(
         load_config()
 
     assert "WOMBAT_PERSONA_HUMOR" in str(exc_info.value)
+
+
+# --- TK-228 (DEC-40): resolve_wombat_zone — WOMBAT_TIMEZONE, tzlocal fallback, NO silent UTC -----
+
+
+def _wombat_config(*, wombat_timezone: str | None = None) -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_timezone=wombat_timezone,
+    )
+
+
+# --- AC2(a): an explicit, valid IANA value resolves to that exact ZoneInfo -------------------
+
+
+def test_resolve_wombat_zone_explicit_value_resolves_to_that_zone() -> None:
+    config = _wombat_config(wombat_timezone="America/New_York")
+
+    assert resolve_wombat_zone(config) == ZoneInfo("America/New_York")
+
+
+# --- AC2(b): unset -> tzlocal.get_localzone(), a real IANA ZoneInfo, never a silent UTC ------
+
+
+def test_resolve_wombat_zone_unset_resolves_via_tzlocal(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tzlocal
+
+    monkeypatch.setattr(tzlocal, "get_localzone", lambda: ZoneInfo("Europe/Berlin"))
+
+    zone = resolve_wombat_zone(_wombat_config())
+
+    assert isinstance(zone, ZoneInfo)
+    assert zone.key  # non-empty IANA key
+    assert zone == ZoneInfo("Europe/Berlin")
+
+
+# --- AC2(c): an unrecognized IANA key fails loud, naming WOMBAT_TIMEZONE ---------------------
+
+
+def test_resolve_wombat_zone_invalid_value_raises_naming_the_var() -> None:
+    config = _wombat_config(wombat_timezone="Not/AZone")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_wombat_zone(config)
+
+    assert "WOMBAT_TIMEZONE" in str(exc_info.value)
+
+
+# --- AC2(d): a tzlocal resolution failure ALSO fails loud, naming WOMBAT_TIMEZONE ------------
+
+
+def test_resolve_wombat_zone_tzlocal_failure_raises_naming_the_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tzlocal
+
+    def _raise() -> ZoneInfo:
+        raise LookupError("no timezone could be determined for this host")
+
+    monkeypatch.setattr(tzlocal, "get_localzone", _raise)
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_wombat_zone(_wombat_config())
+
+    assert "WOMBAT_TIMEZONE" in str(exc_info.value)
+
+
+# --- AC2(e): wombat_timezone is NOT app-editable and NOT required -----------------------------
+
+
+def test_wombat_timezone_is_not_app_editable_and_not_required() -> None:
+    assert "wombat_timezone" not in APP_EDITABLE_FIELDS
+    assert "WOMBAT_TIMEZONE" not in REQUIRED_ENV

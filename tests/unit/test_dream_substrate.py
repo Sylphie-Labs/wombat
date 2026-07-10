@@ -21,6 +21,7 @@ import ast
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from cogworx.coherence.reconciler import CoherenceReconciler
@@ -109,7 +110,7 @@ def test_ac1_constructible_with_all_four_collaborators_and_zero_network() -> Non
     client = _spy_client()
 
     substrate = build_dream_substrate(
-        entity_kg=entity_kg, spec=_spec(), params=_params(), client=client
+        entity_kg=entity_kg, spec=_spec(), params=_params(), client=client, tz=ZoneInfo("UTC")
     )
 
     assert isinstance(substrate, DreamSubstrate)
@@ -146,6 +147,7 @@ async def test_ac2a_zero_max_calls_raises_before_the_client_is_invoked() -> None
         spec=_spec(),
         params=_params(dream_budget_max_calls=0),
         client=client,
+        tz=ZoneInfo("UTC"),
     )
 
     with pytest.raises(BudgetExceededError):
@@ -165,6 +167,7 @@ async def test_ac2a_zero_max_usd_raises_before_the_client_is_invoked() -> None:
         spec=_spec(),
         params=_params(dream_budget_max_usd=0.0),
         client=client,
+        tz=ZoneInfo("UTC"),
     )
 
     with pytest.raises(BudgetExceededError):
@@ -196,6 +199,7 @@ async def test_ac1_prime_budget_renews_per_night_not_process_lifetime() -> None:
         params=_params(),
         client=client,
         clock=_clock,
+        tz=ZoneInfo("UTC"),
     )
 
     for _ in range(20):

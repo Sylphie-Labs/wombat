@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -125,7 +126,11 @@ def test_assemble_runtime_still_succeeds_at_current_batch_size_of_one() -> None:
     # construction) with replay_pending=False, so this never touches a real Postgres (mirrors
     # tests/unit/test_runtime.py).
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
     )
     assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
 
@@ -155,7 +160,7 @@ def test_assemble_runtime_default_replay_pending_calls_rebuild_from_journal(
     monkeypatch.setattr(bootstrap, "ensure_all_schemas", lambda dsn: None)
 
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn="postgresql://fake-host/fake-db", params=op
+        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, tz=ZoneInfo("UTC")
     )
 
     assert len(calls) == 1  # the default path calls rebuild_from_journal exactly once
@@ -182,6 +187,7 @@ def test_assemble_runtime_replay_pending_false_never_calls_rebuild_from_journal(
         dsn="postgresql://fake-host/fake-db",
         params=op,
         replay_pending=False,
+        tz=ZoneInfo("UTC"),
     )
 
     assert calls == []  # never called -- the opted-out path stays connection-free
@@ -197,7 +203,11 @@ def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:
     no ``WOMBAT_BRIEF_PATH``-style conditional gates it (Q-85)."""
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
     )
     assert bundle.dream_pathway_id == "wombat.dream"
     assert bundle.pathways.get(bundle.dream_pathway_id) is not None
@@ -209,7 +219,11 @@ def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:
 def test_assemble_runtime_registers_reflection_compose_in_drain_graph() -> None:
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
     )
     graph = bundle.pathways.get(bundle.drain_pathway_id)
 
@@ -235,7 +249,11 @@ def test_assemble_runtime_reflection_kb_load_failure_boots_with_empty_kb_and_lou
 
     with caplog.at_level("WARNING"):
         bundle = bootstrap.assemble_runtime(
-            config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+            config=_config(),
+            dsn="postgresql://fake-host/fake-db",
+            params=op,
+            replay_pending=False,
+            tz=ZoneInfo("UTC"),
         )
 
     graph = bundle.pathways.get(bundle.drain_pathway_id)

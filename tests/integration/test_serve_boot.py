@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -94,7 +95,7 @@ def test_assemble_runtime_against_real_postgres_carries_the_real_composition(
 ) -> None:
     assert _DSN is not None
     op = load_operating_params()
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         graph = bundle.pathways.get(bundle.drain_pathway_id)
         assert graph is not None
@@ -117,7 +118,7 @@ def test_assemble_runtime_against_real_postgres_carries_the_real_composition(
 async def test_ac5_full_standing_loop_cycle_enqueue_park_wake_drain(clean_tables: None) -> None:
     assert _DSN is not None
     op = load_operating_params()
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         run_id = "run-ac5"
 

@@ -229,7 +229,7 @@ async def test_ac1_dsn_bootstrap_composed_absorb_writes_claim_and_acks(
     assert _DSN is not None
     bootstrap.reset_engine()
     op = load_operating_params()
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         signal = FeedbackSignal(item_ref="item-42", response="useful")
         bundle.queue.enqueue(
@@ -381,7 +381,11 @@ async def test_ac4_shared_entity_kg_across_bundle_observation_writer_and_user_mo
 
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
-        config=_config(), dsn="postgresql://fake-host/fake-db", params=op, replay_pending=False
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
     )
 
     # UserModel was constructed over the EXACT SAME entity_kg instance the bundle exposes.

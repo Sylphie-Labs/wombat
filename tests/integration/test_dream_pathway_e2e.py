@@ -138,7 +138,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
 ) -> None:
     assert _DSN is not None
     op = load_operating_params()
-    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op)
+    bundle = bootstrap.assemble_runtime(config=_config(), dsn=_DSN, params=op, tz=ZoneInfo("UTC"))
     try:
         dream_run_id = "run-dream-ac1"
         dream_final = await bundle.engine.run(

@@ -17,6 +17,10 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "google-auth-oauthlib>=1.2",
     "keyring>=25.0",
+    # DEC-40/TK-228: the ONLY honest route to a DST-correct host-local default timezone on
+    # Windows (stdlib cannot portably resolve the host's IANA name there) — pure-python, zero
+    # egress, returns a real zoneinfo.ZoneInfo (config.resolve_wombat_zone's unset-tz fallback).
+    "tzlocal>=5",
 ]
 
 [project.optional-dependencies]

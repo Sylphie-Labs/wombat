@@ -69,11 +69,6 @@ from wombat.params import OperatingParams
 
 __all__ = ["DreamSubstrate", "build_dream_substrate"]
 
-# The default night-key clock/zone (TK-180): production boot never threads its own tz/clock
-# through build_dream_substrate (bootstrap.py is out of scope for this ticket), so the night
-# boundary is resolved in UTC off the real wall clock unless a test injects its own seam.
-_UTC_ZONE = ZoneInfo("UTC")
-
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -173,7 +168,7 @@ def build_dream_substrate(
     params: OperatingParams,
     client: Any = None,
     clock: Callable[[], datetime] = _utc_now,
-    tz: ZoneInfo = _UTC_ZONE,
+    tz: ZoneInfo,
 ) -> DreamSubstrate:
     """Assemble the dream substrate (TK-54).
 
@@ -187,9 +182,11 @@ def build_dream_substrate(
     injectable adapter client seam ``build_model``/``OpenAICompatModel`` already expose — the
     zero-network test seam (a canned/spy client in tests, ``None`` in production for a real SDK
     client). ``clock``/``tz`` are the injectable wombat-night seam (mirroring ``DailyLedger``'s
-    idiom, DEC-21): ``clock`` defaults to the real UTC wall clock and ``tz`` to UTC — production
-    boot (``bootstrap.py``) does not thread its own tz through this call, only tests inject a
-    fixed clock to drive the night boundary deterministically.
+    idiom, DEC-21): ``clock`` defaults to the real UTC wall clock; ``tz`` is REQUIRED (TK-228,
+    DEC-40) — ``bootstrap.py`` threads the SAME ``resolve_wombat_zone(config)`` result every other
+    composition seam gets, so the wombat-night boundary here agrees with the brief timer/daily
+    ledger; tests inject their own fixed ``clock``/``tz`` to drive the night boundary
+    deterministically.
     """
     model: Model = _NightBudgetedModel(
         spec=spec, params=params, client=client, clock=clock, tz=tz

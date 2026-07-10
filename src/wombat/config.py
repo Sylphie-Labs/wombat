@@ -10,7 +10,9 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Literal, get_args
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import tzlocal
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from pydantic_settings import (
     BaseSettings,
@@ -242,6 +244,15 @@ class WombatConfig(BaseSettings):
     # booting fully offline with chat disabled.
     wombat_chat_handshake_file: str | None = None
 
+    # OPTIONAL (TK-228, DEC-40, realizing DEC-21/Q-15): the canonical IANA timezone every wombat
+    # tz consumer (BriefTimerStage, DailyLedger.wombat_today, the nightly dream-schedule boundary,
+    # etc.) resolves against — an operator .env-tier field (deliberately NOT in
+    # APP_EDITABLE_FIELDS, the ``wombat_asr_drop_dir`` precedent) and deliberately NOT in
+    # REQUIRED_ENV: an unset value is a legitimate default (see ``resolve_wombat_zone`` below),
+    # never a missing-config error. Nothing reads this field directly — every caller goes through
+    # ``resolve_wombat_zone(config)``.
+    wombat_timezone: str | None = None
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -290,3 +301,32 @@ def load_config() -> WombatConfig:
                     f"invalid environment variable {field}; wombat will not start"
                 ) from exc
         raise
+
+
+def resolve_wombat_zone(config: WombatConfig) -> ZoneInfo:
+    """Resolve the ONE timezone every wombat tz consumer runs against (TK-228, DEC-40 —
+    realizing the DEC-21/Q-15 "no caller hard-codes UTC or local independently" invariant).
+
+    An explicit ``config.wombat_timezone`` constructs ``ZoneInfo(value)``; an unrecognized IANA
+    key fails LOUD (``ConfigurationError`` naming ``WOMBAT_TIMEZONE``) rather than silently
+    falling back. Unset (the default) resolves the HOST's own zone via
+    ``tzlocal.get_localzone()`` — a real ``zoneinfo.ZoneInfo`` read from the OS (never a fixed
+    UTC offset, never a DST-blind placebo); a resolution failure ALSO fails loud, instructing the
+    operator to set ``WOMBAT_TIMEZONE`` explicitly. There is NO silent UTC fallback anywhere in
+    this function — a silent fallback is exactly the ISS-8 live defect this ticket closes.
+    """
+    if config.wombat_timezone is not None:
+        try:
+            return ZoneInfo(config.wombat_timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ConfigurationError(
+                f"invalid environment variable WOMBAT_TIMEZONE: {config.wombat_timezone!r} is "
+                "not a recognized IANA timezone name; wombat will not start"
+            ) from exc
+    try:
+        return tzlocal.get_localzone()
+    except Exception as exc:
+        raise ConfigurationError(
+            "could not resolve the host's local timezone; set WOMBAT_TIMEZONE to a valid IANA "
+            "zone name (e.g. America/New_York) in your .env; wombat will not start"
+        ) from exc
