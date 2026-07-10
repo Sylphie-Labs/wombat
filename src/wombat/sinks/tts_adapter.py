@@ -4,8 +4,14 @@
 ``SpeakSink``/``bootstrap.make_speak_callable`` never depend on a concrete TTS library type —
 only on "something that can speak a string" (tests inject a recording/raising fake).
 
-``Pyttsx3Adapter`` is the ONE concrete adapter (Q-96 ruling): ``pyttsx3`` (offline, Windows SAPI5
-backend — CST-2/TECH-11 local-only speech, no cloud TTS). ``import pyttsx3`` happens LAZILY inside
+``Pyttsx3Adapter`` is the LOCAL DEFAULT concrete adapter (Q-96 ruling, rescoped by DEC-28/TK-218):
+``pyttsx3`` (offline, Windows SAPI5 backend — CST-2/TECH-11 local-only speech). In the DEFAULT
+configuration no cloud TTS exists. Cloud adapters (``FishAudioTTSAdapter``/``ElevenLabsTTSAdapter``/
+``DeepgramAuraTTSAdapter``, TK-191/TK-192) live in ``wombat.voice.tts`` and implement this SAME
+``TTSAdapter`` Protocol; they are constructed ONLY by the structural opt-in seam
+``wombat.voice.select.build_tts_adapter`` — a cloud provider is selected AND a user-supplied key
+resolves, else no cloud instance is ever constructed (DEC-28); degrade is STRICTLY cloud-to-local,
+never the reverse. ``import pyttsx3`` happens LAZILY inside
 ``__init__`` — NEVER at this module's top level — so merely importing
 ``wombat.sinks.tts_adapter`` never fails on a checkout that has not installed the optional
 ``voice`` extra (Q-46/Q-72 clean-checkout bar; ``pyproject.toml``'s ``[project.optional-

@@ -34,8 +34,12 @@ tests run micless/modelless on a fake. ``FasterWhisperTranscriber`` is the real 
 module — or constructing any OTHER ``Transcriber`` — never requires the ``[voice]`` extra to be
 installed; only constructing ``FasterWhisperTranscriber`` itself does. It is constructed ONLY
 by ``sources.bootstrap._maybe_register_asr``, never here. Model-weight download is a one-time
-install/first-use-time fetch to the local cache — no audio or transcript ever leaves the
-machine (CST-2/ASMP-1 posture).
+install/first-use-time fetch to the local cache — in the DEFAULT configuration (local
+``FasterWhisperTranscriber``), no audio or transcript ever leaves the machine (CST-2/ASMP-1
+posture, rescoped by DEC-28/TK-218). Opt-in cloud STT providers (``ElevenLabsScribeTranscriber``/
+``FishAudioTranscriber``, TK-190) live in ``wombat.voice.stt`` and implement this SAME
+``Transcriber`` Protocol; they are constructed ONLY by the structural opt-in seam
+``wombat.voice.select.build_transcriber`` (DEC-28) — never here.
 """
 
 from __future__ import annotations
