@@ -17,6 +17,7 @@ Lock-step drift test: ``test_mirror_model_field_set_matches_app_editable_fields`
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import typing
@@ -289,6 +290,41 @@ def test_subprocess_handshake_and_smoke(tmp_path: Path) -> None:
 
         tokenless = httpx.get(f"{base_url}/settings", timeout=5)
         assert tokenless.status_code == 401
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def test_subprocess_honors_keyring_service_env_override(tmp_path: Path) -> None:
+    """TK-201 (Q-111(d)): WOMBAT_KEYRING_SERVICE, when set, is threaded into the
+    KeyringVoiceKeyStore the subprocess constructs — the process still boots and serves
+    normally (no crash, no behavior change visible from outside a keyring read), never
+    touching the default "wombat" vault entry."""
+    env = dict(os.environ)
+    env["WOMBAT_KEYRING_SERVICE"] = f"wombat-test-{os.getpid()}"
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "wombat.settings_app"],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        line = proc.stdout.readline()
+        handshake = json.loads(line)
+        port = handshake["port"]
+        token = handshake["token"]
+
+        base_url = f"http://{BIND_HOST}:{port}"
+        response = httpx.get(f"{base_url}/settings", headers={"X-Wombat-Token": token}, timeout=5)
+        assert response.status_code == 200
+        assert response.json()["keys"] == {"elevenlabs": False, "deepgram": False, "fish": False}
     finally:
         proc.terminate()
         try:

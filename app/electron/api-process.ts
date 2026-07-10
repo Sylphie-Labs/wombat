@@ -99,6 +99,16 @@ export interface StartApiProcessOptions {
   readonly args?: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly timeoutMs?: number;
+  /**
+   * TK-201 (Q-111(c)): the child's working directory. `wombat.config`'s
+   * `WOMBAT_SETTINGS_FILE` ("wombat.settings.json") is CWD-relative, so
+   * without this the settings API (spawned from here) and the runtime
+   * (launched separately, typically from the repo root) can silently read
+   * and write two different files. `main.ts` passes `resolveBackendRoot`
+   * (`env-config.ts`) so both sides agree on one directory. `undefined`
+   * (the default) preserves Node's own default of the parent's cwd.
+   */
+  readonly cwd?: string;
 }
 
 /**
@@ -121,6 +131,7 @@ export function startApiProcess(
 
     const child = spawn(command, args, {
       env,
+      cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
 

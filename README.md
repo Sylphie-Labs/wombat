@@ -55,6 +55,42 @@ exactly one draining `WombatQueue` process-wide):
   once-per-day timer (survives a crash/sleep and fires a missed brief once on the next boot);
   `wombat.brief` gathers, force-flushes, composes, and delivers it.
 
+## Companion app (Electron)
+
+`app/` is an Electron shell over a settings UI + a runtime chat pane (EP-32). It has its own npm
+toolchain, separate from the Python side above.
+
+**Prerequisites:**
+
+- Node (a recent LTS) + npm.
+- `uv sync --extra settings-app` — the settings UI's backend (`python -m wombat.settings_app`) is
+  a loopback-only FastAPI process; the app can't start without it.
+- Optional: `uv sync --extra voice-cloud` to enable cloud STT/TTS provider selection (fish,
+  elevenlabs, deepgram) instead of local-only.
+
+**Launch:**
+
+```bash
+cd app
+npm install
+npm start        # builds the renderer, then opens Electron
+```
+
+`npm start` spawns `python -m wombat.settings_app` itself — no separate process to start by hand.
+It resolves the python interpreter from `WOMBAT_PYTHON` (default `python`); point it at a venv
+interpreter (e.g. `.venv/Scripts/python.exe`) if `python` on your `PATH` isn't the one with the
+`settings-app`/`voice-cloud` extras installed.
+
+**Chat bring-up** (optional, one line): the app's chat pane talks to a *running* `wombat` runtime,
+not the settings API. Set `WOMBAT_CHAT_HANDSHAKE_FILE` in the repo-root `.env`, start the runtime
+(`python -m wombat`), then start the app — the chat pane connects once the runtime writes its
+handshake file. This is the operator half of the runtime chat surface; the app side needs nothing
+else.
+
+**e2e smoke:** `npm run e2e` runs the one Playwright-for-Electron happy-path spec (`app/e2e`) —
+drives the real UI, then proves the round trip landed where the runtime reads it (a throwaway cwd
++ keyring service, never the real vault).
+
 ## Develop
 
 ```bash

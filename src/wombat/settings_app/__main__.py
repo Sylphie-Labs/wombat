@@ -15,6 +15,7 @@ neither of which reaches the runtime.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import socket
 from pathlib import Path
@@ -23,12 +24,19 @@ import uvicorn
 
 from wombat.config import WOMBAT_SETTINGS_FILE
 from wombat.settings_app.api import BIND_HOST, create_app
-from wombat.voice.key_store import KeyringVoiceKeyStore
+from wombat.voice.key_store import WOMBAT_KEYRING_SERVICE, KeyringVoiceKeyStore
+
+# TK-201 (Q-111(d)): a test/ops override for the keyring service name, so the Playwright smoke
+# (and any future throwaway run) can point at a disposable service instead of the real
+# "wombat" vault entry. Unset/blank -> KeyringVoiceKeyStore's own default (byte-identical to
+# pre-TK-201 behavior).
+_KEYRING_SERVICE_ENV_VAR = "WOMBAT_KEYRING_SERVICE"
 
 
 def main() -> None:
     token = secrets.token_urlsafe(32)
-    app = create_app(Path(WOMBAT_SETTINGS_FILE), KeyringVoiceKeyStore(), token)
+    service = os.environ.get(_KEYRING_SERVICE_ENV_VAR) or WOMBAT_KEYRING_SERVICE
+    app = create_app(Path(WOMBAT_SETTINGS_FILE), KeyringVoiceKeyStore(service=service), token)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((BIND_HOST, 0))

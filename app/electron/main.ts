@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { describeFailure, startApiProcess, type ApiProcessHandle } from "./api-process";
 import { readChatInfo } from "./chat-info";
+import { resolveBackendRoot } from "./env-config";
 import { isAllowedPermission } from "./permissions";
 import { saveCapture } from "./save-capture";
 import { WEB_PREFERENCES } from "./window-options";
@@ -43,7 +44,11 @@ app.whenReady().then(async () => {
   // TK-199: spawn the settings-API child and parse its handshake BEFORE any
   // window opens - python missing, the module absent, or a handshake timeout
   // must show a visible error surface, never a silent blank window.
-  const result = await startApiProcess();
+  // TK-201 (Q-111(c)): pin the child's cwd to the resolved backend root so
+  // wombat.settings.json lands where the runtime reads it (see api-process.ts).
+  const result = await startApiProcess({
+    cwd: resolveBackendRoot(process.env, app.getAppPath()),
+  });
   if (!result.ok) {
     dialog.showErrorBox(
       "Wombat settings API failed to start",

@@ -42,3 +42,6 @@ app/node_modules/
 app/dist/
 app/dist-electron/
 app/out/
+# TK-201: Playwright-for-Electron smoke run artifacts (failure traces/report) - never committed.
+app/test-results/
+app/playwright-report/

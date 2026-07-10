@@ -1,3 +1,7 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -125,6 +129,41 @@ describe("startApiProcess against a scripted Node stand-in", () => {
       expect(result.reason.kind).toBe("timeout");
     }
   }, 5000);
+
+  it("passes the cwd option through to spawn (TK-201 backend-cwd pin)", async () => {
+    // A tmp dir distinct from the test runner's own cwd - the stand-in prints
+    // its own process.cwd() as the handshake token, proving the child actually
+    // observed the requested cwd rather than inheriting the parent's.
+    const tempDir = realpathSync(mkdtempSync(path.join(os.tmpdir(), "wombat-api-process-cwd-")));
+    try {
+      expect(tempDir).not.toBe(process.cwd());
+      const result = await startApiProcess({
+        command: "node",
+        args: ["-e", "console.log(JSON.stringify({port: 1, token: process.cwd()}))"],
+        cwd: tempDir,
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.handle.info.token).toBe(tempDir);
+        const { child } = result.handle;
+        const exited = new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) {
+            resolve();
+            return;
+          }
+          child.once("exit", () => resolve());
+        });
+        result.handle.teardown();
+        // Windows can hold the child's cwd handle open briefly even after "exit" fires -
+        // wait for actual exit (not just kill()'s return) before deleting, then let
+        // maxRetries/retryDelay absorb whatever lag remains.
+        await exited;
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    }
+  });
 
   it("kills the stand-in child exactly once on teardown - no orphan", async () => {
     const result = await startApiProcess({
