@@ -351,3 +351,108 @@ def test_settings_json_persona_field_is_app_editable(
         "wombat_persona_proactivity",
     ):
         assert name in APP_EDITABLE_FIELDS
+
+
+# --- TK-226 (CR5-1/CR5-2): UTF-8 pin, decode-guard widening, per-value validate-or-drop ------
+
+
+# --- AC1: a non-ASCII value undefined in cp1252 round-trips exactly, no mojibake, no crash --
+
+
+def test_load_config_settings_json_round_trips_utf8_value_undefined_in_cp1252(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    # 'Ё' encodes to UTF-8 byte 0x81, which is UNDEFINED in cp1252 — reading this file with the
+    # locale default (the CR5-1 bug) raises UnicodeDecodeError; reading it as UTF-8 must not.
+    (tmp_path / "wombat.settings.json").write_text(
+        json.dumps({"wombat_assistant_name": "Ёncins"}, ensure_ascii=False), encoding="utf-8"
+    )
+
+    config = load_config()
+
+    assert config.wombat_assistant_name == "Ёncins"
+
+
+# --- AC2: undecodable bytes, and a raw OSError on read, each warn once and fall back to defaults
+
+
+def test_load_config_settings_json_undecodable_bytes_warns_once_and_is_treated_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    (tmp_path / "wombat.settings.json").write_bytes(b"\xff\xfe garbage")
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()
+
+    assert config.wombat_assistant_name == "Steward"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat.settings.json" in warnings[0].message
+
+
+def test_load_config_settings_json_os_error_warns_once_and_is_treated_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(tmp_path, {"wombat_assistant_name": "Marvin"})
+
+    def _raise_os_error(self: object, file_path: Path) -> dict[str, object]:
+        raise OSError("simulated unreadable file")
+
+    monkeypatch.setattr(
+        "wombat.config.JsonConfigSettingsSource._read_file", _raise_os_error, raising=True
+    )
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()
+
+    assert config.wombat_assistant_name == "Steward"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat.settings.json" in warnings[0].message
+
+
+# --- AC3: an out-of-vocab admitted value is dropped (one warning naming field + value); the
+# --- rest of the file still loads, and load_config does not raise -------------------------
+
+
+def test_load_config_settings_json_drops_invalid_admitted_value_with_one_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(
+        tmp_path, {"wombat_persona_humor": "playful", "wombat_assistant_name": "Kip"}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()  # must not raise
+
+    assert config.wombat_persona_humor == "none"  # falls back to the field default
+    assert config.wombat_assistant_name == "Kip"  # the valid sibling value still loads
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat_persona_humor" in warnings[0].message
+    assert "playful" in warnings[0].message
+
+
+# --- AC4: the identical out-of-vocab value via the ENV tier still fails loud, naming the var
+# --- (TK-187 behavior pinned unchanged — only the app-file tier grew tolerant) --------------
+
+
+def test_load_config_rejects_unknown_persona_humor_env_var_naming_it_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_PERSONA_HUMOR", "playful")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_PERSONA_HUMOR" in str(exc_info.value)

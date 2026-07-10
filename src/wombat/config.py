@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Literal, get_args
 
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from pydantic_settings import (
     BaseSettings,
     JsonConfigSettingsSource,
@@ -20,6 +20,19 @@ from pydantic_settings import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Per-field pydantic TypeAdapters used to validate wombat.settings.json values before they
+# reach WombatConfig (TK-226/CR5-2) — cached so repeated __call__ invocations (e.g. multiple
+# load_config() calls in a process) don't rebuild one per field per call.
+_FIELD_TYPE_ADAPTERS: dict[str, TypeAdapter[Any]] = {}
+
+
+def _type_adapter_for(field_name: str, annotation: Any) -> TypeAdapter[Any]:
+    adapter = _FIELD_TYPE_ADAPTERS.get(field_name)
+    if adapter is None:
+        adapter = TypeAdapter(annotation)
+        _FIELD_TYPE_ADAPTERS[field_name] = adapter
+    return adapter
 
 
 class ConfigurationError(RuntimeError):
@@ -55,18 +68,28 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
 class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
     """Reads ``wombat.settings.json`` (TK-196) for ``WombatConfig``.
 
-    Two structural guards, both loud-not-silent:
+    Structural guards, all loud-not-silent:
       * no secrets load from this file — a loaded key naming a ``SecretStr``-typed
         ``WombatConfig`` field (the ``*_api_key`` fields, ``deepseek_api_key``,
         ``google_oauth_client_secret``) is dropped with exactly one ``logger.warning`` naming
         the field; the value never reaches the model.
-      * a malformed file can never fail boot (CON-3) — a ``json.JSONDecodeError`` while reading
-        is caught, one ``logger.warning`` is logged, and the file is treated as absent. A
-        genuinely-missing file is already a silent no-op (inherited from the base class).
+      * a malformed or unreadable file can never fail boot (CON-3) — a ``json.JSONDecodeError``,
+        ``UnicodeDecodeError`` (e.g. undecodable bytes, or bytes invalid for the pinned UTF-8
+        encoding), or ``OSError`` while reading is caught, one ``logger.warning`` is logged, and
+        the file is treated as absent. A genuinely-missing file is already a silent no-op
+        (inherited from the base class).
       * a syntactically-valid file whose top level isn't a JSON object (an array, string,
         number, bool, or ``null``) is the same treated-as-absent posture: one ``logger.warning``
         is logged and the file is treated as empty, rather than letting the base class's
         ``dict``-only merge raise ``TypeError``/``ValueError`` and brick boot.
+      * an admitted field's value that fails validation against its ``WombatConfig`` annotation
+        (e.g. an out-of-vocab ``Literal`` like ``wombat_persona_humor``) is DROPPED with one
+        ``logger.warning`` naming the field and the offending value, falling back to that
+        field's default instead of bricking the entire process at ``load_config()`` (CR5-2).
+
+    The file is always read as UTF-8 (``json_file_encoding="utf-8"`` at the construction site
+    in ``settings_customise_sources``), matching every writer of this file (``persona/live.py``
+    ``_persist``, TK-197's PUT path) — CR5-1.
 
     Any other loaded key that isn't in ``APP_EDITABLE_FIELDS`` (and isn't a secret field) is
     dropped silently — only the admitted-field schema may come from this file.
@@ -75,8 +98,8 @@ class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
     def _read_file(self, file_path: Path) -> dict[str, Any]:
         try:
             loaded = super()._read_file(file_path)
-        except json.JSONDecodeError as exc:
-            logger.warning("%s is malformed JSON (%s); ignoring it", WOMBAT_SETTINGS_FILE, exc)
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            logger.warning("%s is unreadable (%s); ignoring it", WOMBAT_SETTINGS_FILE, exc)
             return {}
         if not isinstance(loaded, dict):
             logger.warning(
@@ -96,6 +119,19 @@ class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
         filtered: dict[str, Any] = {}
         for key, value in loaded.items():
             if key in APP_EDITABLE_FIELDS:
+                annotation = self.settings_cls.model_fields[key].annotation
+                adapter = _type_adapter_for(key, annotation)
+                try:
+                    adapter.validate_python(value)
+                except ValidationError:
+                    logger.warning(
+                        "%s contains an invalid value for %s: %r; ignoring it "
+                        "(falling back to the field default)",
+                        WOMBAT_SETTINGS_FILE,
+                        key,
+                        value,
+                    )
+                    continue
                 filtered[key] = value
             elif key in secret_fields:
                 logger.warning(
@@ -207,7 +243,9 @@ class WombatConfig(BaseSettings):
         stay highest, so this addition is behavior-preserving for every caller that doesn't touch
         ``wombat.settings.json``.
         """
-        json_settings = _AppEditableJsonSettingsSource(settings_cls, json_file=WOMBAT_SETTINGS_FILE)
+        json_settings = _AppEditableJsonSettingsSource(
+            settings_cls, json_file=WOMBAT_SETTINGS_FILE, json_file_encoding="utf-8"
+        )
         return init_settings, env_settings, dotenv_settings, json_settings, file_secret_settings
 
 
