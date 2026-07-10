@@ -29,33 +29,77 @@ role/name/state information as a YAML outline string (e.g. ``heading "Title" [le
 ``_capture_snapshot`` parses that outline via ``yaml.safe_load`` (wombat's existing ``pyyaml``
 dependency — no new parser) so the returned snapshot is a real JSON-native nested structure
 (lists/dicts/strings), never an opaque blob and never a screenshot.
+
+TK-132 (Q-113(e)) extends the action set with ``click``/``type``/``select`` interaction actions
+plus a ``screenshot`` fallback. All three interaction actions resolve their target EXCLUSIVELY
+via Playwright's ``page.get_by_role(role, name=...)`` a11y locator — never CSS/XPath — through
+the shared ``_act_role`` helper: on success it returns ``{"ok": True, "snapshot": ...}`` (the
+post-action a11y snapshot, mirroring ``navigate``); if the role+name locator does not resolve
+within ``ELEMENT_TIMEOUT_MS``, Playwright's ``TimeoutError`` is caught and converted into a
+STRUCTURED ``{"ok": False, "error": "element_not_found", "role": ..., "name": ...}`` result rather
+than propagating — ``dispatch_one`` relays ``invoke`` exceptions raw, so a caller-actionable
+not-found signal has to be a return value, not a raise. ``screenshot`` is the clearly-labelled
+pixel fallback (CST-5: the a11y tree is the workhorse) — it returns raw PNG bytes and logs a
+``"screenshot-fallback used"`` record so its (expected-rare) use is auditable; deciding WHEN to
+fall back to it is the caller's call, never automatic here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import logging
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import yaml
 from cogworx.capability.base import PermissionTier
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, Page, Playwright
+    from playwright.async_api import Browser, Locator, Page, Playwright
+
+logger = logging.getLogger(__name__)
+
+ELEMENT_TIMEOUT_MS: int = 3000
+"""Bounded wait (Q-113(e)) for a ``get_by_role`` locator to resolve on click/type/select — a
+locator that never resolves within this window is reported as ``element_not_found`` rather than
+hanging or raising."""
 
 BROWSER_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "action": {"type": "string", "enum": ["navigate", "snapshot"]},
+        "action": {
+            "type": "string",
+            "enum": ["navigate", "snapshot", "click", "type", "select", "screenshot"],
+        },
         "url": {"type": "string"},
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "value": {"type": "string"},
     },
     "required": ["action"],
     "additionalProperties": False,
-    "if": {"properties": {"action": {"const": "navigate"}}},
-    "then": {"required": ["action", "url"]},
+    "allOf": [
+        {
+            "if": {"properties": {"action": {"const": "navigate"}}},
+            "then": {"required": ["action", "url"]},
+        },
+        {
+            "if": {"properties": {"action": {"const": "click"}}},
+            "then": {"required": ["action", "role", "name"]},
+        },
+        {
+            "if": {"properties": {"action": {"const": "type"}}},
+            "then": {"required": ["action", "role", "name", "value"]},
+        },
+        {
+            "if": {"properties": {"action": {"const": "select"}}},
+            "then": {"required": ["action", "role", "name", "value"]},
+        },
+    ],
 }
-"""Hand-authored (Q-113(b)): a top-level ``action`` enum plus the per-action ``url`` field
-(required only when ``action == "navigate"``), ``additionalProperties: false`` so
-``dispatch_one``'s framework-side jsonschema validation rejects anything else."""
+"""Hand-authored (Q-113(b)/(e)): a top-level ``action`` enum plus per-action fields — ``url`` for
+``navigate``; ``role``/``name`` (the a11y locator) for ``click``; ``role``/``name``/``value`` for
+``type``/``select``; ``screenshot`` needs nothing beyond ``action``. ``additionalProperties:
+false`` so ``dispatch_one``'s framework-side jsonschema validation rejects anything else."""
 
 
 class BrowserSession:
@@ -111,6 +155,27 @@ async def _capture_snapshot(page: Page) -> Any:
     return parsed if parsed is not None else []
 
 
+async def _act_role(
+    page: Page, role: str, name: str, act: Callable[[Locator], Awaitable[Any]]
+) -> dict[str, Any]:
+    """Resolve ``role``/``name`` via ``page.get_by_role`` (Q-113(e): the ONLY locator strategy —
+    never CSS/XPath) and run ``act`` against it. On success, returns
+    ``{"ok": True, "snapshot": <post-action a11y snapshot>}``. If the locator does not resolve
+    within ``ELEMENT_TIMEOUT_MS``, Playwright's ``TimeoutError`` is caught here and converted to
+    a structured ``{"ok": False, "error": "element_not_found", "role": ..., "name": ...}`` —
+    ``dispatch_one`` propagates ``invoke`` exceptions raw, so this has to be a return value."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError  # lazy: see module
+
+    # get_by_role's stub narrows role to a Literal[AriaRole] union; wombat accepts any string
+    # role from the caller-supplied args (schema-validated as a plain string, not that enum).
+    locator = page.get_by_role(role, name=name)  # type: ignore[arg-type]
+    try:
+        await act(locator)
+    except PlaywrightTimeoutError:
+        return {"ok": False, "error": "element_not_found", "role": role, "name": name}
+    return {"ok": True, "snapshot": await _capture_snapshot(page)}
+
+
 class PlaywrightCapability:
     """The ``browser`` external-tier ``Capability`` (Q-113(b)/(c)) — see the module docstring
     for the taint mechanic that shapes ``invoke``'s ``navigate`` branch."""
@@ -131,11 +196,36 @@ class PlaywrightCapability:
             return {"url": url, "snapshot": await _capture_snapshot(page)}
         if action == "snapshot":
             return {"snapshot": await _capture_snapshot(page)}
+        if action == "click":
+            role, name = args["role"], args["name"]
+            return await _act_role(
+                page, role, name, lambda loc: loc.click(timeout=ELEMENT_TIMEOUT_MS)
+            )
+        if action == "type":
+            role, name, value = args["role"], args["name"], args["value"]
+            return await _act_role(
+                page, role, name, lambda loc: loc.fill(value, timeout=ELEMENT_TIMEOUT_MS)
+            )
+        if action == "select":
+            role, name, value = args["role"], args["name"], args["value"]
+            return await _act_role(
+                page,
+                role,
+                name,
+                lambda loc: loc.select_option(value, timeout=ELEMENT_TIMEOUT_MS),
+            )
+        if action == "screenshot":
+            logger.warning(
+                "screenshot-fallback used (CST-5: a11y tree is the workhorse, pixels are the "
+                "labelled fallback) — role/name locators were not sufficient for this step"
+            )
+            return await page.screenshot(type="png")
         raise ValueError(f"unknown action {action!r}")  # unreachable past schema validation
 
 
 __all__ = [
     "BROWSER_INPUT_SCHEMA",
+    "ELEMENT_TIMEOUT_MS",
     "BrowserSession",
     "PlaywrightCapability",
 ]
