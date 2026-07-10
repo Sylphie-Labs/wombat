@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import NoReturn
 from zoneinfo import ZoneInfo
 
@@ -340,6 +341,54 @@ def test_blank_deepseek_api_key_raises_configuration_error_at_construction() -> 
 def test_whitespace_only_deepseek_api_key_raises_configuration_error_at_construction() -> None:
     with pytest.raises(ConfigurationError):
         BriefComposeStage(config=_config(api_key="   "), tz=_TZ)
+
+
+# --- TK-194: assistant name threads into the system instruction only -----------------------------
+
+
+async def test_tk194_default_assistant_name_renders_in_system_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    model = FakeModel(
+        response=ModelResponse(
+            text="Here's your brief.", model_id="deepseek-chat", finish_reason="stop"
+        )
+    )
+    sealed = _sealed_artifact()
+    ctx = _ctx(model, sealed)
+    stage = BriefComposeStage(config=_config(), tz=_TZ)
+
+    await stage.run(ctx)
+
+    system_msg, _user_msg = model.calls[0]
+    assert system_msg.content.startswith("You are Steward, a quiet steward")
+
+
+async def test_tk194_configured_assistant_name_renders_in_system_instruction_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_assistant_name="Marvin",
+    )
+    model = FakeModel(
+        response=ModelResponse(
+            text="Here's your brief.", model_id="deepseek-chat", finish_reason="stop"
+        )
+    )
+    sealed = _sealed_artifact()
+    ctx = _ctx(model, sealed)
+    stage = BriefComposeStage(config=config, tz=_TZ)
+
+    await stage.run(ctx)
+
+    system_msg, user_msg = model.calls[0]
+    assert "Marvin" in system_msg.content
+    # Structural non-goal: the name is display/persona only -- name-free everywhere else.
+    assert "Marvin" not in user_msg.content
 
 
 # --- never touches ctx.journal --------------------------------------------------------------------

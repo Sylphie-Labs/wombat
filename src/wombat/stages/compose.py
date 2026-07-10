@@ -53,11 +53,15 @@ from wombat.stages.artifacts import (
 
 logger = logging.getLogger(__name__)
 
-# A fixed, terse steward instruction (AC1) — no prompt iteration (mvp, TK-8 non_goal).
-_SYSTEM_INSTRUCTION = (
-    "You are a quiet steward. Phrase this one item for the user in one terse, calm line. "
-    "No preamble."
-)
+# A fixed, terse steward instruction (AC1) — no prompt iteration (mvp, TK-8 non_goal). TK-194
+# (Q-105e) slots config.wombat_assistant_name into the name position ONLY; the remainder of the
+# text is byte-identical to the pre-TK-194 fixed string. Display/persona only — never parsed,
+# never in the gate, never an event field.
+def _system_instruction(name: str = "Steward") -> str:
+    return (
+        f"You are {name}, a quiet steward. Phrase this one item for the user in one terse, "
+        "calm line. No preamble."
+    )
 
 # AC-FIXED (Q-50) — not a TK-13 tunable.
 _DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -92,6 +96,8 @@ class ComposeStage:
         # and preserving TK-8's exact behavior for any caller that doesn't wire them.
         self._spend_ledger = spend_ledger
         self._daily_token_ceiling = daily_token_ceiling
+        # TK-194: built ONCE from config.wombat_assistant_name — display/persona only.
+        self._system_instruction = _system_instruction(config.wombat_assistant_name)
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("compose_dispatch")
@@ -101,7 +107,7 @@ class ComposeStage:
         item_id, item_kind, payload = compose_request_from_artifact_data(art.data)
 
         messages = [
-            ChatMessage(role="system", content=_SYSTEM_INSTRUCTION),
+            ChatMessage(role="system", content=self._system_instruction),
             ChatMessage(
                 role="user",
                 content=f"item_kind: {item_kind.value}\n{format_payload_fields(payload)}",

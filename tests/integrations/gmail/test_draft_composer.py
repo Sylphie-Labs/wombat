@@ -528,6 +528,49 @@ async def test_make_drafts_create_capability_posts_encoded_message_and_returns_d
     assert "body text" in decoded
 
 
+# ------------------------------------------------------------------------------------ TK-194
+
+
+async def test_tk194_default_assistant_name_renders_in_system_instruction() -> None:
+    registry = Registry()
+    events: list[str] = []
+    _register_draft_capability(registry, events)
+    writer = _RecordingWriter(events)
+    gate = ToolGate(registry, policy=EXTERNAL_DISPATCH_POLICY)
+    reply_intent = _reply_intent()
+    model = FakeModel(
+        response=ModelResponse(text="Thanks!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    ctx = _FakeDraftContext(gate, registry, reply_intent, model)
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
+
+    await stage.run(ctx)  # type: ignore[arg-type]
+
+    system_msg, _user_msg = model.calls[0]
+    assert system_msg.content.startswith("You are Steward, a quiet steward")
+
+
+async def test_tk194_configured_assistant_name_renders_in_system_instruction_only() -> None:
+    registry = Registry()
+    events: list[str] = []
+    _register_draft_capability(registry, events)
+    writer = _RecordingWriter(events)
+    gate = ToolGate(registry, policy=EXTERNAL_DISPATCH_POLICY)
+    reply_intent = _reply_intent()
+    model = FakeModel(
+        response=ModelResponse(text="Thanks!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    ctx = _FakeDraftContext(gate, registry, reply_intent, model)
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW, assistant_name="Marvin")
+
+    await stage.run(ctx)  # type: ignore[arg-type]
+
+    system_msg, user_msg = model.calls[0]
+    assert "Marvin" in system_msg.content
+    # Structural non-goal: the name is display/persona only -- name-free everywhere else.
+    assert "Marvin" not in user_msg.content
+
+
 # ---------------------------------------------------------------------- structural spot-checks
 
 

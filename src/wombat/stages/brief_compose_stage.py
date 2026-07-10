@@ -39,7 +39,7 @@ from cogworx.loop.result import StageResult, Transition
 from cogworx.loop.stage import StageContext
 from cogworx.model.base import ChatMessage
 
-from wombat.compose.brief_template import BRIEF_SYSTEM_INSTRUCTION, render_brief_lines
+from wombat.compose.brief_template import brief_system_instruction, render_brief_lines
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
 from wombat.domain.brief_decision_artifact import BriefDecisionArtifact
@@ -78,6 +78,8 @@ class BriefComposeStage:
         # Layer 2 (Q-68 precedent): both default to None, disabling the daily ceiling gate.
         self._spend_ledger = spend_ledger
         self._daily_token_ceiling = daily_token_ceiling
+        # TK-194: built ONCE from config.wombat_assistant_name — display/persona only.
+        self._system_instruction = brief_system_instruction(config.wombat_assistant_name)
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("brief_force_flush")
@@ -91,7 +93,7 @@ class BriefComposeStage:
         body = render_brief_lines(artifact, tz=self._tz)
 
         messages = [
-            ChatMessage(role="system", content=BRIEF_SYSTEM_INSTRUCTION),
+            ChatMessage(role="system", content=self._system_instruction),
             ChatMessage(role="user", content=body),
         ]
 

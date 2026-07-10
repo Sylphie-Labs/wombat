@@ -77,13 +77,16 @@ DRAFT_CREATE_CAPABILITY = "gmail.drafts.create"
 # AC-fixed (mirrors compose.py's Q-50 fixed default) — not a TK-13 tunable.
 _DEFAULT_TIMEOUT_SECONDS = 2.0
 
-# A fixed, terse steward instruction (mirrors compose.py's _SYSTEM_INSTRUCTION) — no prompt
+# A fixed, terse steward instruction (mirrors compose.py's _system_instruction) — no prompt
 # iteration (v1, no ticket asked for one). The prompt is built ONLY from ReplyIntent fields
-# (Q-91: no KB hints in v1).
-_SYSTEM_INSTRUCTION = (
-    "You are a quiet steward drafting a reply on the user's behalf. Phrase one terse, calm "
-    "reply body responding to the quoted excerpt. No preamble, no signature."
-)
+# (Q-91: no KB hints in v1). TK-194 (Q-105e) slots config.wombat_assistant_name into the name
+# position ONLY; the remainder of the text is byte-identical to the pre-TK-194 fixed string.
+# Display/persona only — never parsed, never in the gate, never an event field.
+def _system_instruction(name: str = "Steward") -> str:
+    return (
+        f"You are {name}, a quiet steward drafting a reply on the user's behalf. Phrase one "
+        "terse, calm reply body responding to the quoted excerpt. No preamble, no signature."
+    )
 
 _DRAFTS_CREATE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
 # A conservative fixed request timeout (mirrors poller.py's _REQUEST_TIMEOUT_S) — not a TK-13
@@ -172,11 +175,14 @@ class DraftComposer:
         clock: Callable[[], datetime],
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         upstream_stage_name: str = "compose_dispatch",
+        assistant_name: str = "Steward",
     ) -> None:
         self._writer = writer
         self._clock = clock
         self._timeout_seconds = timeout_seconds
         self._upstream_stage_name = upstream_stage_name
+        # TK-194: built ONCE at construction — display/persona only.
+        self._system_instruction = _system_instruction(assistant_name)
         # The ONE sanctioned admission call site (TK-151/DEC-22) — mirrors dispatch_approved.py's
         # pattern; scoped to this stage instance only, the engine rebinds the gate fresh before
         # every stage, so this never leaks.
@@ -191,7 +197,7 @@ class DraftComposer:
         reply_intent = ReplyIntent.from_payload(payload)
 
         messages = [
-            ChatMessage(role="system", content=_SYSTEM_INSTRUCTION),
+            ChatMessage(role="system", content=self._system_instruction),
             ChatMessage(
                 role="user",
                 content=(

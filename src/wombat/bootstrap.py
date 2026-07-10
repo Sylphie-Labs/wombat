@@ -458,14 +458,17 @@ def build_draft_composer_stage(
     *,
     writer: DraftTrailWriter,
     clock: Callable[[], datetime] = _utc_now,
+    assistant_name: str = "Steward",
 ) -> DraftComposer:
     """Assemble TK-78's ``DraftComposer`` via a small bootstrap factory (TK-177, the Q-69
     assemble-via-factory lesson) — a thin, directly-testable wrapper mirroring
     ``build_compose_stage``/``build_brief_compose_stage`` above, rather than ``assemble_runtime``
     constructing the stage inline. ``DraftComposer.__init__`` already self-binds the TK-151
-    external tier policy (``bind_external_tier``) — nothing further to wire here.
+    external tier policy (``bind_external_tier``) — nothing further to wire here. ``assistant_name``
+    (TK-194) threads ``config.wombat_assistant_name`` into the system instruction only; the default
+    preserves every existing caller's behavior unchanged.
     """
-    return DraftComposer(writer=writer, clock=clock)
+    return DraftComposer(writer=writer, clock=clock, assistant_name=assistant_name)
 
 
 def _guard_drain_batch_size(batch_size: int) -> None:
@@ -757,7 +760,9 @@ def assemble_runtime(
             # close it.
             action_trail_writer = ActionTrailWriter(dsn)
             draft_composer_stage = build_draft_composer_stage(
-                writer=action_trail_writer, clock=_utc_now
+                writer=action_trail_writer,
+                clock=_utc_now,
+                assistant_name=config.wombat_assistant_name,
             )
             composer_by_kind[ItemKind.DRAFT] = "draft_composer"
     else:

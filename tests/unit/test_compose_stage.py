@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -219,6 +220,48 @@ async def test_compose_stage_touches_no_ctx_member_beyond_model_last_output_and_
 def test_compose_stage_transitions_declares_speak_as_its_only_edge() -> None:
     stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
     assert stage.transitions == ("speak",)
+
+
+# --- TK-194: assistant name threads into the system instruction only -----------------------------
+
+
+async def test_tk194_default_assistant_name_renders_in_system_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    model = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    ctx = _ctx(model)
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+
+    await stage.run(ctx)
+
+    system_msg, _user_msg = model.calls[0]
+    assert system_msg.content.startswith("You are Steward, a quiet steward")
+
+
+async def test_tk194_configured_assistant_name_renders_in_system_instruction_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_assistant_name="Marvin",
+    )
+    model = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    ctx = _ctx(model)
+    stage = ComposeStage(config=config, template_composer=TemplateComposer())
+
+    await stage.run(ctx)
+
+    system_msg, user_msg = model.calls[0]
+    assert "Marvin" in system_msg.content
+    # Structural non-goal: the name is display/persona only -- name-free everywhere else.
+    assert "Marvin" not in user_msg.content
 
 
 # --- wire round-trips: json.dumps + inverse must be lossless (Q-49 regressions) -------------------
