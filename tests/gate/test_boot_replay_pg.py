@@ -125,6 +125,7 @@ def _spy_on_gate_pending_set(monkeypatch: pytest.MonkeyPatch) -> list[PendingSet
         decay_ttl_seconds: float,
         day_rollover: DayRolloverProtocol,
         clock: Callable[[], float],
+        threshold_fn: Callable[[], float] | None = None,
     ) -> Gate:
         captured.append(pending_set)
         return real_gate(
@@ -137,6 +138,7 @@ def _spy_on_gate_pending_set(monkeypatch: pytest.MonkeyPatch) -> list[PendingSet
             decay_ttl_seconds=decay_ttl_seconds,
             day_rollover=day_rollover,
             clock=clock,
+            threshold_fn=threshold_fn,
         )
 
     monkeypatch.setattr(bootstrap, "Gate", _spy_gate)

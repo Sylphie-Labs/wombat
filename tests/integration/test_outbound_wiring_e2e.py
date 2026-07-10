@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -77,9 +78,21 @@ if not _DSN:
 _FIXED_NOW = datetime(2026, 7, 9, 9, 0, tzinfo=UTC)
 
 # The pre-TK-177 baseline drain-graph stage set (byte-identical AC3 check), ADDITIVELY updated
-# for TK-164 (Q-96): compose now transitions onward to the new "speak" terminal.
+# for TK-164 (Q-96): compose now transitions onward to the new "speak" terminal. Further
+# ADDITIVELY updated (TK-229 un-staling) for the chat_reply and reflection_compose stages now
+# built unconditionally into the drain graph regardless of google wiring (see bootstrap.py's
+# two build_drain_pathway(...) branches, both of which include them).
 _BASELINE_DRAIN_STAGES = frozenset(
-    {"drain_queue", "gate", "review_or_speak", "compose_dispatch", "compose", "speak"}
+    {
+        "drain_queue",
+        "gate",
+        "review_or_speak",
+        "compose_dispatch",
+        "compose",
+        "chat_reply",
+        "speak",
+        "reflection_compose",
+    }
 )
 
 
@@ -104,6 +117,17 @@ def clean_tables() -> None:
             cur.execute("TRUNCATE TABLE pending_journal")
             cur.execute("TRUNCATE TABLE action_trail_projection")
         conn.commit()
+
+
+@pytest.fixture()
+def _no_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """TK-202 (Q-103)/TK-229: chdir off the repo root so pydantic-settings' ``env_file=".env"``
+    resolution (relative to CWD) can never pick up the populated operator .env underneath a
+    google-less ``_config()`` — mirrors ``tests/unit/test_runtime.py``'s own fixture of the same
+    name. Opt-in only (not autouse) — requested by name from the ONE test that needs a
+    structurally google-less, brief-less config regardless of whatever the operator's real .env
+    stages (GOOGLE_OAUTH_*, WOMBAT_BRIEF_PATH, etc)."""
+    monkeypatch.chdir(tmp_path)
 
 
 def _config(*, with_google: bool = False) -> WombatConfig:
@@ -550,7 +574,7 @@ async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup(
 
 
 async def test_ac3_google_less_boot_loud_skips_outbound_wiring(
-    clean_tables: None, caplog: pytest.LogCaptureFixture
+    clean_tables: None, _no_env_file: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     assert _DSN is not None
     op = load_operating_params()
