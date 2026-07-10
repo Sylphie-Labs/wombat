@@ -108,6 +108,7 @@ nodes:
   - { id: FEAT-11, kind: feature, parent: null, title: "Privacy, safety & action trail", intent: "Local data residency, no action without a reviewable trail, review-before-send for high-consequence outbound, no unattended sensitive auth — privacy as character.", status: todo, priority: P1 }
   - { id: FEAT-12, kind: feature, parent: null, title: "Voice & interaction (in v1, as a registered input source)", intent: "Voice is in v1 'out the box' — but built as one registered input source on the loop's input queue (not a special path), plus terse load-bearing spoken/text output on rare speak-events. Full capability without speech.", status: todo, priority: P2 }
   - { id: FEAT-13, kind: feature, parent: null, title: "Configuration surface & companion app (Electron + React)", intent: "The user-facing configuration surface - assistant name, voice provider choices, user-supplied API keys - as a local Electron + React app over a loopback Python settings API; intended to grow into wombat's front-end (future companion/avatar surface, DEC-31). Config only in v1 - zero analytics (DEC-29), no accounts/packaging (DEC-30).", status: todo, priority: P2 }
+  - { id: FEAT-14, kind: feature, parent: null, title: "Persona - tunable personality matrix (the identity kit completes)", intent: "A way to tune the personality so people can have fun with it - name + voice + services + personality = the user-facing identity kit (name TK-194, voice EP-31, services = the configured providers; this feature adds the personality). Five named-level axes (DEC-33) rendered by a PURE-FUNCTION prompt builder whose DEFAULT reproduces today's prompts byte-for-byte (TK-207), hot-applied via LivePersona (DEC-34), driveable by a closed voice-command grammar (DEC-35) and nightly feedback-token learning (DEC-36/DEF-8). The persona shapes only HOW gate-cleared output reads - never whether/when anything surfaces (CON-2/CON-3).", status: todo, priority: P2 }
   - { id: EP-1, kind: epic, parent: FEAT-1, title: "Engine assembly & wombat bootstrap", intent: "Construct the cog-worx Engine with wombat's ModelRegistry/BudgetPolicy/Registry/RecallStack/personality/rules; one composition root.", status: todo, priority: P1 }
   - { id: EP-2, kind: epic, parent: FEAT-1, title: "Durable work queue (WombatQueue)", intent: "Bounded, persisted enqueue/drain with idempotent items; queue is wombat domain state, journal stays run authority.", status: todo, priority: P1 }
   - { id: EP-3, kind: epic, parent: FEAT-1, title: "Source registry & registration contract", intent: "Pluggable input-source contract (id/poll/push/map) + lifecycle; adding a source is registration, not a rewrite (DEC-5).", status: todo, priority: P1 }
@@ -140,6 +141,9 @@ nodes:
   - { id: EP-30, kind: epic, parent: FEAT-12, title: "Terse spoken/text output sink", intent: "Speak only on rare speak-events the gate decided; full capability without speech (CON-3).", status: todo, priority: P2 }
   - { id: EP-31, kind: epic, parent: FEAT-12, title: "Pluggable voice provider slots (STT/TTS)", intent: "Cloud STT/TTS providers (ElevenLabs, Deepgram, Fish Audio) behind the EXISTING Transcriber/TTSAdapter seams; local-free defaults stand; egress is structural per-provider user opt-in with strictly cloud-to-local degrade (DEC-28, Q-100).", status: todo, priority: P2 }
   - { id: EP-32, kind: epic, parent: FEAT-13, title: "Local settings app (Electron shell)", intent: "Electron + React settings app over the loopback Python settings API - v1 is the configuration surface ONLY (DEC-29/DEC-30); the shell is deliberately sized for the app's stated trajectory as wombat's front-end (future 3D assistant avatar - flagged future feature, NOT a v1 ticket) (DEC-31/DEC-32).", status: todo, priority: P2 }
+  - { id: EP-33, kind: epic, parent: FEAT-14, title: "Persona core - matrix type, pure prompt builder, config, hot-apply, output-effect eval", intent: "PersonaMatrix (5 named-level axes, DEC-33) + the pure clause-algebra builder instruction_for(mouth, matrix) whose DEFAULT reproduces today's prompts BYTE-FOR-BYTE, the config/persistence surface riding the existing config tiers, the LivePersona hot-apply seam (DEC-34), and the env-gated live-eval harness proving each axis has a MEASURABLE output effect - no placebo axes (the epic does not close while an axis ships unmeasured and unflagged).", status: todo, priority: P2 }
+  - { id: EP-34, kind: epic, parent: FEAT-14, title: "Voice persona commands - closed grammar, pre-queue interception", intent: "Spoken persona tuning ('be more brief') via a deterministic CLOSED grammar intercepted at ASRSource BEFORE the queue - matched utterances never enter the queue/gate/mouth; unmatched speech flows unchanged (DEC-35, CON-1/CON-2).", status: todo, priority: P2 }
+  - { id: EP-35, kind: epic, parent: FEAT-14, title: "Persona learning - feedback tokens into dream_persona (bounded)", intent: "Explicit deterministic feedback tokens aggregated nightly by a dream_persona stage under RatingTuner-pattern custody (bounded, clamped, journaled - DEC-36); automatic tone-adaptation from implicit behavior is DEFERRED (DEF-8). Sequenced LAST: EP-33 (TK-196 pulled forward as the persistence prerequisite) -> EP-34 -> the EP-32 remainder -> EP-35.", status: todo, priority: P3 }
   - id: TK-1
     kind: ticket
     parent: EP-1
@@ -4315,8 +4319,8 @@ nodes:
   - id: TK-200
     kind: ticket
     parent: EP-32
-    title: "Settings UI forms - name, provider selects, write-only masked key fields with configured-indicators, voice id, save + restart-to-apply notice; zero analytics"
-    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save."
+    title: "Settings UI forms - name, provider selects, persona axis selects (FEAT-14 amendment), write-only masked key fields with configured-indicators, voice id, save + restart-to-apply notice; zero analytics"
+    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save. FEAT-14 AMENDMENT (v1.81): five persona axis selects (the DEC-33 named levels) join the form, saved to the persona fields like any non-secret; the restart notice still shows for persona edits from the app (the DEC-34 hot-apply carve-out is in-process actuation only)."
     status: todo
     priority: P2
     estimate: M
@@ -4332,11 +4336,15 @@ nodes:
       - given: "the whole rendered app"
         when: "reviewed against DEC-29"
         then: "NO analytics, metrics, event-log, gate-history, or behavior view exists - configuration read/write only."
+      - given: "the five persona axis selects (FEAT-14 amendment, v1.81)"
+        when: "levels are changed and saved"
+        then: "the persona fields are PUT as DEC-33 level names and land in wombat.settings.json; the restart-to-apply notice shows (the app is cross-process - the DEC-34 hot-apply carve-out covers in-process actuation only)."
     non_goals:
       - "No provider voice-catalog browsing/preview (flagged creep, excluded)."
       - "No status/monitoring pane (DEC-29 - requires a new decision)."
     depends_on:
       - TK-199
+      - TK-208
     files_in_scope:
       - app/src/App.tsx
       - app/src/api.ts
@@ -4367,6 +4375,283 @@ nodes:
       - app/e2e/settings.spec.ts
       - app/package.json
       - README.md
+  - id: TK-206
+    kind: ticket
+    parent: EP-33
+    title: "PersonaMatrix domain type - 5 axes as named enum levels, DEFAULT_MATRIX constant, parse/serialize, constitution-excluded axes NAMED in the module doc"
+    intent: "As the persona foundation (DEC-33), src/wombat/persona/matrix.py holds five closed axis enums - Brevity terse|balanced|expansive, Warmth reserved|neutral|warm, Directness gentle|plain|blunt, Humor none|dry|playful, Proactivity minimal|balanced|forward - a frozen PersonaMatrix dataclass over them, DEFAULT_MATRIX = (terse, reserved, plain, none, minimal) = today's steward, and parse/serialize helpers (round-trip via plain strings for config/settings.json). The module docstring NAMES the constitution-excluded axes verbatim per DEC-33 so the exclusion is code-adjacent, not lore."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One small pure module, zero IO, zero new deps. Enums + frozen dataclass + from_strings/to_strings with loud ValueError naming axis and value on anything outside the closed vocabulary. No prompt text here (TK-207), no config fields (TK-208)."
+    acceptance_criteria:
+      - given: "the five axis enums"
+        when: "inspected by test"
+        then: "each axis has EXACTLY the DEC-33 named levels, PersonaMatrix is frozen/hashable, and DEFAULT_MATRIX is (terse, reserved, plain, none, minimal)."
+      - given: "any PersonaMatrix"
+        when: "serialized to strings and parsed back"
+        then: "the round-trip is identity; an unknown axis value parses to a loud ValueError naming the axis and the offending value."
+      - given: "the module docstring"
+        when: "read"
+        then: "the DEC-33 excluded axes (interruption-eagerness, empathy-as-motive-inference, persuasion/sycophancy, action-initiative) are named as excluded with their constitution reasons."
+    non_goals:
+      - "No prompt rendering (TK-207)."
+      - "No config/persistence (TK-208)."
+      - "No gate/surfacing influence of any kind (CON-2/CON-3)."
+    depends_on: []
+    files_in_scope:
+      - src/wombat/persona/__init__.py
+      - src/wombat/persona/matrix.py
+      - tests/persona/__init__.py
+      - tests/persona/test_matrix.py
+  - id: TK-207
+    kind: ticket
+    parent: EP-33
+    title: "Pure-function persona builder - instruction_for(mouth, matrix, name) as composable clause algebra; DEFAULT reproduces today's prompts BYTE-FOR-BYTE; immutable guard suffix"
+    intent: "Jim's frame, recorded verbatim-in-spirit: the persona builder is a PURE FUNCTION ('math algo') - matrix values in, prompt text out. src/wombat/persona/builder.py composes instruction_for(mouth, matrix, assistant_name) = base_role + length_clause + register_clause + hedging_clause + humor_clause + immutable guard_suffix, where mouth is a closed enum over the three TK-194 name-threaded mouths (compose, brief, draft). Today's per-mouth instruction text is SPLIT at a recorded seam into base_role + guard_suffix; every DEFAULT-level clause renders EMPTY, so instruction_for(mouth, DEFAULT_MATRIX, name) equals today's TK-194 builder output BYTE-FOR-BYTE (pinned test importing the live constants, no fixture copies). The guard_suffix (the steward non-negotiables already in today's text - no deciding to interrupt, no motive language, terse-degrade discipline) is IMMUTABLE: present in the output for EVERY matrix value; no level can render it away."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "One pure module - no IO, no config reads, no model calls; clause text as module-level tables. Property tests over the FULL matrix space (3^5 = 243 combinations per mouth - exhaustive, not sampled): guard containment, determinism, byte-identity at DEFAULT. Prompt-DELTA verification only; output-EFFECT verification is TK-210's job."
+    acceptance_criteria:
+      - given: "each of the three mouths and the live TK-194 builders"
+        when: "instruction_for(mouth, DEFAULT_MATRIX, name) is compared against today's instruction text for the same name"
+        then: "the outputs are BYTE-IDENTICAL for all three mouths (test imports the live constants; no fixture copies)."
+      - given: "all 243 matrix combinations for each mouth"
+        when: "rendered"
+        then: "every output contains the immutable guard_suffix verbatim, rendering is deterministic (same input -> same bytes), and each non-default level changes the output relative to DEFAULT (no silent no-op level at the prompt layer)."
+      - given: "the builder module"
+        when: "inspected"
+        then: "it is pure - zero IO, zero config/env reads, zero model calls; clause text lives in module-level tables."
+    non_goals:
+      - "No call-site rewiring (TK-209 owns the LivePersona reroute)."
+      - "No reflection-mouth persona (ReflectionComposeStage keeps its fixed clinical-guard prompt; out of persona scope in v1)."
+      - "No output-effect measurement (TK-210)."
+    depends_on:
+      - TK-206
+      - TK-194
+    files_in_scope:
+      - src/wombat/persona/builder.py
+      - tests/persona/test_builder.py
+  - id: TK-208
+    kind: ticket
+    parent: EP-33
+    title: "Persona config surface - 5 optional named-level fields in WombatConfig (env / .env / settings.json tiers), defaults = DEFAULT_MATRIX; matrix_from_config"
+    intent: "As the persistence tier for the matrix, WombatConfig gains five OPTIONAL fields (wombat_persona_brevity/_warmth/_directness/_humor/_proactivity, Literal over the DEC-33 level names, defaults = the DEFAULT_MATRIX levels - the TK-187 closed-vocabulary-at-field-level precedent, deliberately NOT in REQUIRED_ENV), plus a pure matrix_from_config(config) -> PersonaMatrix. Because the fields live in WombatConfig they ride the established precedence (env over .env over settings.json over defaults) once TK-196 lands - no separate persona store."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "Config fields + one pure mapper + .env.example comment lines + tests; the TK-187 shape verbatim. No hot-apply (TK-209), no UI (TK-200 amendment), no settings-API change (the API already serves WombatConfig-backed fields)."
+    acceptance_criteria:
+      - given: "no persona env vars set"
+        when: "load_config() runs"
+        then: "matrix_from_config(config) == DEFAULT_MATRIX - the zero-config personality is today's steward."
+      - given: "WOMBAT_PERSONA_HUMOR=dry and WOMBAT_PERSONA_BREVITY=expansive"
+        when: "load_config() runs"
+        then: "the matrix carries those levels and the other three axes stay at their DEFAULT levels."
+      - given: "WOMBAT_PERSONA_WARMTH=nonsense"
+        when: "load_config() runs"
+        then: "it fails loud naming WOMBAT_PERSONA_WARMTH (closed vocabulary enforced at boot)."
+    non_goals:
+      - "No LivePersona/hot-apply (TK-209)."
+      - "No settings-app UI (the TK-200 amendment)."
+    depends_on:
+      - TK-206
+    files_in_scope:
+      - src/wombat/config.py
+      - src/wombat/persona/matrix.py
+      - .env.example
+      - tests/unit/test_config.py
+      - tests/persona/test_matrix.py
+  - id: TK-209
+    kind: ticket
+    parent: EP-33
+    title: "LivePersona hot-apply seam - one runtime matrix authority; mouth stages read instruction_for at RENDER time; set() applies next turn + persists to the settings.json tier"
+    intent: "Per DEC-34 (Jim authority), src/wombat/persona/live.py holds LivePersona - the ONE composition-root-owned runtime authority for the current PersonaMatrix: instruction(mouth) delegates to the pure builder over the CURRENT matrix; set(matrix) swaps it atomically (single-process asyncio - a plain attribute swap) and persists the five persona fields to the app-editable settings.json tier so the change survives restart (never .env, never secrets). The three mouth call sites (ComposeStage, BriefComposeStage, DraftComposer via its bootstrap builder) stop freezing instruction text at construction and read LivePersona per turn - a matrix change applies on the NEXT rendered turn, no restart. assemble_runtime constructs LivePersona from matrix_from_config and exposes it on the runtime bundle (the TK-212 and TK-214 write seam)."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "One small holder class + three call-site reroutes + bootstrap threading; persistence = read-modify-write of the gitignored wombat.settings.json persona keys ONLY. Voice-off and default-config boots construct it identically (it is not a voice feature)."
+    acceptance_criteria:
+      - given: "a runtime assembled with default config"
+        when: "each mouth renders a turn"
+        then: "the instruction text equals today's prompts byte-for-byte (the TK-207 identity holds THROUGH the reroute - pinned against the live stages)."
+      - given: "live_persona.set(matrix with humor=dry) between two turns"
+        when: "the next turn renders"
+        then: "the new instruction is used WITHOUT restart, and wombat.settings.json now carries the five persona keys."
+      - given: "a settings.json write failure"
+        when: "set() runs"
+        then: "the in-memory matrix still applies, exactly one loud WARNING names the persistence failure, and nothing raises into the drain loop (CON-3 discipline)."
+    non_goals:
+      - "No gate/queue influence - persona changes NEVER touch ratings, thresholds, or surfacing (CON-2/CON-3)."
+      - "No voice commands (EP-34), no learning (EP-35)."
+      - "No hot-reload of any non-persona config field (restart-to-apply stands there per DEC-34's carve-out)."
+    depends_on:
+      - TK-207
+      - TK-208
+      - TK-196
+    files_in_scope:
+      - src/wombat/persona/live.py
+      - src/wombat/stages/compose.py
+      - src/wombat/stages/brief_compose_stage.py
+      - src/wombat/integrations/gmail/draft_composer.py
+      - src/wombat/bootstrap.py
+      - tests/persona/test_live.py
+      - tests/unit/test_compose_stage.py
+      - tests/stages/test_brief_compose_stage.py
+      - tests/integrations/gmail/test_draft_composer.py
+  - id: TK-210
+    kind: ticket
+    parent: EP-33
+    title: "Output-EFFECT verification - env-gated live-eval harness sampling real mouth output per matrix level; measurable per-axis assertions; unmeasurable axes FLAGGED, never shipped as placebo"
+    intent: "Jim's frame, recorded verbatim-in-spirit: verify the personality by its OUTPUT EFFECTS, not just prompt deltas. An env-gated live-eval harness (the DEF-7 armed-and-loud-skipping pattern, keyed on the DeepSeek mouth credentials; ride cog-worx's eval/_live machinery where it fits) samples REAL mouth output per matrix level over a fixed payload set and asserts MEASURABLE properties - brevity: output length/line-count MONOTONE terse < balanced < expansive; warmth: greeting presence on the brief at warm vs absence at reserved; directness: hedge-lexicon presence at gentle vs absence at plain/blunt; humor: aside presence ONLY when the level permits AND the item is non-urgent; ALL levels: the existing forbidden-term classifiers still pass. Any axis whose effect cannot be measured honestly is FLAGGED in governance (an issue naming the axis), not shipped as placebo."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "One eval module + fixed payload fixtures; N samples per level with a simple recorded threshold/majority verdict rule to absorb sampling noise. Skips loud without the key; never runs in the default CI lane. This is the epic's DONE bar - EP-33 does not close while an axis ships unmeasured and unflagged."
+    acceptance_criteria:
+      - given: "the harness with no mouth credentials"
+        when: "the eval suite runs"
+        then: "every eval loud-skips naming the missing key (DEF-7 pattern); nothing silently passes."
+      - given: "credentials present and the fixed payload set"
+        when: "the harness samples each axis at each level"
+        then: "the per-axis measurable assertions hold under the recorded verdict rule (brevity monotonicity, warmth greeting presence/absence, directness hedge-lexicon presence/absence, humor aside only when permitted and non-urgent), and the forbidden-term classifiers pass at EVERY level."
+      - given: "an axis that fails its measurability bar"
+        when: "the run is closed out"
+        then: "a governance issue is raised NAMING the axis as unmeasured (the no-placebo rule) - the axis does not ship silently."
+    non_goals:
+      - "No prompt-delta-only verification (that is TK-207's layer)."
+      - "No automatic tuning from eval results (EP-35/DEF-8)."
+    depends_on:
+      - TK-209
+    files_in_scope:
+      - tests/persona/test_output_effects_live.py
+      - tests/persona/eval_fixtures.py
+  - id: TK-211
+    kind: ticket
+    parent: EP-34
+    title: "Closed persona voice-command grammar - deterministic parse of a versioned fixed utterance set into clamped matrix deltas; no LLM, no fuzz"
+    intent: "Per DEC-35, src/wombat/persona/commands.py holds the CLOSED grammar - a versioned fixed set of utterance templates ('be more brief', 'be warmer', 'no jokes', 'reset persona', per-axis/level variants) and a pure parse_persona_command(transcript) -> PersonaCommand | None using deterministic normalized string matching (lowercase/strip/punctuation-fold). A PersonaCommand is a per-axis step (up/down/set-level) or reset; applying one to a matrix is a pure clamped function (stepping past an end level saturates - never wraps, never errors)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "Pure module - a template table + normalizer + matcher + apply(); zero IO, zero model calls (CON-1/CON-2). The grammar is CLOSED: anything outside the table returns None; no fuzzy/semantic matching of any kind."
+    acceptance_criteria:
+      - given: "every utterance in the grammar table (plus casing/punctuation variants)"
+        when: "parsed"
+        then: "each yields its documented PersonaCommand, and apply() moves exactly one axis by one step (or resets), clamped at the ends."
+      - given: "near-miss and ordinary speech ('be brief about the weather', 'brief me', arbitrary transcripts)"
+        when: "parsed"
+        then: "None - the grammar is closed; a property test over random strings never yields a command."
+      - given: "the module"
+        when: "inspected"
+        then: "zero model calls and zero IO - the parse is deterministic string matching only."
+    non_goals:
+      - "No ASRSource wiring (TK-212)."
+      - "No LLM/embedding/fuzzy intent matching (DEC-35, CON-1)."
+    depends_on:
+      - TK-206
+    files_in_scope:
+      - src/wombat/persona/commands.py
+      - tests/persona/test_commands.py
+  - id: TK-212
+    kind: ticket
+    parent: EP-34
+    title: "Pre-queue interception at ASRSource - matched persona commands are consumed (applied via LivePersona + trailed), never enqueued; unmatched speech flows byte-unchanged"
+    intent: "Per DEC-35, the ASR source gains ONE interception point: after transcription and BEFORE enqueue mapping, parse_persona_command runs on the transcript; a match writes one human-readable action-trail line BEFORE applying (CON-4), applies the delta through LivePersona.set (hot-apply + persist, DEC-34), and the utterance is CONSUMED - it never enters the queue, is never gate-rated, and never reaches the mouth. A parse of None leaves the existing path byte-unchanged. Failures in apply/persist degrade loud and never break transcription (CON-3)."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One seam in sources/asr.py (or its mapper) + bootstrap threading of LivePersona into ASR construction; the interception is a handful of lines over TK-211's pure parse. No new pathway, no new stage - this is a source-boundary concern."
+    acceptance_criteria:
+      - given: "a transcript matching the grammar"
+        when: "the ASR source processes it"
+        then: "LivePersona carries the stepped matrix, a trail line was written before the apply, and NOTHING was enqueued for that utterance."
+      - given: "a non-command transcript"
+        when: "processed"
+        then: "it is enqueued exactly as today - payload byte-identical to the pre-ticket behavior."
+      - given: "LivePersona.set raising"
+        when: "a command is intercepted"
+        then: "one loud WARNING, the utterance is still consumed (not enqueued as garbage), and the source keeps transcribing."
+    non_goals:
+      - "No spoken confirmation reply (surfacing anything is the gate's monopoly - CON-2/CON-3; silence is the acknowledgment)."
+      - "No grammar changes (TK-211 owns the table)."
+    depends_on:
+      - TK-211
+      - TK-209
+    files_in_scope:
+      - src/wombat/sources/asr.py
+      - src/wombat/sources/bootstrap.py
+      - src/wombat/bootstrap.py
+      - tests/sources/test_asr_source.py
+  - id: TK-213
+    kind: ticket
+    parent: EP-35
+    title: "Feedback tokens - closed-lexicon deterministic detection of explicit persona feedback, recorded motive-free as durable persona_feedback events"
+    intent: "Per DEC-36, src/wombat/persona/feedback.py holds a CLOSED feedback lexicon ('too chatty', 'too long', 'too stiff', 'loved that', per-axis variants) - distinct from the imperative command grammar (TK-211 acts NOW; a token is EVIDENCE for the nightly pass) - and a pure detect_feedback_token(transcript) -> FeedbackToken | None. Detected tokens are recorded at the same ASRSource seam as durable events riding the existing behavior-event machinery (event_type persona_feedback - idempotent, timestamped, axis + direction + the matched phrase ONLY; no motive, no inference, CON-6); the utterance otherwise flows as normal speech."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Pure detector + one recording call at the existing interception seam + storage riding the existing behavior-event log (no new store). Detection is closed-lexicon string matching; zero model calls."
+    acceptance_criteria:
+      - given: "each lexicon phrase"
+        when: "detected"
+        then: "a persona_feedback event is recorded with axis, direction, matched phrase, and timestamp - and NOTHING else (the record admits no motive field)."
+      - given: "ordinary speech"
+        when: "processed"
+        then: "no event; the utterance flows exactly as before."
+      - given: "the event-log write failing"
+        when: "a token is detected"
+        then: "one loud WARNING and the pipeline continues (CON-3)."
+    non_goals:
+      - "No matrix change at detection time (aggregation is nightly - TK-214)."
+      - "No implicit/behavioral inference (DEF-8)."
+    depends_on:
+      - TK-206
+      - TK-212
+    files_in_scope:
+      - src/wombat/persona/feedback.py
+      - src/wombat/sources/asr.py
+      - tests/persona/test_feedback.py
+  - id: TK-214
+    kind: ticket
+    parent: EP-35
+    title: "dream_persona stage - nightly bounded aggregation of feedback tokens into at most one clamped matrix step per axis, RatingTuner-pattern custody, journaled"
+    intent: "Per DEC-36, a dream_persona stage joins the nightly dream pathway (sibling discipline: failures caught, LOUD, still transitions - never blocks the terminal): it reads the window's persona_feedback events and emits AT MOST ONE step per axis per night, only on a clear net signal meeting a recorded threshold, clamped to the level ends - the RatingTuner custody pattern (bounded, floored/ceilinged, deterministic, no LLM). An applied step goes through the same persistence as LivePersona.set and writes a human-readable journal line stating axis, direction, and the counts that drove it (CON-4) - inspectable drift, never silent."
+    status: todo
+    priority: P3
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "One pure tuner function (events -> per-axis step decisions; thresholds as recorded module constants) + one dream stage riding the existing pathway conventions + persistence reuse. No second custody mechanism - mirror the RatingTuner shape."
+    acceptance_criteria:
+      - given: "a night's events with a clear net signal on one axis"
+        when: "dream_persona runs"
+        then: "exactly one clamped step lands on that axis, persisted, with a journal line naming axis, direction, and counts."
+      - given: "mixed or below-threshold signals"
+        when: "dream_persona runs"
+        then: "NO change - the tuner is conservative by construction (property test over random event sets: never more than one step per axis per run)."
+      - given: "the stage failing for any reason"
+        when: "the dream run executes"
+        then: "the failure is caught and loud and the pathway still reaches its terminal (sibling parity)."
+    non_goals:
+      - "No implicit tone-adaptation (DEF-8 - explicit tokens only)."
+      - "No touching gate/rating params (persona custody and gate custody stay separate)."
+    depends_on:
+      - TK-213
+      - TK-209
+    files_in_scope:
+      - src/wombat/persona/tuner.py
+      - src/wombat/pathways/dream_pathway.py
+      - src/wombat/bootstrap.py
+      - tests/persona/test_tuner.py
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -5052,6 +5337,34 @@ governance:
       description: "Facts verified against the as-built tree at commit 955febc, 2026-07-09. (1) VoiceTransport.post (voice/transport.py:46-57) accepts ONLY content=/json= - ElevenLabs Scribe STT requires multipart/form-data, so TK-190 cannot ride the transport as-is. (2) WinsoundPlayer.play uses PlaySound+SND_MEMORY (playback.py:38-40), which requires a full RIFF/WAV image - ElevenLabs TTS offers only mp3_*/pcm_* output formats (no WAV container), so raw PCM needs a local RIFF wrap before playback. (3) The selection reroute points are sources/bootstrap._maybe_register_asr (bootstrap.py sources module, constructs FasterWhisperTranscriber(model_name=config.wombat_asr_model) with ImportError loud-skip) and bootstrap.py _construct_tts_adapter/build_speak_sink(L432-441)/make_speak_callable(L444-459) (Pyttsx3Adapter, any-failure degrade to None, gated on wombat_voice_enabled). (4) TK-188 seam = voice/key_store.py resolve_provider_key(provider, env_override, store) + KeyringVoiceKeyStore; config fields (config.py:80-90) = wombat_stt_provider/wombat_tts_provider (Literal local|deepgram|elevenlabs|fish), wombat_tts_voice_id, wombat_stt_model, three SecretStr keys, wombat_assistant_name='Steward'. (5) TK-194's three constants verified - stages/compose.py:57 _SYSTEM_INSTRUCTION ('You are a quiet steward. ...', consumed in ComposeStage.run, config already in __init__), compose/brief_template.py:47 BRIEF_SYSTEM_INSTRUCTION (imported by stages/brief_compose_stage.py:42+94; that stage takes config), integrations/gmail/draft_composer.py:83 _SYSTEM_INSTRUCTION (DraftComposer has NO config arg; constructed only via bootstrap.build_draft_composer_stage L474-485); the contract's listed test path tests/stages/test_compose.py does not exist (real: tests/unit/test_compose_stage.py); only tests/compose/test_brief_template.py pins instruction content. (6) openai (the DeepSeek mouth client) can itself import httpx, so a whole-process 'httpx never imported' assertion under default config is unsatisfiable as literally written in TK-195 AC1.",
       resolution: "RULED by architect 2026-07-09 (within authority - pipeline-level how inside DEC-28/DEC-32, Q-100/Q-104, CON-3, CST-1, NG-2; no locked DEC touched; orchestrator-authorized sequencing under Jim's delegation). BATCH (5, build order): TK-190 -> TK-192 -> TK-193 -> TK-194 -> TK-195 - closes EP-31. (a) TRANSPORT EXTENSION (TK-190, files_in_scope normalized += voice/transport.py): VoiceTransport.post and HttpxVoiceTransport.post gain OPTIONAL ADDITIVE params data: dict[str,str]|None and files: dict[str, tuple[str, bytes]]|None mapped straight to httpx data=/files= (multipart); existing content=/json= callers byte-untouched; same timeout/non-2xx-raise semantics. (b) STT WIRE PINS (best-effort per the Q-104(d) precedent - the load-bearing contract is Protocol conformance + raise-on-failure + lazy default transport; endpoint truth is owned by the DEF-7 live smokes): ElevenLabsScribeTranscriber POST https://api.elevenlabs.io/v1/speech-to-text, header xi-api-key, multipart files={'file': (path.name, audio_bytes)} + data={'model_id': model or 'scribe_v1'}, parse top-level 'text' (non-str/missing -> provider error). FishAudioTranscriber POST https://api.fish.audio/v1/asr, Authorization Bearer, Content-Type application/msgpack, body = a PRIVATE ~10-line hand-encoded msgpack fixmap {'audio': <bytes>} (fixmap-1 0x81 + fixstr 'audio' 0xa5 + bin32 0xc6 big-endian length + raw bytes; byte layout pinned by test) - the voice-cloud extra stays httpx-ONLY (Q-100), NO msgpack dependency; parse top-level 'text'. Each provider gets its own TranscriptionError class mirroring DeepgramTranscriptionError; VoiceTransportError propagates unchanged. (c) TTS WIRE PINS (TK-192): ElevenLabsTTSAdapter POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_16000, header xi-api-key, JSON {'text': text} (+'model_id' only when the optional constructor model is set); voice_id is a REQUIRED plain constructor arg (path segment); the response is HEADERLESS 16-bit mono 16 kHz PCM, wrapped locally into a RIFF/WAV image via a private stdlib-wave helper in voice/tts.py (io.BytesIO, zero new dependency, CST-1) then exactly ONE player.play. DeepgramAuraTTSAdapter POST https://api.deepgram.com/v1/speak?model=<voice_id or 'aura-asteria-en'>&encoding=linear16&sample_rate=24000&container=wav, Authorization Token, JSON {'text': text}; response is already a WAV container - played directly, NO wrap; voice_id optional, mapped to the model query param. Both: no try/except in the adapter (TK-191 parity, CON-3 - SpeakSink owns degrade); default transport/player lazily constructed at __init__ only when not injected. (d) SELECTION SHAPE (TK-193): NEW src/wombat/voice/select.py - build_transcriber(config, key_store=None) -> Transcriber|None and build_tts_adapter(config, key_store=None) -> TTSAdapter|None; key_store defaults to KeyringVoiceKeyStore(), keys ONLY via resolve_provider_key(provider, config.wombat_<provider>_api_key, store) (TK-188, DEC-32). LOCAL paths preserve today's semantics EXACTLY - STT local = FasterWhisperTranscriber(model_name=config.wombat_asr_model), ImportError -> loud skip -> None (ASR source not registered); TTS local = Pyttsx3Adapter(), any construction failure -> loud -> None (voice-off boot). CLOUD selected: missing/unresolvable key, missing wombat_tts_voice_id where required (fish/elevenlabs TTS), or ImportError constructing (voice-cloud extra absent) -> ONE loud log NAMING the gap, then the local path (Q-67 loud-skip; boot never fails, CON-3). A constructed cloud primary is wrapped in FallbackTranscriber/FallbackTTSAdapter(primary, fallback=<local instance or None if local unconstructible>): on ANY primary exception, WARN loud + try local exactly ONCE; fallback absent or also raising -> the exception propagates into the EXISTING degrade machinery (ASRSource failed/, SpeakSink Degraded(to=None)). Direction is STRICTLY cloud-to-local (DEC-28) - no code path ever places a cloud instance in a fallback slot (structural test). REROUTES: sources/bootstrap._maybe_register_asr keeps its drop-dir skip, then delegates transcriber construction to build_transcriber; bootstrap.build_speak_sink and make_speak_callable delegate to build_tts_adapter, still gated on wombat_voice_enabled (voice_enabled=False constructs NOTHING, cloud or local); cloud STT model = config.wombat_stt_model, TTS voice = config.wombat_tts_voice_id. (e) ASSISTANT NAME (TK-194): each of the three constants becomes a pure builder inserting the configured name as 'You are {name}, a quiet steward ...' with the REMAINDER of today's text byte-identical; module-level default renderings are KEPT (e.g. BRIEF_SYSTEM_INSTRUCTION = brief_system_instruction('Steward')) so existing imports/pins stay valid; ComposeStage and BriefComposeStage build their instruction in __init__ from config.wombat_assistant_name (both already take config); DraftComposer gains OPTIONAL assistant_name: str = 'Steward', threaded via a new optional param on bootstrap.build_draft_composer_stage from assemble_runtime. files_in_scope NORMALIZED - += stages/brief_compose_stage.py + bootstrap.py + tests/stages/test_brief_compose_stage.py + tests/integrations/gmail/test_draft_composer.py; phantom tests/stages/test_compose.py corrected to tests/unit/test_compose_stage.py. (f) EGRESS-PROOF SCOPING (TK-195 AC1): the 'httpx never imported' assertion is SCOPED to the voice surface - in a fresh subprocess (or clean sys.modules ledger) under default config, exercising build_source_registry + build_speak_sink/make_speak_callable/build_transcriber/build_tts_adapter, assert NO wombat.voice cloud class is constructed AND 'httpx' is absent from sys.modules afterward; the DeepSeek mouth (the ONE sanctioned default egress, DEC-28) sits OUTSIDE the assertion because its openai client may import httpx per-drive. Outage scenarios on both axes ride fake raising providers over the as-built degrade assertions (TK-163/TK-165 lesion pattern). DEFERRED from this batch - EP-32 (TK-196..TK-201, next arc after the EP-31 review pass), browser EP-25/EP-26 + TK-153 (P3), DEF-7 live smokes (operator-owned; Fish first when Jim's key lands).",
       links: ["TK-190","TK-192","TK-193","TK-194","TK-195","Q-100","Q-104","DEC-28","DEC-32","DEF-7","CON-3","CST-1","EP-31"] }
+  - { id: DEC-33, type: decision, status: accepted, scope: FEAT-14, date_raised: "2026-07-09", title: "The personality matrix is FIVE axes as named enum levels - brevity / warmth / directness / humor / proactivity; constitution-excluded axes are NAMED as excluded, not silently absent",
+      context: "Jim approved FEAT-14 - 'a way to tune the personality so people can have fun with it'; name + voice + services + personality = the user-facing identity kit. The shape question: free-text persona prompts vs a closed matrix. Free text would hand personality to prose (untestable, constitution-erodible); a closed matrix keeps persona deterministic and evaluable. (Recorded by the architect from the orchestrator's authoritative summary of the Jim-approved proposal; the approving session was lost to a power cut before recording.)",
+      decision: "PersonaMatrix = five axes, each a closed named-level enum: brevity (terse|balanced|expansive), warmth (reserved|neutral|warm), directness (gentle|plain|blunt), humor (none|dry|playful), proactivity (minimal|balanced|forward). DEFAULT_MATRIX = (terse, reserved, plain, none, minimal) - today's steward; every DEFAULT-level clause renders empty so the default prompt is byte-identical to today (TK-207). The proactivity axis modulates OPTIONAL content within already-gate-cleared output (prep notes, suggestions in the brief) - never gate thresholds, never surfacing. NAMED EXCLUSIONS (deliberately not axes; recorded so their absence is a decision, not an oversight): interruption-eagerness/chattiness-as-frequency (CON-2/CON-3 - the gate alone owns whether/when); empathy-as-motive-inference (CON-6 - never model why); persuasion/flattery/sycophancy (CON-1 - the mouth renders pre-decided output, it does not steer the user); action-initiative (CON-5 - persona never widens action authority past review-before-send).",
+      consequences: "(+) Personality is a typed, closed, testable surface - every level is enumerable and eval-able (TK-210). (+) The constitution boundary is written INTO the feature. (-) Less expressive than free-text personas - a sixth axis or a new level is a contract change by design.",
+      alternatives: ["User-supplied free-text persona prompt (rejected - untestable, guard-erodible, invites constitution violations by prose)", "Numeric 0-100 sliders (rejected - false precision; named levels are testable and speakable in the voice grammar)"],
+      links: ["FEAT-14","EP-33","TK-206","TK-207","TK-210","CON-1","CON-2","CON-3","CON-5","CON-6"] }
+  - { id: DEC-34, type: decision, status: accepted, scope: EP-33, date_raised: "2026-07-09", title: "Persona hot-applies via LivePersona (JIM AUTHORITY) - in-process matrix changes take effect next turn without restart; supersedes-in-part the DEC-32 restart-to-apply rule, which stands for everything else",
+      context: "The config-mechanism ruling pinned restart-to-apply for v1 config pickup. Jim ruled the persona is different in kind - tuning it is the FUN of the feature, and spoken tuning (EP-34) is meaningless behind a restart. (Recorded from the orchestrator's authoritative summary of the Jim-approved proposal.)",
+      decision: "JIM-DECIDED: a LivePersona holder (composition-root-owned, single-process) is the ONE runtime authority for the current matrix; mouth stages read instruction text through it at RENDER time, so set() applies on the next turn - no restart. set() also persists the five persona fields to the app-editable settings.json tier (never .env, never secrets). SUPERSEDES-IN-PART the DEC-32 restart-to-apply clause: the carve-out covers persona matrix fields actuated IN-PROCESS (voice commands TK-212, dream_persona TK-214); providers/keys/assistant-name and ALL cross-process edits - including persona edits made in the settings app, which cannot reach a running wombat - remain restart-to-apply (a settings.json file-watcher is a flagged follow-up, not v1). DEC-32 otherwise stands unchanged.",
+      consequences: "(+) Spoken persona tuning is immediate - the feature is alive. (+) One authority object; no second config-read path in stages. (-) Instruction text is no longer frozen at construction - the TK-207 byte-identity pin must hold THROUGH the reroute (TK-209 AC1). (-) Two apply latencies exist (in-process instant, app-edit on restart) and must be stated honestly in the UI notice.",
+      alternatives: ["Restart-to-apply for persona too (rejected by Jim - kills the feature's point)", "File-watch hot-reload of all of settings.json (rejected for v1 - machinery without a driving need beyond persona; flagged follow-up)"],
+      links: ["DEC-32","TK-209","TK-212","TK-214","TK-200","EP-34"] }
+  - { id: DEC-35, type: decision, status: accepted, scope: EP-34, date_raised: "2026-07-09", title: "Persona voice commands are a deterministic CLOSED grammar intercepted PRE-QUEUE at ASRSource - matched utterances are consumed; never enqueued, never gate-rated, never mouth-rendered",
+      context: "Spoken tuning needs a control channel. Routing commands through the queue would gate-rate user control utterances (wrong - they are not events competing for attention) and routing them through the mouth would put an LLM in a decision loop (CON-1/CON-2 violation). (Recorded from the orchestrator's authoritative summary of the Jim-approved proposal.)",
+      decision: "A versioned CLOSED utterance-template grammar (TK-211) parsed by deterministic normalized string matching - anything outside the table is None; no LLM, no embeddings, no fuzzy matching. Interception happens at the ASRSource boundary AFTER transcription and BEFORE enqueue (TK-212): a match writes an action-trail line BEFORE applying (CON-4), applies through LivePersona, and is CONSUMED; unmatched speech flows byte-unchanged. No spoken confirmation - surfacing is the gate's monopoly (CON-2/CON-3); silence is the acknowledgment.",
+      consequences: "(+) User control is instant, deterministic, and auditable. (+) The queue/gate stay pure event machinery. (-) The grammar must be discoverable (listing it in the settings UI is a follow-up, not v1). (-) A closed grammar will miss phrasings - by design; the miss path is ordinary speech, never a wrong guess.",
+      alternatives: ["LLM intent-parse of commands (rejected - an LLM deciding a control action violates CON-1/CON-2)", "Commands as queue items through the gate (rejected - control utterances are not attention-competing events; gating them adds latency and rating noise)"],
+      links: ["TK-211","TK-212","EP-34","CON-1","CON-2","CON-4"] }
+  - { id: DEC-36, type: decision, status: accepted, scope: EP-35, date_raised: "2026-07-09", title: "Persona learning v1 = explicit feedback tokens only, aggregated nightly by dream_persona under RatingTuner-pattern custody; automatic tone-adaptation is DEFERRED (DEF-8)",
+      context: "Should the persona adapt on its own? Implicit adaptation (inferring tone preferences from behavior) risks silent drift and motive-inference creep (CON-6); but explicit user feedback ('too chatty') is honest signal that should not be dropped on the floor. (Recorded from the orchestrator's authoritative summary of the Jim-approved proposal.)",
+      decision: "v1 learns ONLY from explicit deterministic feedback tokens (closed lexicon, TK-213 - distinct from the imperative command grammar: commands act now, tokens are evidence), recorded motive-free as durable persona_feedback events. Aggregation is NIGHTLY in a dream_persona stage (TK-214) under the RatingTuner custody pattern - deterministic, bounded (at most ONE clamped step per axis per night, only on a clear net signal meeting a recorded threshold), journaled human-readably (CON-4), never mid-conversation. Automatic tone-adaptation from implicit behavioral signals is DEFERRED as DEF-8, not rejected.",
+      consequences: "(+) The persona can drift only slowly, visibly, and reversibly - trust survives learning. (+) One custody pattern for all adaptation (gate ratings and persona alike). (-) Learning is slow by construction - a user who wants a big change uses commands or the settings UI, not feedback.",
+      alternatives: ["Immediate matrix change on a feedback token (rejected - tokens are noisy evidence; immediate action belongs to the explicit command grammar)", "Implicit behavioral adaptation now (rejected for v1 - silent drift + CON-6 risk; deferred to DEF-8 with a trigger)"],
+      links: ["TK-213","TK-214","DEF-8","EP-35","CON-4","CON-6"] }
+  - { id: DEF-8, type: deferral, status: deferred, scope: EP-35, date_raised: "2026-07-09", date_updated: "2026-07-09", title: "Defer automatic tone-adaptation - inferring persona preferences from implicit behavioral signals stays out of v1",
+      description: "The learning loop v1 admits only explicit closed-lexicon feedback tokens (DEC-36). Adapting the matrix from implicit signals (response latency, dismissals, engagement shape) is deferred - it risks silent drift and motive-adjacent inference (CON-6) and has no honest eval yet (the TK-210 harness measures output effects of levels, not preference inference).",
+      revisit_trigger: "EP-35 landed AND several weeks of persona_feedback data exist to design against - or Jim asks; any revisit must state its CON-6 boundary and bring its own output-effect eval before build.",
+      links: ["DEC-36","TK-213","TK-214","EP-35"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -5236,3 +5549,4 @@ changelog:
   - { date: "2026-07-09", version: "1.78", change: "TK-190 DONE (105/122) - ElevenLabs Scribe + Fish Audio STT providers riding the TK-189 pattern (EP-31, P2). ElevenLabsScribeTranscriber and FishAudioTranscriber land in src/wombat/voice/stt.py behind the existing sources.asr Transcriber Protocol, each a thin single-POST client over the TK-189 VoiceTransport seam - Scribe POSTs multipart (xi-api-key header, file + model_id form fields) per the Q-105(a) ruling, which shipped the ADDITIVE optional data=/files= multipart params on VoiceTransport.post + HttpxVoiceTransport.post mapped straight to httpx (existing content=/json= callers byte-untouched); Fish Audio POSTs a hand-rolled ~10-line msgpack encoding (fixmap-1 + fixstr audio + bin32 length-prefixed bytes - the Q-105(b)/Q-100 pin, voice-cloud extra stays httpx-ONLY, no msgpack dep) with Bearer auth + application/msgpack. Both parse top-level text, raise their own *TranscriptionError on a missing/malformed text field, and let VoiceTransportError propagate unchanged on non-2xx - degrade semantics identical to TK-189; DeepgramTranscriber production code untouched (docstring/comment only). Lazy-import contract holds - wombat.voice.stt imports clean without the voice-cloud extra, construction alone raises. Two-line ADDITIVE signature bumps to the fake transports in tests/voice/test_stt_deepgram.py + test_tts_fish.py so the fakes still satisfy the widened Protocol under mypy strict - justified, not creep. NO selection/key/config wiring (TK-193/TK-188 untouched), no TTS, no vendor SDK. BUILT + INDEPENDENTLY VERIFIED (PASS - verifier re-derived and executed the full bar independently; every AC check passed). Quality bar - uv run pytest -q 1051 passed / 61 documented WOMBAT_TEST_PG_DSN-gated skips / 0 failed; ruff clean; mypy strict Success 261 files src+tests (pyproject files=[src,tests] confirmed, so the typed transcriber conformance assertions are genuinely checked). Board 105/122. NEXT in the Q-105 batch - TK-192 (ElevenLabs + Deepgram Aura TTS).", by: "architect (closeout on independent verifier PASS)" }
   - { date: "2026-07-09", version: "1.79", change: "TK-192 DONE (106/122) - ElevenLabs + Deepgram Aura TTS providers riding the TK-191 pattern (EP-31, P2) - the launch TTS roster is COMPLETE and TK-193 selection wiring is now fully unblocked (both prerequisites TK-190/TK-192 done). ElevenLabsTTSAdapter and DeepgramAuraTTSAdapter land in src/wombat/voice/tts.py behind the existing sinks.tts_adapter TTSAdapter Protocol, each a thin single-POST client over the shared TK-189 VoiceTransport + TK-191 AudioPlayer seams, riding the FishAudioTTSAdapter pattern verbatim - plain api_key/voice_id/model constructor args (resolution/selection stay TK-188/TK-193), lazily-defaulted HttpxVoiceTransport/WinsoundPlayer so the module imports clean without the voice-cloud extra, ZERO try/except so any transport/player failure RAISES into SpeakSink as-built terminal Degraded path (degrade semantics identical to TK-191, CON-3). Wire pins per the Q-105(c) ruling, verified verbatim - ElevenLabs POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_16000 (xi-api-key header, {text} + model_id only when model set), returned headerless 16-bit mono 16kHz PCM wrapped by the new private _wrap_pcm16_mono_16k_as_wav helper (stdlib wave over io.BytesIO - CST-1, ZERO new dependency) before the ONE play; Deepgram Aura POST https://api.deepgram.com/v1/speak?model=<voice_id or aura-asteria-en>&encoding=linear16&sample_rate=24000&container=wav (Authorization Token header, {text}), response WAV played VERBATIM, no wrap. INDEPENDENTLY VERIFIED PASS - the verifier re-executed the full quality bar and every acceptance criterion, all green. SCOPE exactly the 2 files_in_scope (tts.py +116/-1, new tests/voice/test_tts_providers.py) - no contract/config/keyring/SpeakSink/selection touch, no new dependency. AC1 - 17/17 provider tests; the wrap helper independently proven on raw bytes (real RIFF/WAVE image, nchannels=1/sampwidth=2/framerate=16000, frames round-trip to the input PCM); exactly-one POST and exactly-one play asserted for BOTH providers; Aura played bytes equal the fake response verbatim. AC2 - transport-failure and player-failure both RAISE unchanged, parametrized over both adapters, proven against the real SpeakSink degrade path. Board 106/122. NEXT in the Q-105 batch - TK-193 (provider selection + cloud-to-local fallback).", by: "architect (closeout on independent verifier PASS)" }
   - { date: "2026-07-09", version: "1.80", change: "TK-193 DONE (107/122) - Provider selection + cloud-to-local fallback lands per the Q-105(d) ruling (EP-31, P2) - the DEC-28 structural opt-in is now the ONE construction path for every voice provider. NEW src/wombat/voice/select.py - build_transcriber(config, key_store=None) + build_tts_adapter(config, key_store=None) honoring wombat_stt_provider/wombat_tts_provider: the local default path returns the EXACT existing wirings (FasterWhisperTranscriber / Pyttsx3Adapter) BEFORE any key resolution runs (source-verified at the _build_local_* early returns - no cloud class constructed, no key read); a cloud provider is constructed ONLY when resolve_provider_key (TK-188) resolves the user-supplied key and construction succeeds, and it is wrapped in FallbackTranscriber/FallbackTTSAdapter that on ANY runtime exception WARN loud and try the local default exactly once - direction STRICTLY cloud-to-local, a structural test proves no local-to-cloud fallback path exists (DEC-28); any bootstrap-time gap (missing key, missing voice-cloud extra, or construction failure) logs ONE loud line naming the gap and falls through to the local default - never a boot failure (CON-3, the Q-67 loud-skip shape). REROUTES - sources/bootstrap._maybe_register_asr delegates transcriber construction to build_transcriber (drop-dir check stays local; either gap loud-skips the source, never raises); bootstrap build_speak_sink/make_speak_callable route through build_tts_adapter (replacing _construct_tts_adapter), still gated on wombat_voice_enabled so a voice-off boot constructs NOTHING. INDEPENDENTLY VERIFIED PASS - the verifier re-derived and executed the full bar at the working tree; ONE repair round (the boot-integration never-fail test originally fell through to the REAL OS keyring because neither bootstrap seam threads a key_store injection point - fixed by monkeypatching select.KeyringVoiceKeyStore to the module fake, documented in-test, honoring the Q-57(a) never-the-real-keyring test constraint). AC1 - local defaults build with EVERY cloud class monkeypatched to raise-if-constructed AND an unreadable key store injected (proves no cloud construction, no key read). AC2 - a cloud primary raising mid-call falls back to local exactly once with a loud WARNING. AC3 - missing key/extra yields one loud log naming the gap, the local default is used, boot continues. QUALITY BAR (verifier own execution) - uv run pytest -q 1084 passed / 61 documented WOMBAT_TEST_PG_DSN skips / 0 failed; ruff check src tests all-clean; mypy strict Success 264 files src+tests. SCOPE - exactly the files_in_scope (select.py + tests/voice/test_select.py NEW, the two bootstrap reroutes) + tests/unit/test_runtime.py as the mechanical companion for the reroute (files_in_scope normalized +=, architect act, v1.66 precedent); no contract touch by the builder, no config.py change needed (the TK-187 fields suffice, mypy-proven). Board 107/122. NEXT in the Q-105 batch - TK-194 (assistant-name threading), then TK-195 (egress lesion proof) closes EP-31.", by: "architect (closeout on independent verifier PASS)" }
+  - { date: "2026-07-09", version: "1.81", change: "PERSONALITY MATRIX RECORDED (Jim-APPROVED; the approving session was lost to a power cut before recording - re-recorded by the architect from the orchestrator's authoritative summary). NEW FEAT-14 (persona - 'a way to tune the personality so people can have fun with it'; name + voice + services + personality = the user-facing identity kit) with EP-33 persona core (TK-206 PersonaMatrix type, TK-207 pure-function clause-algebra builder - Jim's emphasis 1 recorded verbatim-in-spirit: instruction_for(mouth, matrix) is a 'math algo', base_role + length/register/hedging/humor clauses + immutable guard_suffix, DEFAULT byte-identical to today's prompts; TK-208 config fields; TK-209 LivePersona hot-apply; TK-210 output-EFFECT live-eval harness - Jim's emphasis 2 recorded verbatim-in-spirit: env-gated DEF-7-pattern sampling of REAL mouth output per level asserting brevity length monotonicity terse<balanced<expansive, warmth greeting presence/absence, directness hedge-lexicon presence/absence, humor aside only when permitted AND non-urgent, forbidden-term classifiers at ALL levels; unmeasurable axes FLAGGED, never placebo), EP-34 voice persona commands (TK-211 closed grammar, TK-212 pre-queue ASRSource interception), EP-35 persona learning (TK-213 feedback tokens, TK-214 dream_persona bounded tuner). DECISIONS - DEC-33 five named-level axes + NAMED constitution exclusions; DEC-34 (JIM AUTHORITY) LivePersona hot-apply, supersedes-in-part DEC-32 restart-to-apply for IN-PROCESS persona actuation only; DEC-35 deterministic closed voice grammar with pre-queue interception; DEC-36 feedback-token-only learning under RatingTuner-pattern custody + DEF-8 deferring automatic tone-adaptation. TK-200 AMENDED - five persona axis selects join the settings UI form (restart-notice honesty per the DEC-34 cross-process carve-out); depends_on += TK-208. SEQUENCING - EP-33 (TK-196 pulled forward as the persistence prerequisite) -> EP-34 -> EP-32 remainder -> EP-35. TK-205 deliberately unassigned (the approved proposal's id block starts at TK-206). Board 107/131 (ticket count 122 -> 131). Working-tree note: the in-flight TK-194 src/tests changes were untouched - this is a planning-only commit.", by: "architect (recording the Jim-approved proposal; governance only)" }
