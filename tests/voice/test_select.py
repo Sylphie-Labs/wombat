@@ -24,6 +24,13 @@ leak into a test process.
       ``test_cloud_tts_missing_required_voice_id_falls_back_to_local_with_loud_log``,
       ``test_cloud_stt_absent_voice_cloud_extra_falls_back_to_local_with_loud_log``,
       ``test_boot_never_fails_for_a_cloud_voice_misconfiguration``.
+
+TK-217 (CR4-1) — the failed-local-fallback warning is contextualized when it fills the fallback
+slot of an already-healthy cloud primary (never claims voice is disabled when the cloud primary
+still works), while the local-primary path's exact historical message is byte-preserved:
+    ``test_tk217_cloud_tts_healthy_primary_contextualizes_local_fallback_failure``,
+    ``test_tk217_local_tts_primary_failure_preserves_voice_output_disabled_message``,
+    ``test_tk217_cloud_stt_healthy_primary_contextualizes_local_fallback_failure``.
 """
 
 from __future__ import annotations
@@ -185,6 +192,22 @@ class _RaisingCloudTTS:
 
     def speak(self, text: str) -> None:
         raise RuntimeError("cloud TTS exploded mid-call")
+
+
+class _RaisingLocalTranscriber:
+    """Stands in for ``FasterWhisperTranscriber`` failing to construct (TK-217) — raises the same
+    ``ImportError`` the real class raises when the ``voice`` extra is absent."""
+
+    def __init__(self, *, model_name: str) -> None:
+        raise ImportError("faster-whisper not installed (simulated, TK-217)")
+
+
+class _RaisingLocalTTS:
+    """Stands in for ``Pyttsx3Adapter`` failing to construct (TK-217) — an ``ImportError`` is one
+    of the ANY-exception cases ``_build_local_tts`` catches."""
+
+    def __init__(self) -> None:
+        raise ImportError("pyttsx3 not installed (simulated, TK-217)")
 
 
 _CLOUD_STT_CLASS_NAMES = (
@@ -447,3 +470,62 @@ def test_boot_never_fails_for_a_cloud_voice_misconfiguration(
     assert isinstance(registry, SourceRegistry)
     assert stage._voice_enabled is True
     assert isinstance(stage._adapter, _FakeLocalTTS)
+
+
+# ----------------------------------------------------------------------------------------- TK-217
+
+
+def test_tk217_cloud_tts_healthy_primary_contextualizes_local_fallback_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CR4-1: a healthy cloud TTS primary (voice-cloud extra only, no 'voice' extra installed)
+    whose local fallback fails to construct must NOT claim voice output is disabled — the cloud
+    primary is live and still speaks."""
+    monkeypatch.setattr(select_module, "DeepgramAuraTTSAdapter", _RecordingCloudTTS)
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _RaisingLocalTTS)
+    store = _FakeVoiceKeyStore(initial={"deepgram": "cloud-key"})
+    config = _config(wombat_tts_provider="deepgram")
+
+    with caplog.at_level(logging.WARNING):
+        adapter = build_tts_adapter(config, key_store=store)
+
+    assert isinstance(adapter, FallbackTTSAdapter)
+    assert isinstance(adapter._primary, _RecordingCloudTTS)  # cloud primary is live
+    assert adapter._fallback is None
+    assert "remains active" in caplog.text
+    assert "voice output disabled" not in caplog.text
+
+
+def test_tk217_local_tts_primary_failure_preserves_voice_output_disabled_message(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The local-primary path's exact historical message is byte-preserved (CR4-1 must not touch
+    role='primary' logging)."""
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _RaisingLocalTTS)
+    _block_all_clouds(monkeypatch)
+    config = _config(wombat_tts_provider="local")
+
+    with caplog.at_level(logging.WARNING):
+        adapter = build_tts_adapter(config, key_store=_UnreadableVoiceKeyStore())
+
+    assert adapter is None
+    assert "voice output disabled for this boot" in caplog.text
+
+
+def test_tk217_cloud_stt_healthy_primary_contextualizes_local_fallback_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CR4-1's STT axis: a healthy cloud STT primary whose local ASR fallback fails to construct
+    logs a fallback-unavailable-cloud-active message, and the live cloud primary is returned."""
+    monkeypatch.setattr(select_module, "DeepgramTranscriber", _RecordingCloudTranscriber)
+    monkeypatch.setattr(select_module, "FasterWhisperTranscriber", _RaisingLocalTranscriber)
+    store = _FakeVoiceKeyStore(initial={"deepgram": "cloud-key"})
+    config = _config(wombat_stt_provider="deepgram")
+
+    with caplog.at_level(logging.WARNING):
+        transcriber = build_transcriber(config, key_store=store)
+
+    assert isinstance(transcriber, FallbackTranscriber)
+    assert isinstance(transcriber._primary, _RecordingCloudTranscriber)  # cloud primary is live
+    assert transcriber._fallback is None
+    assert "remains active" in caplog.text

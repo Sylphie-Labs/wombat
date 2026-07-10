@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 
@@ -112,34 +113,60 @@ def _api_key_env_var(provider: str) -> str:
     return f"WOMBAT_{provider.upper()}_API_KEY"
 
 
-def _build_local_transcriber(config: WombatConfig) -> Transcriber | None:
+def _build_local_transcriber(
+    config: WombatConfig, *, role: Literal["primary", "fallback"] = "primary"
+) -> Transcriber | None:
     """Construct the local ``FasterWhisperTranscriber`` (today's exact wiring, byte-preserved).
     An ``ImportError`` (the ``voice`` extra not installed) is caught, logged LOUD, and degrades to
-    ``None`` — never blocks boot."""
+    ``None`` — never blocks boot. ``role`` is a log-routing discriminator only (CR4-1, TK-217):
+    ``"primary"`` (default) is today's exact byte-preserved message; ``"fallback"`` is used when
+    filling the fallback slot of an already-healthy cloud transcriber, where local ASR is NOT the
+    only voice input and the message must say so instead of implying ASR is unavailable
+    altogether."""
     try:
         return FasterWhisperTranscriber(model_name=config.wombat_asr_model)
     except ImportError:
-        logger.warning(
-            "voice: local STT (faster-whisper) is not installed — install the 'voice' extra "
-            "(`uv sync --extra voice`) to enable local ASR (boot continues without it)",
-            exc_info=True,
-        )
+        if role == "fallback":
+            logger.warning(
+                "voice: local ASR fallback is not installed — install the 'voice' extra "
+                "(`uv sync --extra voice`) to enable it; the cloud STT primary remains active",
+                exc_info=True,
+            )
+        else:
+            logger.warning(
+                "voice: local STT (faster-whisper) is not installed — install the 'voice' extra "
+                "(`uv sync --extra voice`) to enable local ASR (boot continues without it)",
+                exc_info=True,
+            )
         return None
 
 
-def _build_local_tts(config: WombatConfig) -> TTSAdapter | None:
+def _build_local_tts(
+    config: WombatConfig, *, role: Literal["primary", "fallback"] = "primary"
+) -> TTSAdapter | None:
     """Construct the local ``Pyttsx3Adapter`` (today's exact wiring, byte-preserved). ANY
     construction failure (missing ``voice`` extra or an OS TTS engine-init failure) is caught,
-    logged LOUD, and degrades to ``None`` — never blocks boot."""
+    logged LOUD, and degrades to ``None`` — never blocks boot. ``role`` is a log-routing
+    discriminator only (CR4-1, TK-217): ``"primary"`` (default) is today's exact byte-preserved
+    message; ``"fallback"`` is used when filling the fallback slot of an already-healthy cloud TTS
+    adapter, where voice output is NOT disabled — the cloud primary still speaks — so the message
+    must not claim otherwise."""
     del config  # Pyttsx3Adapter takes no config-derived args; kept for signature symmetry.
     try:
         return Pyttsx3Adapter()
     except Exception:
-        logger.warning(
-            "voice: TTS adapter failed to construct (is the 'voice' extra installed? "
-            "`uv sync --extra voice`) — voice output disabled for this boot",
-            exc_info=True,
-        )
+        if role == "fallback":
+            logger.warning(
+                "voice: local TTS fallback failed to construct (is the 'voice' extra installed? "
+                "`uv sync --extra voice`) — the cloud TTS primary remains active",
+                exc_info=True,
+            )
+        else:
+            logger.warning(
+                "voice: TTS adapter failed to construct (is the 'voice' extra installed? "
+                "`uv sync --extra voice`) — voice output disabled for this boot",
+                exc_info=True,
+            )
         return None
 
 
@@ -201,7 +228,9 @@ def build_transcriber(
         )
         return _build_local_transcriber(config)
 
-    return FallbackTranscriber(primary, fallback=_build_local_transcriber(config))
+    return FallbackTranscriber(
+        primary, fallback=_build_local_transcriber(config, role="fallback")
+    )
 
 
 def build_tts_adapter(
@@ -246,7 +275,7 @@ def build_tts_adapter(
         )
         return _build_local_tts(config)
 
-    return FallbackTTSAdapter(primary, fallback=_build_local_tts(config))
+    return FallbackTTSAdapter(primary, fallback=_build_local_tts(config, role="fallback"))
 
 
 __all__ = [
