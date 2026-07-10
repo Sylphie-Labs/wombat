@@ -13,10 +13,11 @@ AC4 (lesion): a failing/corrupt file is moved to ``failed/``, a warning is logge
 poll still returns the OTHER files' events (one bad file never kills the source). A
 scan-level error (the drop directory itself missing) degrades the whole poll to ``[]``.
 
-``FasterWhisperTranscriber``'s lazy-import contract is proven directly: this suite runs with
-faster-whisper genuinely NOT installed (the optional ``[voice]`` extra, never a core dep), so
-the construction-failure assertion below is a real, unmocked proof — importing
-``wombat.sources.asr`` (and constructing any OTHER ``Transcriber``) never touches it.
+``FasterWhisperTranscriber``'s lazy-import contract is proven directly: faster-whisper rides the
+optional ``[voice]`` extra, never a core dep, but a dev/operator checkout MAY have it installed
+anyway (Q-103) — so the absence the construction-failure assertion below needs is SIMULATED via
+``_simulate_absent`` (TK-202) rather than assumed from the environment: importing
+``wombat.sources.asr`` (and constructing any OTHER ``Transcriber``) never touches it regardless.
 """
 
 from __future__ import annotations
@@ -24,9 +25,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from importlib.abc import MetaPathFinder
+from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -220,10 +225,34 @@ def test_non_audio_files_are_ignored(tmp_path: Path) -> None:
 # ------------------------------------------------------------- FasterWhisperTranscriber lazy import
 
 
-def test_faster_whisper_transcriber_construction_raises_when_not_installed() -> None:
+class _BlockedFinder(MetaPathFinder):
+    """A meta-path finder that fails the import of one named module (and its submodules)."""
+
+    def __init__(self, blocked: str) -> None:
+        self._blocked = blocked
+
+    def find_spec(
+        self, fullname: str, path: Sequence[str] | None, target: ModuleType | None = None
+    ) -> ModuleSpec | None:
+        if fullname == self._blocked or fullname.startswith(f"{self._blocked}."):
+            raise ModuleNotFoundError(f"No module named {fullname!r} (simulated absence, TK-202)")
+        return None
+
+
+def _simulate_absent(monkeypatch: pytest.MonkeyPatch, module_name: str) -> None:
+    """Simulate ``module_name`` being genuinely not installed, regardless of whether it actually
+    is on this machine (TK-202/Q-103): evict any cached import AND install a meta-path finder
+    ahead of the real one so any subsequent import raises ``ModuleNotFoundError``."""
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_BlockedFinder(module_name), *sys.meta_path])
+
+
+def test_faster_whisper_transcriber_construction_raises_when_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The real, unmocked lazy-import-failure path (mirrors TK-164's Pyttsx3Adapter test):
-    faster-whisper genuinely is not installed in this test env — construction raises rather
-    than silently no-oping, so ``sources.bootstrap._maybe_register_asr`` can catch it and
-    degrade loud."""
+    faster-whisper is simulated absent (TK-202) — construction raises rather than silently
+    no-oping, so ``sources.bootstrap._maybe_register_asr`` can catch it and degrade loud."""
+    _simulate_absent(monkeypatch, "faster_whisper")
     with pytest.raises(ImportError):
         FasterWhisperTranscriber(model_name="base")

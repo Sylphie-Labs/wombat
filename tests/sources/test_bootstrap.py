@@ -22,10 +22,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.abc import MetaPathFinder
+from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -226,6 +230,28 @@ async def _wait_until(
         await asyncio.sleep(interval)
 
 
+class _BlockedFinder(MetaPathFinder):
+    """A meta-path finder that fails the import of one named module (and its submodules)."""
+
+    def __init__(self, blocked: str) -> None:
+        self._blocked = blocked
+
+    def find_spec(
+        self, fullname: str, path: Sequence[str] | None, target: ModuleType | None = None
+    ) -> ModuleSpec | None:
+        if fullname == self._blocked or fullname.startswith(f"{self._blocked}."):
+            raise ModuleNotFoundError(f"No module named {fullname!r} (simulated absence, TK-202)")
+        return None
+
+
+def _simulate_absent(monkeypatch: pytest.MonkeyPatch, module_name: str) -> None:
+    """Simulate ``module_name`` being genuinely not installed, regardless of whether it actually
+    is on this machine (TK-202/Q-103): evict any cached import AND install a meta-path finder
+    ahead of the real one so any subsequent import raises ``ModuleNotFoundError``."""
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_BlockedFinder(module_name), *sys.meta_path])
+
+
 # --------------------------------------------------------------------------- zero-configured AC
 
 
@@ -383,11 +409,13 @@ def test_asr_source_not_wired_when_drop_dir_unset(
 def test_asr_source_not_wired_when_faster_whisper_not_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A configured drop dir alone is not enough: faster-whisper genuinely is not installed in
-    this test env (the optional ``[voice]`` extra, never a core dep), so ``_maybe_register_asr``
-    catches the real ``ImportError`` from constructing ``FasterWhisperTranscriber`` and skips
-    loudly — never raises, never registers, no import error escapes anywhere in this call."""
+    """A configured drop dir alone is not enough: faster-whisper is simulated absent (TK-202/
+    Q-103 — the optional ``[voice]`` extra, never a core dep, but MAY be installed on a dev/
+    operator checkout), so ``_maybe_register_asr`` catches the real ``ImportError`` from
+    constructing ``FasterWhisperTranscriber`` and skips loudly — never raises, never registers,
+    no import error escapes anywhere in this call."""
     consent_calls = _assert_never_triggers_consent(monkeypatch)
+    _simulate_absent(monkeypatch, "faster_whisper")
     config = _make_config(asr_drop_dir=str(tmp_path))
 
     with caplog.at_level(logging.WARNING):

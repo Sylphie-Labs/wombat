@@ -21,10 +21,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator
+import sys
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from importlib.abc import MetaPathFinder
+from importlib.machinery import ModuleSpec
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -84,6 +88,38 @@ _FAKE_DSN = "postgresql://fake-host/fake-db"
 
 def _config() -> WombatConfig:
     return WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com")
+
+
+@pytest.fixture()
+def _no_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """TK-202 (Q-103): chdir off the repo root so pydantic-settings' ``env_file=".env"``
+    resolution (relative to CWD) can never pick up a populated operator .env underneath a test
+    that constructs ``WombatConfig``/``_config()`` without overriding an optional field —
+    mirrors TK-186's ``monkeypatch.chdir(tmp_path)`` precedent (``tests/unit/test_bootstrap.py``).
+    Opt-in only (not autouse) — requested by name from the tests that need it."""
+    monkeypatch.chdir(tmp_path)
+
+
+class _BlockedFinder(MetaPathFinder):
+    """A meta-path finder that fails the import of one named module (and its submodules)."""
+
+    def __init__(self, blocked: str) -> None:
+        self._blocked = blocked
+
+    def find_spec(
+        self, fullname: str, path: Sequence[str] | None, target: ModuleType | None = None
+    ) -> ModuleSpec | None:
+        if fullname == self._blocked or fullname.startswith(f"{self._blocked}."):
+            raise ModuleNotFoundError(f"No module named {fullname!r} (simulated absence, TK-202)")
+        return None
+
+
+def _simulate_absent(monkeypatch: pytest.MonkeyPatch, module_name: str) -> None:
+    """Simulate ``module_name`` being genuinely not installed, regardless of whether it actually
+    is on this machine (TK-202/Q-103): evict any cached import AND install a meta-path finder
+    ahead of the real one so any subsequent import raises ``ModuleNotFoundError``."""
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_BlockedFinder(module_name), *sys.meta_path])
 
 
 @pytest.fixture(autouse=True)
@@ -303,7 +339,9 @@ def test_build_brief_deliver_stage_blank_path_raises_configuration_error() -> No
         bootstrap.build_brief_deliver_stage(config=config)
 
 
-def test_build_brief_deliver_stage_none_path_raises_configuration_error() -> None:
+def test_build_brief_deliver_stage_none_path_raises_configuration_error(
+    _no_env_file: None,
+) -> None:
     config = _config()  # wombat_brief_path defaults to None
 
     with pytest.raises(ConfigurationError):
@@ -321,7 +359,9 @@ def _config_voice_enabled() -> WombatConfig:
     )
 
 
-def test_build_speak_sink_voice_disabled_by_default_carries_no_adapter() -> None:
+def test_build_speak_sink_voice_disabled_by_default_carries_no_adapter(
+    _no_env_file: None,
+) -> None:
     stage = bootstrap.build_speak_sink(_config())
 
     assert stage.name == "speak"
@@ -331,10 +371,13 @@ def test_build_speak_sink_voice_disabled_by_default_carries_no_adapter() -> None
 
 
 def test_build_speak_sink_voice_enabled_but_pyttsx3_absent_degrades_to_no_adapter(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Real, unmocked lesion proof (AC4): pyttsx3 rides the optional 'voice' extra, not installed
-    in this environment — construction must not raise, only loud-skip to adapter=None."""
+    """Lesion proof (AC4): pyttsx3 rides the optional 'voice' extra, simulated absent here
+    (TK-202/Q-103 — a dev/operator checkout MAY have it installed anyway) — construction must
+    not raise, only loud-skip to adapter=None."""
+    _simulate_absent(monkeypatch, "pyttsx3")
     with caplog.at_level(logging.WARNING):
         stage = bootstrap.build_speak_sink(_config_voice_enabled())
 
@@ -343,13 +386,15 @@ def test_build_speak_sink_voice_enabled_but_pyttsx3_absent_degrades_to_no_adapte
     assert "voice" in caplog.text.lower()
 
 
-def test_make_speak_callable_returns_none_when_voice_disabled() -> None:
+def test_make_speak_callable_returns_none_when_voice_disabled(_no_env_file: None) -> None:
     assert bootstrap.make_speak_callable(_config()) is None
 
 
 def test_make_speak_callable_returns_none_when_pyttsx3_absent_even_if_voice_enabled(
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    _simulate_absent(monkeypatch, "pyttsx3")
     with caplog.at_level(logging.WARNING):
         speak = bootstrap.make_speak_callable(_config_voice_enabled())
 
@@ -401,6 +446,7 @@ def test_assemble_runtime_with_brief_path_registers_wombat_brief(tmp_path: Path)
 
 
 def test_assemble_runtime_blank_brief_path_skips_registration_and_warns(
+    _no_env_file: None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     op = load_operating_params()
@@ -470,6 +516,7 @@ def test_assemble_runtime_with_brief_path_registers_schedule(tmp_path: Path) -> 
 
 
 def test_assemble_runtime_blank_brief_path_skips_schedule(
+    _no_env_file: None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     op = load_operating_params()
@@ -897,7 +944,9 @@ def test_assemble_runtime_with_google_creds_and_token_exposes_action_trail_write
     assert isinstance(bundle.action_trail_writer, ActionTrailWriter)
 
 
-def test_assemble_runtime_google_less_boot_action_trail_writer_is_none() -> None:
+def test_assemble_runtime_google_less_boot_action_trail_writer_is_none(
+    _no_env_file: None,
+) -> None:
     """A Google-less boot (no client creds) never constructs the writer -- the field stays None
     (CR2-10's other half: runtime's teardown must be a no-op for this seam in that case)."""
     op = load_operating_params()

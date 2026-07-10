@@ -156,11 +156,15 @@ async def test_second_poll_after_move_yields_no_new_queue_item(tmp_path: Path) -
 
 
 def test_asr_absent_when_drop_dir_unset_and_other_functionality_is_unaffected(
-    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """AC2 (lesion), part 1: WOMBAT_ASR_DROP_DIR unset -> 'asr' never lands in source_ids and
     exactly one loud skip log names it — mirroring the Q-67 loud-skip pattern gcal/gmail/
     feedback already follow."""
+    # TK-202 (Q-103): chdir off the repo root so a populated operator .env can't leak
+    # WOMBAT_ASR_DROP_DIR in from the FILE source out from under "unset" (pydantic-settings
+    # resolves env_file=".env" relative to CWD — mirrors TK-186's precedent).
+    monkeypatch.chdir(tmp_path)
     config = _make_config()
 
     with caplog.at_level(logging.WARNING):

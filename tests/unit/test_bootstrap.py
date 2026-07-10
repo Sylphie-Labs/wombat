@@ -91,8 +91,13 @@ def test_module_exposes_build_engine() -> None:
 
 
 def test_wombat_config_boots_without_brief_path_or_voice_env(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # TK-202 (CR3-4, Q-103): chdir off the repo root so a populated operator .env can't supply
+    # WOMBAT_BRIEF_PATH/WOMBAT_VOICE_ENABLED out from under this test -- delenv only clears the
+    # process env var, and pydantic-settings resolves env_file=".env" relative to CWD (mirrors
+    # TK-186's test_ac2_missing_api_key_raises... precedent above).
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WOMBAT_BRIEF_PATH", raising=False)
     monkeypatch.delenv("WOMBAT_VOICE_ENABLED", raising=False)
     config = _config()  # must not raise -- neither is in REQUIRED_ENV
