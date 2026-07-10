@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/*
+ * TK-198: intentionally a minimal placeholder style only. The real
+ * token/theme system (bright color-theory palette, complete Tailwind theme)
+ * is TK-225 - this scaffold just proves Tailwind is wired end to end.
+ */
+body {
+  margin: 0;
+}

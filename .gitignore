@@ -35,3 +35,10 @@ planning/.state.json
 # committed — NG-7 storage-residency enforcement (local read, no egress).
 **/fixtures/*.real.*
 tests/**/fixtures/*.real.*
+
+# app/ (TK-198): the Electron shell's own toolchain/build output. app/ source
+# (incl. app/package-lock.json) IS committed; deps and build artifacts are not.
+app/node_modules/
+app/dist/
+app/dist-electron/
+app/out/
