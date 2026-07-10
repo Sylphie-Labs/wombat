@@ -321,7 +321,8 @@ async def test_ac5_engine_drive_completes_even_when_the_store_raises(
     dream_graph = build_dream_pathway(
         _PassthroughStage(name="dream_consolidate", to="dream_outcome"),
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
-        _PassthroughStage(name="dream_tune", to="dream_behavior_log"),
+        _PassthroughStage(name="dream_tune", to="dream_persona"),
+        _PassthroughStage(name="dream_persona", to="dream_behavior_log"),
         behavior_log_stage,
         _PassthroughStage(name="dream_window", to="dream_pattern"),
         _PassthroughStage(name="dream_pattern", to="dream_run"),

@@ -55,10 +55,13 @@ from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
     DreamBehaviorLogStage,
     DreamOutcomeStage,
+    DreamPersonaStage,
     DreamTuneStage,
     build_dream_pathway,
     dream_trigger_artifact,
 )
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX
 from wombat.queue import WombatQueue
 from wombat.queue import ensure_schema as ensure_queue_schema
 from wombat.rating.rating_tuner import RatingTuner
@@ -151,11 +154,12 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
-        # TK-113 (Q-99f): the graph AC — the run walked all seven stages, in order, COMPLETED.
+        # TK-214: the graph AC — the run walked all eight stages, in order, COMPLETED.
         assert [step.stage_name for step in dream_state.steps] == [
             "dream_consolidate",
             "dream_outcome",
             "dream_tune",
+            "dream_persona",
             "dream_behavior_log",
             "dream_window",
             "dream_pattern",
@@ -254,9 +258,9 @@ def _build_stack_with_raising_dream(
         speak_stage,
     )
 
-    # Never reached (the entry always raises first) — throwaway stub outcome/tune/behavior_log/
-    # window/pattern stages merely satisfy build_dream_pathway's now-required args (TK-47/TK-49/
-    # TK-111/TK-112/TK-113 reshape).
+    # Never reached (the entry always raises first) — throwaway stub outcome/tune/persona/
+    # behavior_log/window/pattern stages merely satisfy build_dream_pathway's now-required args
+    # (TK-47/TK-49/TK-214/TK-111/TK-112/TK-113 reshape).
     stub_entity_kg = InMemoryEntityKG()
     stub_writer = ObservationWriter(
         entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
@@ -275,6 +279,12 @@ def _build_stack_with_raising_dream(
             clock=lambda: _FIXED_NOW,
         )
     )
+    stub_persona_stage = DreamPersonaStage(
+        event_log=BehaviorEventLog(_DSN),
+        live_persona=LivePersona(
+            DEFAULT_MATRIX, "test", settings_path="__unused_dream_pathway_e2e.settings.json"
+        ),
+    )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
@@ -292,6 +302,7 @@ def _build_stack_with_raising_dream(
         _RaisingDreamStage(),
         stub_outcome_stage,
         stub_tune_stage,
+        stub_persona_stage,
         stub_behavior_log_stage,
         stub_window_stage,
         stub_pattern_stage,

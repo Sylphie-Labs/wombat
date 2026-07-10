@@ -18,6 +18,12 @@ own ``claims_about`` assertions enumerate), so ``_build_engine`` wires a trivial
 transitions-onward double instead — this module's ACs are about the outcome pass, not tuning
 (TK-49 owns its own acceptance criteria in ``tests/unit/test_rating_tuner.py``).
 
+TK-214 (mechanical update, flagged per the ticket's own sanction, EP-35): ``build_dream_pathway``
+now also requires a ``persona`` stage, inserted between ``tune`` and ``behavior_log``. A REAL
+``DreamPersonaStage`` needs a Postgres-backed ``BehaviorEventLog`` this module has no DSN for, so
+``_build_engine`` wires a trivial always-transitions-onward double instead (TK-214 owns its own
+acceptance criteria in ``tests/pathways/test_dream_persona_stage.py``).
+
 TK-111 (mechanical update, flagged per the ticket's own sanction, Q-98): ``build_dream_pathway``
 now also requires a ``behavior_log`` stage. A REAL ``DreamBehaviorLogStage`` needs a Postgres-
 backed ``BehaviorEventLog`` this module has no DSN for, so ``_build_engine`` wires a second
@@ -97,16 +103,39 @@ class _PassthroughTuneStage:
     OUTCOME_* corpus AC1 seeds; see the module docstring)."""
 
     name: str = "dream_tune"
+    transitions: tuple[str, ...] = ("dream_persona",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_persona",
+            output=Artifact(
+                kind="wombat.dream_tune_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughPersonaStage:
+    """TK-214 mechanical reshape (flagged per the ticket's own sanction, EP-35): a trivial
+    always-transitions-onward double standing in for ``DreamPersonaStage`` — this module's ACs
+    are about the outcome pass, never touching the persona matrix or a Postgres store here (a
+    real ``DreamPersonaStage`` needs a ``BehaviorEventLog`` this module has no DSN for; see the
+    module docstring)."""
+
+    name: str = "dream_persona"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_behavior_log",
             output=Artifact(
-                kind="wombat.dream_tune_report",
+                kind="wombat.dream_persona_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
-                data={},
+                data={"stepped": []},
             ),
         )
 
@@ -214,6 +243,7 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
         dream_consolidation_stage,
         dream_outcome_stage,
         _PassthroughTuneStage(),
+        _PassthroughPersonaStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),

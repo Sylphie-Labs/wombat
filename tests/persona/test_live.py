@@ -15,6 +15,18 @@
       JSON, a non-dict top level) leaves the cursor standing so the NEXT Sweeper beat retries
       instead of the edit being silently and permanently dropped. A persistently malformed file
       still logs only ONE warning per failing mtime generation.
+
+TK-214 (DEC-36/DEC-37(h), Q-112(f)) pin mechanics:
+  AC-pins-1: ``set()`` (default ``explicit=True``) stamps a pin for exactly the axes whose level
+      CHANGED vs the pre-swap matrix, persisted under ``wombat_persona_pins`` alongside the five
+      persona keys; an axis whose value didn't change is never pinned.
+  AC-pins-2: ``set(..., explicit=False)`` (the dream nudge path) stamps NOTHING.
+  AC-pins-3: ``pinned_axes(now)`` returns axes stamped within the last ``PERSONA_PIN_DAYS`` days;
+      an older stamp is excluded.
+  AC-pins-4: a reloaded axis whose level DIFFERS from the current in-memory value (``poll_settings_
+      file``, the TK-200 app-edit path) is itself stamped as a pin and best-effort persisted, and
+      the cursor advances past that write (a subsequent poll never re-reads on an unchanged file).
+  AC-pins-5: pins load best-effort at construction — absent/malformed never raises, yields no pins.
 """
 
 from __future__ import annotations
@@ -22,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -30,7 +43,7 @@ from wombat.behavior.stages.reflection_compose import _SYSTEM_INSTRUCTION as REF
 from wombat.compose.brief_template import brief_system_instruction as brief_live
 from wombat.integrations.gmail.draft_composer import _system_instruction as draft_live
 from wombat.persona.builder import Mouth
-from wombat.persona.live import LivePersona
+from wombat.persona.live import PERSONA_PIN_DAYS, LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Directness, Humor, PersonaMatrix, Warmth
 from wombat.stages.compose import _system_instruction as compose_live
 
@@ -331,3 +344,117 @@ def test_poll_settings_file_valid_dict_without_persona_keys_is_a_successful_gene
 
     assert live_persona.matrix == DEFAULT_MATRIX  # no persona keys present — nothing to apply
     assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 0
+
+
+# ---------------------------------------------------------------------------- TK-214 pins (AC-pins)
+
+
+def test_set_explicit_default_stamps_a_pin_for_exactly_the_changed_axis(tmp_path: Path) -> None:
+    live_persona = _live_persona(tmp_path)
+
+    live_persona.set(_DRY_MATRIX)  # explicit=True by default — only humor changed
+
+    pinned = live_persona.pinned_axes(datetime.now(UTC))
+    assert pinned == frozenset({"humor"})
+
+
+def test_set_explicit_persists_pins_alongside_the_five_persona_keys(tmp_path: Path) -> None:
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    live_persona.set(_DRY_MATRIX)
+
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "humor" in saved["wombat_persona_pins"]
+    stamped_at = datetime.fromisoformat(saved["wombat_persona_pins"]["humor"])
+    assert stamped_at.tzinfo is not None  # aware-UTC, per the ruled wire shape
+
+
+def test_set_explicit_an_unchanged_matrix_pins_nothing(tmp_path: Path) -> None:
+    live_persona = _live_persona(tmp_path)
+
+    live_persona.set(DEFAULT_MATRIX)  # identical matrix -> no axis changed
+
+    assert live_persona.pinned_axes(datetime.now(UTC)) == frozenset()
+
+
+def test_set_explicit_false_stamps_no_pin(tmp_path: Path) -> None:
+    live_persona = _live_persona(tmp_path)
+
+    live_persona.set(_DRY_MATRIX, explicit=False)  # the dream-nudge path (TK-214)
+
+    assert live_persona.pinned_axes(datetime.now(UTC)) == frozenset()
+
+
+def test_pinned_axes_excludes_stamps_older_than_pin_days(tmp_path: Path) -> None:
+    settings_path = tmp_path / "wombat.settings.json"
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    recent = (now - timedelta(days=3)).isoformat()
+    stale = (now - timedelta(days=PERSONA_PIN_DAYS + 1)).isoformat()
+    settings_path.write_text(
+        json.dumps({"wombat_persona_pins": {"brevity": recent, "warmth": stale}}),
+        encoding="utf-8",
+    )
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    assert live_persona.pinned_axes(now) == frozenset({"brevity"})
+
+
+def test_load_pins_absent_file_never_raises_and_yields_no_pins(tmp_path: Path) -> None:
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+
+    assert live_persona.pinned_axes(datetime.now(UTC)) == frozenset()
+
+
+def test_load_pins_malformed_pins_value_never_raises(tmp_path: Path) -> None:
+    settings_path = tmp_path / "wombat.settings.json"
+    settings_path.write_text(json.dumps({"wombat_persona_pins": "not-a-dict"}), encoding="utf-8")
+
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    assert live_persona.pinned_axes(datetime.now(UTC)) == frozenset()
+
+
+def test_load_pins_malformed_json_never_raises(tmp_path: Path) -> None:
+    settings_path = tmp_path / "wombat.settings.json"
+    settings_path.write_text("{not valid json", encoding="utf-8")
+
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    assert live_persona.pinned_axes(datetime.now(UTC)) == frozenset()
+
+
+def test_poll_settings_file_app_edit_detected_as_explicit_stamps_pin_and_persists(
+    tmp_path: Path,
+) -> None:
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    settings_path.write_text(json.dumps({"wombat_persona_humor": "dry"}), encoding="utf-8")
+    live_persona.poll_settings_file()
+
+    assert live_persona.matrix.humor is Humor.DRY
+    assert "humor" in live_persona.pinned_axes(datetime.now(UTC))
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "humor" in saved["wombat_persona_pins"]
+
+
+def test_poll_settings_file_pin_persist_write_advances_the_cursor_past_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After an app-edit-detected pin stamp + persist, the mtime cursor stands at the pin write's
+    OWN mtime — a subsequent poll on an otherwise-unchanged file must never re-read."""
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+
+    settings_path.write_text(json.dumps({"wombat_persona_humor": "dry"}), encoding="utf-8")
+    live_persona.poll_settings_file()
+
+    def _boom(*args: object, **kwargs: object) -> str:
+        raise AssertionError("must not read again — the cursor should already be current")
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+
+    live_persona.poll_settings_file()  # no exception proves the early-return (unchanged mtime)

@@ -83,8 +83,9 @@ gate/pipeline change here — the gate re-reads a tuned parameter on its next dr
 ``UserModel.ratings_for`` seam.
 
 TK-111 (Q-98, EP-21): the dream graph's new ``dream_behavior_log`` stage — ``DreamBehaviorLogStage``
-(``build_dream_pathway``'s new ``behavior_log`` arg), inserted between ``dream_tune`` and the
-window-detect pass below — composes a ``BehaviorEventLog`` over the SAME runtime ``dsn`` every
+(``build_dream_pathway``'s new ``behavior_log`` arg), inserted between ``dream_tune`` (later
+``dream_persona``, TK-214) and the window-detect pass below — composes a ``BehaviorEventLog`` over
+the SAME runtime ``dsn`` every
 other Postgres-touching seam here uses, and the SAME shared ``entity_kg``/``_RUNTIME_USER_ID``
 TK-176 built above (never a second KG instance). Exposed on ``RuntimeBundle.behavior_event_log``
 so ``runtime.py``'s teardown can close it (the SAME TK-184 lifecycle pattern as ``action_trail_
@@ -108,6 +109,13 @@ matched lexicon phrase VERBATIM, ``duration_seconds=None``, and
 ``idempotency_key=domain.item_identity.idempotency_key('persona_feedback', <the dropped audio
 file's sha256 event_key>)`` — a re-drop of identical audio bytes upserts the SAME row, while
 distinct recordings of the same phrase stay distinct rows.
+
+TK-214 (EP-35, DEC-36/DEC-37(h), Q-112 pre-ruled — CLOSES EP-35): the dream graph's new
+``dream_persona`` stage — ``DreamPersonaStage`` (``build_dream_pathway``'s new ``persona`` arg),
+inserted between ``dream_tune`` and ``dream_behavior_log`` (TK-111's stage, its new downstream
+neighbor) — composes over the SAME shared ``behavior_event_log``/``live_persona`` instances built
+above (never a second ``BehaviorEventLog``/``LivePersona``). No new ``RuntimeBundle`` field: like
+``dream_window_stage`` this stage owns no closeable resource of its own.
 """
 
 from __future__ import annotations
@@ -184,6 +192,7 @@ from .pathways.dream_pathway import (
     DreamBehaviorLogStage,
     DreamConsolidationStage,
     DreamOutcomeStage,
+    DreamPersonaStage,
     DreamTuneStage,
     build_dream_pathway,
     dream_trigger_artifact,
@@ -963,6 +972,11 @@ def assemble_runtime(
     dream_behavior_log_stage = DreamBehaviorLogStage(
         store=behavior_event_log, entity_kg=entity_kg, user_id=_RUNTIME_USER_ID
     )
+    # TK-214 (EP-35): DreamPersonaStage over the SAME behavior_event_log instance above (never a
+    # second BehaviorEventLog/connection) and the SAME live_persona runtime authority every mouth
+    # call site reads. UNCONDITIONAL (mirrors dream_behavior_log_stage's own posture) — no
+    # external deps beyond what this composition already builds.
+    dream_persona_stage = DreamPersonaStage(event_log=behavior_event_log, live_persona=live_persona)
 
     def _record_persona_feedback(
         token: FeedbackToken, event_key: str, timestamp: datetime
@@ -1014,6 +1028,7 @@ def assemble_runtime(
         dream_consolidation_stage,
         dream_outcome_stage,
         dream_tune_stage,
+        dream_persona_stage,
         dream_behavior_log_stage,
         dream_window_stage,
         dream_pattern_stage,

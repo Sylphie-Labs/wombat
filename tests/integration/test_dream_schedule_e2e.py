@@ -147,6 +147,28 @@ class _PassthroughTuneStage:
     out of scope for the TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_tune"
+    transitions: tuple[str, ...] = ("dream_persona",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_persona",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughPersonaStage:
+    """TK-214 mechanical reshape (flagged per the ticket's own sanction, EP-35):
+    ``wombat.dream``'s new fourth stage — always transitions straight onward; it carries none of
+    ``DreamPersonaStage``'s feedback-tuning behavior (TK-214 owns that, out of scope for the
+    TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_persona"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -164,7 +186,7 @@ class _PassthroughTuneStage:
 @dataclass
 class _PassthroughBehaviorLogStage:
     """TK-111 mechanical reshape (flagged per the ticket's own sanction, Q-98): ``wombat.dream``'s
-    fourth stage — always transitions straight onward; it carries none of
+    fifth stage (post-TK-214) — always transitions straight onward; it carries none of
     ``DreamBehaviorLogStage``'s ``BehaviorEventLog`` write behavior (TK-111 owns that, out of
     scope for the TK-52 timer/fence suite this file tests)."""
 
@@ -186,7 +208,8 @@ class _PassthroughBehaviorLogStage:
 @dataclass
 class _PassthroughWindowStage:
     """TK-112 mechanical reshape (flagged per the ticket's own sanction, Q-99e):
-    ``wombat.dream``'s fifth stage — always transitions straight onward; it carries none of
+    ``wombat.dream``'s sixth stage (post-TK-214) — always transitions straight onward; it carries
+    none of
     ``WriteWindowSummariesStage``'s detect/write behavior (TK-112 owns that, out of scope for the
     TK-52 timer/fence suite this file tests)."""
 
@@ -208,7 +231,8 @@ class _PassthroughWindowStage:
 @dataclass
 class _PassthroughPatternStage:
     """TK-113 mechanical reshape (flagged per the ticket's own sanction, Q-99f):
-    ``wombat.dream``'s sixth stage — always transitions straight onward; it carries none of
+    ``wombat.dream``'s seventh stage (post-TK-214) — always transitions straight onward; it
+    carries none of
     ``PatternDetectorStage``'s read/match/enqueue behavior (TK-113 owns that, out of scope for the
     TK-52 timer/fence suite this file tests)."""
 
@@ -290,6 +314,7 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
             _PassthroughConsolidateStage(),
             _PassthroughOutcomeStage(),
             _PassthroughTuneStage(),
+            _PassthroughPersonaStage(),
             _PassthroughBehaviorLogStage(),
             _PassthroughWindowStage(),
             _PassthroughPatternStage(),

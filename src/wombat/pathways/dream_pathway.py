@@ -3,12 +3,12 @@ consolidation sweep, TK-49 tuner pass, TK-111 behavior-log pass, TK-112 window-d
 pattern-detect pass, Q-33/Q-85/Q-90/Q-91/Q-98/Q-99e/Q-99f, DEC-12/DEC-23).
 
 MIRRORS ``brief_pathway.py``'s posture: pure graph assembly, no bootstrap import (avoids an import
-cycle — ``bootstrap.py`` imports this module, not the reverse). Q-99f (superseding Q-99e's shape)
+cycle — ``bootstrap.py`` imports this module, not the reverse). TK-214 (superseding Q-99f's shape)
 RULES the dream graph's end-state: ``dream_consolidate`` (entry, TK-47) -> ``dream_outcome``
-(TK-175) -> ``dream_tune`` (TK-49) -> ``dream_behavior_log`` (TK-111) -> ``dream_window``
-(TK-112) -> ``dream_pattern`` (TK-113) -> ``dream_run`` (terminal) — TK-52's later
-recurrence/fence inserts UPSTREAM of ``dream_consolidate`` so ``dream_run`` stays the ONE
-reachable terminal and TK-46's isolation proofs keep passing.
+(TK-175) -> ``dream_tune`` (TK-49) -> ``dream_persona`` (TK-214) -> ``dream_behavior_log``
+(TK-111) -> ``dream_window`` (TK-112) -> ``dream_pattern`` (TK-113) -> ``dream_run`` (terminal) —
+TK-52's later recurrence/fence inserts UPSTREAM of ``dream_consolidate`` so ``dream_run`` stays the
+ONE reachable terminal and TK-46's isolation proofs keep passing.
 
 ``DreamConsolidationStage`` (TK-47, EP-13) is the nightly consolidation sweep: it drives
 cog-worx's ``CoherenceReconciler`` + ``ClaimExtractor`` sweepers to drain, off-path (S1) model
@@ -31,6 +31,16 @@ KG/``ObservationWriter``/``OperatingParams``, injected here — this stage NEVER
 ``ctx.journal`` touch. A tuning failure is caught, logged LOUD, and the stage still transitions on
 (mirrors ``DreamOutcomeStage``'s own per-pass error posture): one bad night's tuning pass must
 never block the reachable terminal.
+
+``DreamPersonaStage`` (TK-214, EP-35, DEC-36/DEC-37(h), Q-112) is the nightly bounded
+persona-feedback tuner pass, inserted between ``dream_tune`` and ``dream_behavior_log``: it folds
+the trailing-24h window of ``wombat_behavior_events`` rows TK-213's ASR-seam recorder wrote
+(``event_type='persona_feedback'``) through the PURE ``wombat.persona.tuner.decide_persona_steps``
+(at most one clamped step per UNPINNED axis, RatingTuner-pattern custody) and applies any decided
+steps to the shared ``LivePersona`` via the EXISTING ``wombat.persona.commands.apply`` saturating
+clamp, then ``LivePersona.set(..., explicit=False)`` ONCE — a dream nudge never stamps the
+DEC-37(h) 7-day explicit-set pin. Deterministic, model-free (NG-4 intact), no ``ctx.journal``
+touch.
 
 ``DreamBehaviorLogStage`` (TK-111, EP-21, Q-98) is the nightly append-only behavioral-event-log
 writer: it walks the CLOSED ``EventClass`` set exactly as ``DreamOutcomeStage`` does, reading
@@ -66,7 +76,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.coherence.reconciler import CoherenceReconciler
@@ -78,6 +88,10 @@ from cogworx.substrate.entity_kg import EntityKG
 
 from wombat.behavior.event_log import BehaviorEventLog
 from wombat.domain.item_identity import split_idempotency_key
+from wombat.persona.commands import PersonaCommand
+from wombat.persona.commands import apply as commands_apply
+from wombat.persona.live import LivePersona
+from wombat.persona.tuner import PERSONA_FEEDBACK_WINDOW_HOURS, decide_persona_steps
 from wombat.rating.params import EventClass
 from wombat.rating.rating_tuner import RatingTuner
 from wombat.user_model.claims import ClaimPredicate
@@ -106,6 +120,12 @@ DREAM_OUTCOME_REPORT_KIND = "wombat.dream_outcome_report"
 # contentless-proof idiom: the durable record is the rating_params claims RatingTuner wrote (or
 # didn't, for a no-corpus class), never repeated onto this artifact.
 DREAM_TUNE_REPORT_KIND = "wombat.dream_tune_report"
+
+# DreamPersonaStage's committed output kind (TK-214, EP-35) — a small system-provenance count
+# artifact mirroring DREAM_TUNE_REPORT_KIND's own idiom: per-axis direction/up_count/down_count
+# only (CON-4/CON-6, motive-free), never a why — the durable record is the persisted persona
+# matrix + pins LivePersona.set already wrote.
+DREAM_PERSONA_REPORT_KIND = "wombat.dream_persona_report"
 
 # DreamConsolidationStage's committed output kind (TK-47) — a system-provenance summary artifact:
 # accumulated ReconcilerStats counters, claims extracted, ticks driven, and the stall flag. No
@@ -454,13 +474,13 @@ class DreamTuneStage:
     ``run()`` calls ``tuner.tune(ctx.clock())`` — deterministic, model-free (NG-4 intact): no LLM
     call, no ``ctx.journal`` touch (mirrors ``DreamOutcomeStage``'s own off-path posture). A
     tuning-pass failure is caught, logged LOUD, and the stage STILL transitions onward to
-    ``dream_behavior_log`` (TK-111, Q-98 — this stage's downstream neighbor since the behavior-log
-    pass was inserted between the tuner and the terminal) — a bad night's tuning pass must never
-    block the reachable terminal.
+    ``dream_persona`` (TK-214, EP-35 — this stage's downstream neighbor since the persona-tuner
+    pass was inserted between the rating tuner and ``dream_behavior_log``) — a bad night's tuning
+    pass must never block the reachable terminal.
     """
 
     name: str = "dream_tune"
-    transitions: tuple[str, ...] = ("dream_behavior_log",)
+    transitions: tuple[str, ...] = ("dream_persona",)
 
     def __init__(self, *, tuner: RatingTuner) -> None:
         self._tuner = tuner
@@ -477,12 +497,102 @@ class DreamTuneStage:
             )
 
         return Transition(
-            to="dream_behavior_log",
+            to="dream_persona",
             output=Artifact(
                 kind=DREAM_TUNE_REPORT_KIND,
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=now),
                 data={},
+            ),
+        )
+
+
+class DreamPersonaStage:
+    """The nightly bounded persona-feedback tuner pass (TK-214, EP-35, DEC-36/DEC-37(h), Q-112).
+
+    Keyword-injected collaborators only (``RatingTuner``/``DreamTuneStage`` precedent):
+    ``event_log`` is ``wombat.behavior.event_log.BehaviorEventLog`` (the SAME shared instance
+    ``DreamBehaviorLogStage`` and the bootstrap-owned persona-feedback recorder both already
+    write/read — this stage never constructs one); ``live_persona`` is the SAME shared
+    ``wombat.persona.live.LivePersona`` runtime authority every mouth call site reads.
+
+    ``run()`` reads the trailing ``wombat.persona.tuner.PERSONA_FEEDBACK_WINDOW_HOURS`` window of
+    ``event_log.events_between`` rows filtered to ``event_type == 'persona_feedback'``, decides via
+    the PURE ``wombat.persona.tuner.decide_persona_steps`` (fed each row's ``outcome_label`` phrase
+    plus ``live_persona.pinned_axes(now)`` — a pinned axis never steps), then applies every decided
+    step to ``live_persona.matrix`` via the EXISTING ``wombat.persona.commands.apply`` saturating
+    clamp (no second clamp/custody mechanism) and calls ``live_persona.set(new_matrix,
+    explicit=False)`` EXACTLY ONCE if any axis stepped — a dream nudge never stamps a pin (DEC-37
+    (h)), so a second consecutive night's fresh signal can still step again.
+
+    Deterministic, model-free (NG-4 intact): no LLM call, no ``ctx.journal`` touch. One INFO
+    journal line per stepped axis names the axis, direction, and the up/down counts that drove it
+    (CON-4: counts only, motive-free CON-6 — never a why). A raising collaborator (a bad
+    ``events_between`` read, a malformed matrix apply, a ``live_persona.set`` failure) is caught,
+    logged ERROR, and the stage STILL transitions onward to ``dream_behavior_log`` (mirrors
+    ``DreamTuneStage``'s own never-block-the-terminal posture) — one bad night's persona-tuning
+    pass must never block the reachable terminal.
+    """
+
+    name: str = "dream_persona"
+    transitions: tuple[str, ...] = ("dream_behavior_log",)
+
+    def __init__(self, *, event_log: BehaviorEventLog, live_persona: LivePersona) -> None:
+        self._event_log = event_log
+        self._live_persona = live_persona
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        now = ctx.clock()
+        stepped: list[dict[str, int | str]] = []
+
+        try:
+            window_start = now - timedelta(hours=PERSONA_FEEDBACK_WINDOW_HOURS)
+            events = self._event_log.events_between(window_start, now)
+            phrases = [
+                event.outcome_label for event in events if event.event_type == "persona_feedback"
+            ]
+            pinned_axes = self._live_persona.pinned_axes(now)
+            decisions = decide_persona_steps(phrases, pinned_axes)
+
+            if decisions:
+                matrix = self._live_persona.matrix
+                for decision in decisions:
+                    matrix = commands_apply(
+                        matrix, PersonaCommand(axis=decision.axis, step=decision.direction)
+                    )
+                self._live_persona.set(matrix, explicit=False)
+
+                for decision in decisions:
+                    direction_word = "up" if decision.direction == 1 else "down"
+                    logger.info(
+                        "dream_persona: stepped axis=%s direction=%s up_count=%d down_count=%d",
+                        decision.axis,
+                        direction_word,
+                        decision.up_count,
+                        decision.down_count,
+                    )
+                    stepped.append(
+                        {
+                            "axis": decision.axis,
+                            "direction": direction_word,
+                            "up_count": decision.up_count,
+                            "down_count": decision.down_count,
+                        }
+                    )
+        except Exception:
+            logger.error(
+                "dream_persona: tonight's persona-feedback tuning pass failed; the persona "
+                "matrix stays unchanged until the next successful run",
+                exc_info=True,
+            )
+
+        return Transition(
+            to="dream_behavior_log",
+            output=Artifact(
+                kind=DREAM_PERSONA_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=now),
+                data={"stepped": stepped},
             ),
         )
 
@@ -636,23 +746,25 @@ def build_dream_pathway(
     consolidate: Stage,
     outcome: Stage,
     tune: Stage,
+    persona: Stage,
     behavior_log: Stage,
     window: Stage,
     pattern: Stage,
     terminal: Stage | None = None,
 ) -> StageGraph:
-    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (Q-99f
-    end-state, superseding Q-99e's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
-    ``dream_tune`` -> ``dream_behavior_log`` -> ``dream_window`` -> ``dream_pattern`` ->
-    ``dream_run``, TK-47/TK-175/TK-49/TK-111/TK-112/TK-113).
+    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (TK-214
+    end-state, superseding Q-99f's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
+    ``dream_tune`` -> ``dream_persona`` -> ``dream_behavior_log`` -> ``dream_window`` ->
+    ``dream_pattern`` -> ``dream_run``, TK-47/TK-175/TK-49/TK-214/TK-111/TK-112/TK-113).
 
-    ``consolidate``, ``outcome``, ``tune``, ``behavior_log``, ``window``, and ``pattern`` are ALL
-    REQUIRED and supplied by the caller (mirrors ``build_brief_pathway``'s all-stages-injected
-    convention) — production callers pass a ``DreamConsolidationStage`` built with its real
-    ``reconciler``/``extractor`` collaborators (TK-54's ``build_dream_substrate``), a
+    ``consolidate``, ``outcome``, ``tune``, ``persona``, ``behavior_log``, ``window``, and
+    ``pattern`` are ALL REQUIRED and supplied by the caller (mirrors ``build_brief_pathway``'s
+    all-stages-injected convention) — production callers pass a ``DreamConsolidationStage`` built
+    with its real ``reconciler``/``extractor`` collaborators (TK-54's ``build_dream_substrate``), a
     ``DreamOutcomeStage`` built with its real ``entity_kg``/``labeler``/``user_id`` collaborators,
-    a ``DreamTuneStage`` built with its real ``RatingTuner``, a ``DreamBehaviorLogStage`` built
-    with its real ``store``/``entity_kg``/``user_id`` collaborators, a
+    a ``DreamTuneStage`` built with its real ``RatingTuner``, a ``DreamPersonaStage`` (TK-214)
+    built with its real ``event_log``/``live_persona`` collaborators, a ``DreamBehaviorLogStage``
+    built with its real ``store``/``entity_kg``/``user_id`` collaborators, a
     ``WriteWindowSummariesStage`` (``wombat.behavior.stages.write_window_summaries``, TK-112)
     built with its real ``store``/``writer``/``tz`` collaborators, and a
     ``PatternDetectorStage`` (``wombat.behavior.stages.pattern_detector``, TK-113) built with its
@@ -665,7 +777,7 @@ def build_dream_pathway(
     """
     dream_terminal = terminal if terminal is not None else DreamScaffoldStage()
     return StageGraph(
-        [consolidate, outcome, tune, behavior_log, window, pattern, dream_terminal],
+        [consolidate, outcome, tune, persona, behavior_log, window, pattern, dream_terminal],
         entry=consolidate.name,
     )
 
@@ -688,6 +800,7 @@ __all__ = [
     "DREAM_CONSOLIDATION_REPORT_KIND",
     "DREAM_OUTCOME_REPORT_KIND",
     "DREAM_PATHWAY_ID",
+    "DREAM_PERSONA_REPORT_KIND",
     "DREAM_REPORT_KIND",
     "DREAM_TRIGGER_KIND",
     "DREAM_TUNE_REPORT_KIND",
@@ -695,6 +808,7 @@ __all__ = [
     "DreamBehaviorLogStage",
     "DreamConsolidationStage",
     "DreamOutcomeStage",
+    "DreamPersonaStage",
     "DreamScaffoldStage",
     "DreamTuneStage",
     "build_dream_pathway",
