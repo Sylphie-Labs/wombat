@@ -143,6 +143,11 @@ def test_assemble_runtime_default_replay_pending_calls_rebuild_from_journal(
         return cold
 
     monkeypatch.setattr(PendingSet, "rebuild_from_journal", spy_rebuild)
+    # TK-203 (Q-104): the schema pre-flight also runs unconditionally on this replay_pending=True
+    # posture, ahead of rebuild_from_journal -- stubbed out here (a real, separate connection
+    # attempt against the fake DSN) so this test stays about ONE thing: rebuild_from_journal
+    # routing. Real pg-backed pre-flight coverage lives in tests/unit/test_schema_preflight.py.
+    monkeypatch.setattr(bootstrap, "ensure_all_schemas", lambda dsn: None)
 
     bundle = bootstrap.assemble_runtime(
         config=_config(), dsn="postgresql://fake-host/fake-db", params=op

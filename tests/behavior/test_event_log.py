@@ -183,8 +183,9 @@ def _targets_event_log_module(dotted_module: str) -> bool:
 
 def test_ac2_only_pathways_and_bootstrap_import_behavior_event_log() -> None:
     """AC4/NG-3: the only src/wombat importers of wombat.behavior.event_log are
-    pathways/dream_pathway.py, bootstrap.py, and (TK-112) behavior/window_detector.py +
-    behavior/stages/write_window_summaries.py — no dashboard/analytics consumer anywhere."""
+    pathways/dream_pathway.py, bootstrap.py, (TK-112) behavior/window_detector.py +
+    behavior/stages/write_window_summaries.py, and (TK-203) schema_preflight.py (composition-root
+    schema application, not a reader) — no dashboard/analytics consumer anywhere."""
     src_root = Path(__file__).resolve().parents[2] / "src" / "wombat"
     event_log_module = src_root / "behavior" / "event_log.py"
 
@@ -207,6 +208,7 @@ def test_ac2_only_pathways_and_bootstrap_import_behavior_event_log() -> None:
         src_root / "bootstrap.py",
         src_root / "behavior" / "window_detector.py",
         src_root / "behavior" / "stages" / "write_window_summaries.py",
+        src_root / "schema_preflight.py",
     }
 
 

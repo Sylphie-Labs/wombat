@@ -182,6 +182,7 @@ from .pathways.dream_trigger import (
 )
 from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
+from .schema_preflight import ensure_all_schemas
 from .sinks.speak import SpeakSink
 from .sinks.tts_adapter import Pyttsx3Adapter, TTSAdapter
 from .sources.bootstrap import (
@@ -594,6 +595,14 @@ def assemble_runtime(
     assembly (tests/tooling): the cold ``PendingSet(journal=..., max_pending=...)`` constructor
     stands, an unreachable ``dsn`` is safe, and the first real I/O happens once the returned
     bundle is actually driven.
+
+    TK-203 (CR3-1, Q-104): on the SAME ``replay_pending=True`` posture, assembly's FIRST pg act
+    (before even the eager replay above) is ``schema_preflight.ensure_all_schemas(dsn)`` — it
+    applies every packaged ``ensure_schema`` migration so a brand-new, empty Postgres boots
+    clean instead of crashing the eager replay with ``UndefinedTable`` (the 2026-07-09 incident).
+    Gated on ``replay_pending`` rather than run unconditionally: that flag already marks this
+    posture as pg-eager, so the pre-flight adds no new reachability requirement, and the
+    ``replay_pending=False`` posture stays connection-free as documented above.
     """
     op = params if params is not None else load_operating_params()
 
@@ -601,6 +610,11 @@ def assemble_runtime(
     # PathwayRegistry. This EXACT registry is handed to build_engine below, so the pathway
     # registered on it here is what the Engine resolves at run/resume/fire_timer time.
     substrate = build_substrate()
+
+    # TK-203 (CR3-1, Q-104): the pre-flight — the FIRST pg act on this posture, before the eager
+    # replay below — applies every packaged migration so a brand-new database boots clean.
+    if replay_pending:
+        ensure_all_schemas(dsn)
 
     queue = WombatQueue(dsn, max_size=op.max_pending)
     pending_journal = PgPendingJournal(dsn)
