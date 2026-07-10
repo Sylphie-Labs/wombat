@@ -30,6 +30,11 @@ terminal node. ``transitions`` is now ``("speak",)`` and ``run()`` returns ``Tra
 "speak", output=...)`` carrying the SAME ``wombat.composed_output`` artifact, byte-identical,
 instead of ``Done`` — ``SpeakSink`` (``sinks/speak.py``) is the new terminal, reading this exact
 artifact via ``ctx.last_output("compose")``.
+
+TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona``) — ``None``
+(the default) keeps the frozen-at-``__init__`` instruction above, byte-identical to every existing
+caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.COMPOSE)`` fresh EVERY
+turn instead, so a hot-applied persona matrix change lands on the NEXT rendered turn, no restart.
 """
 
 from __future__ import annotations
@@ -45,6 +50,8 @@ from cogworx.model.base import ChatMessage
 from wombat.compose.templates import TemplateComposer, format_payload_fields
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
+from wombat.persona.builder import Mouth
+from wombat.persona.live import LivePersona
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     compose_request_from_artifact_data,
@@ -83,6 +90,7 @@ class ComposeStage:
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         spend_ledger: DailySpendLedger | None = None,
         daily_token_ceiling: int | None = None,
+        live_persona: LivePersona | None = None,
     ) -> None:
         # AC3: fail at CONSTRUCTION, not first call. load_config() already fails loud on an
         # ABSENT env var; this check also catches a blank-string value pydantic-settings would
@@ -96,8 +104,14 @@ class ComposeStage:
         # and preserving TK-8's exact behavior for any caller that doesn't wire them.
         self._spend_ledger = spend_ledger
         self._daily_token_ceiling = daily_token_ceiling
-        # TK-194: built ONCE from config.wombat_assistant_name — display/persona only.
+        # TK-194: built ONCE from config.wombat_assistant_name — display/persona only. Stands as
+        # the frozen fallback when live_persona is None (TK-209).
         self._system_instruction = _system_instruction(config.wombat_assistant_name)
+        # TK-209 (EP-33): OPTIONAL — None preserves the frozen-at-__init__ instruction above
+        # (every existing caller/test stands unchanged); when provided, run() reads
+        # live_persona.instruction(Mouth.COMPOSE) fresh EVERY turn instead (hot-apply, no
+        # restart).
+        self._live_persona = live_persona
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("compose_dispatch")
@@ -106,8 +120,16 @@ class ComposeStage:
             raise RuntimeError(msg)
         item_id, item_kind, payload = compose_request_from_artifact_data(art.data)
 
+        # TK-209: render-time read when a LivePersona is wired — a matrix change applies on the
+        # NEXT rendered turn, no restart. None -> the frozen-at-__init__ instruction (unchanged).
+        system_instruction = (
+            self._live_persona.instruction(Mouth.COMPOSE)
+            if self._live_persona is not None
+            else self._system_instruction
+        )
+
         messages = [
-            ChatMessage(role="system", content=self._system_instruction),
+            ChatMessage(role="system", content=system_instruction),
             ChatMessage(
                 role="user",
                 content=f"item_kind: {item_kind.value}\n{format_payload_fields(payload)}",

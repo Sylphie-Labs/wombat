@@ -20,6 +20,7 @@ standing-loop cycle (AC5) live in ``tests/integration/test_serve_boot.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 from collections.abc import Iterator, Sequence
@@ -56,18 +57,24 @@ import wombat.integrations.gmail.session as gmail_session_module
 from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat import bootstrap, runtime
 from wombat.behavior.event_log import BehaviorEventLog
+from wombat.behavior.stages.reflection_compose import ReflectionComposeStage
 from wombat.bootstrap import RuntimeBundle
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
 from wombat.gate.models import ItemKind
 from wombat.gate.pending_journal_pg import PgPendingJournal
+from wombat.integrations.gmail.draft_composer import DraftComposer
 from wombat.params import load_operating_params
 from wombat.pathways.drain_pathway import build_drain_pathway
+from wombat.persona.builder import Mouth
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX, Directness, Humor
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
 from wombat.sinks.speak import SpeakSink
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.sources.registry import SourceRegistry
+from wombat.stages.brief_compose_stage import BriefComposeStage
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
@@ -88,6 +95,12 @@ _FAKE_DSN = "postgresql://fake-host/fake-db"
 
 def _config() -> WombatConfig:
     return WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com")
+
+
+def _live_persona(settings_path: str = "wombat.settings.json") -> LivePersona:
+    """A hand-rolled RuntimeBundle construction's LivePersona (TK-209) — every field below is
+    additive; this is not what these tests are exercising."""
+    return LivePersona(DEFAULT_MATRIX, "Steward", settings_path=settings_path)
 
 
 @pytest.fixture()
@@ -650,6 +663,7 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         queue=queue,
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
+        live_persona=_live_persona(),
         brief_pathway_id=None,
         brief_schedule_pathway_id=None,
         entity_kg=entity_kg,
@@ -763,6 +777,7 @@ def _serve_bundle(
         queue=WombatQueue(_FAKE_DSN, max_size=10),
         daily_ledger=DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC")),
         compose_stage=ComposeStage(config=_config(), template_composer=TemplateComposer()),
+        live_persona=_live_persona(),
         brief_pathway_id=None,
         brief_schedule_pathway_id=schedule_pathway_id,
         entity_kg=entity_kg,
@@ -1020,6 +1035,7 @@ async def test_action_trail_writer_closed_on_teardown_when_present(
         queue=queue,
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
+        live_persona=_live_persona(),
         brief_pathway_id=None,
         brief_schedule_pathway_id=None,
         entity_kg=entity_kg,
@@ -1101,6 +1117,7 @@ async def test_behavior_event_log_closed_on_teardown(monkeypatch: pytest.MonkeyP
         queue=queue,
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
+        live_persona=_live_persona(),
         brief_pathway_id=None,
         brief_schedule_pathway_id=None,
         entity_kg=entity_kg,
@@ -1120,3 +1137,132 @@ async def test_behavior_event_log_closed_on_teardown(monkeypatch: pytest.MonkeyP
         await task
 
     assert close_calls == [behavior_event_log]
+
+
+# --- TK-209 (EP-33, DEC-34/DEC-37(g)): LivePersona threaded through assemble_runtime -----------
+
+
+def test_assemble_runtime_threads_the_same_live_persona_into_compose_and_reflection() -> None:
+    """AC1 (identity-through-reroute, bundle-level): compose_stage and the reflection mouth
+    (reached via the registered drain graph — reflection_compose exposes no bootstrap-level
+    field of its own) both hold the SAME LivePersona instance bundle.live_persona exposes."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
+
+    assert bundle.compose_stage._live_persona is bundle.live_persona
+
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    reflection_stage = graph.get("reflection_compose")
+    assert isinstance(reflection_stage, ReflectionComposeStage)
+    assert reflection_stage._instructions_contributor._live_persona is bundle.live_persona
+
+
+def test_assemble_runtime_with_brief_path_threads_live_persona_into_brief_compose(
+    tmp_path: Path,
+) -> None:
+    op = load_operating_params()
+    config = _config_with_brief_path(str(tmp_path / "brief.txt"))
+
+    bundle = bootstrap.assemble_runtime(
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
+
+    assert bundle.brief_pathway_id is not None
+    graph = bundle.pathways.get(bundle.brief_pathway_id)
+    brief_stage = graph.get("brief_compose")
+    assert isinstance(brief_stage, BriefComposeStage)
+    assert brief_stage._live_persona is bundle.live_persona
+
+
+def test_assemble_runtime_with_google_creds_threads_live_persona_into_draft_composer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gmail_session_module, "GmailAuth", _FakeGmailAuth)
+    monkeypatch.setattr(gmail_session_module, "AuthorizedSession", lambda creds: object())
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config_with_google(),
+        dsn=_FAKE_DSN,
+        params=op,
+        replay_pending=False,
+        gmail_token_store=_FakeGmailTokenStore(initial="fake-stored-token"),
+    )
+
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    draft_stage = graph.get("draft_composer")
+    assert isinstance(draft_stage, DraftComposer)
+    assert draft_stage._live_persona is bundle.live_persona
+
+
+def test_assemble_runtime_default_config_live_persona_renders_byte_identical_instructions() -> None:
+    """AC1: a default-config assembly's LivePersona renders every mouth's instruction text
+    byte-identical to the live TK-194/reflection constants — the TK-207 identity holds THROUGH
+    the whole assemble_runtime reroute, not just at the stage-constructor level."""
+    from wombat.behavior.stages.reflection_compose import _SYSTEM_INSTRUCTION as reflection_live
+    from wombat.compose.brief_template import brief_system_instruction as brief_live
+    from wombat.integrations.gmail.draft_composer import _system_instruction as draft_live
+    from wombat.stages.compose import _system_instruction as compose_live
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(), dsn=_FAKE_DSN, params=op, replay_pending=False
+    )
+
+    live_persona = bundle.live_persona
+    assert live_persona.instruction(Mouth.COMPOSE) == compose_live("Steward")
+    assert live_persona.instruction(Mouth.BRIEF) == brief_live("Steward")
+    assert live_persona.instruction(Mouth.DRAFT) == draft_live("Steward")
+    assert live_persona.instruction(Mouth.REFLECTION) == reflection_live
+
+
+# --- TK-209/DEC-37(g): the Sweeper clock callable also polls LivePersona -----------------------
+
+
+async def test_sweeper_clock_polls_live_persona_and_still_returns_a_datetime(
+    tmp_path: Path,
+) -> None:
+    """AC4 (beat pickup): an external rewrite of the persona keys is picked up by ONE invocation
+    of the callable ``_drive_and_serve`` wires into ``Sweeper(clock=...)`` — tested directly here,
+    never by spinning ``run_forever``."""
+    settings_path = tmp_path / "wombat.settings.json"
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    bundle = replace(bundle, live_persona=live_persona)
+
+    # The settings-app path (TK-197/TK-200): an external process writes the five persona keys.
+    settings_path.write_text(
+        json.dumps(
+            {
+                "wombat_persona_brevity": "terse",
+                "wombat_persona_warmth": "reserved",
+                "wombat_persona_directness": "gentle",
+                "wombat_persona_humor": "dry",
+                "wombat_persona_proactivity": "balanced",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    clock = runtime._sweeper_clock(bundle)
+    now = clock()
+
+    assert isinstance(now, datetime)
+    assert live_persona.matrix.humor is Humor.DRY
+    assert live_persona.matrix.directness is Directness.GENTLE
+
+
+async def test_sweeper_clock_no_settings_file_never_raises_and_returns_a_datetime() -> None:
+    """A boot with no wombat.settings.json at all (the common case) must not break the callable —
+    poll_settings_file() no-ops (mtime stays None -> None), the clock still returns now()."""
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path="wombat.settings.json.does-not-exist"
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    bundle = replace(bundle, live_persona=live_persona)
+
+    clock = runtime._sweeper_clock(bundle)
+
+    assert isinstance(clock(), datetime)

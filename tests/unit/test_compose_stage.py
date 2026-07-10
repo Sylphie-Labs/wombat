@@ -22,6 +22,8 @@ from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.gate.models import ItemKind
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX, Humor, PersonaMatrix
 from wombat.stages.artifacts import (
     COMPOSE_REQUEST,
     COMPOSED_OUTPUT,
@@ -262,6 +264,69 @@ async def test_tk194_configured_assistant_name_renders_in_system_instruction_onl
     assert "Marvin" in system_msg.content
     # Structural non-goal: the name is display/persona only -- name-free everywhere else.
     assert "Marvin" not in user_msg.content
+
+
+# --- TK-209: OPTIONAL live_persona renders at RENDER time and hot-applies between turns ----------
+
+
+async def test_tk209_no_live_persona_preserves_the_frozen_default_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    model = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    ctx = _ctx(model)
+    # live_persona defaults to None.
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+
+    await stage.run(ctx)
+
+    system_msg, _user_msg = model.calls[0]
+    assert system_msg.content == (
+        "You are Steward, a quiet steward. Phrase this one item for the user in one terse, "
+        "calm line. No preamble."
+    )
+
+
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
+    tmp_path: Path,
+) -> None:
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+    stage = ComposeStage(
+        config=_config(), template_composer=TemplateComposer(), live_persona=live_persona
+    )
+
+    model_one = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx(model_one))
+    first_system_msg, _ = model_one.calls[0]
+
+    dry_matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=DEFAULT_MATRIX.directness,
+        humor=Humor.DRY,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    live_persona.set(dry_matrix)  # between two turns — no restart, no new stage instance
+
+    model_two = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx(model_two))
+    second_system_msg, _ = model_two.calls[0]
+
+    # The FIRST turn still rendered under DEFAULT_MATRIX (no restart needed to prove that).
+    assert first_system_msg.content == (
+        "You are Steward, a quiet steward. Phrase this one item for the user in one terse, "
+        "calm line. No preamble."
+    )
+    # The SECOND turn, rendered AFTER set(), picks up the new matrix with zero restart.
+    assert second_system_msg.content != first_system_msg.content
 
 
 # --- wire round-trips: json.dumps + inverse must be lossless (Q-49 regressions) -------------------

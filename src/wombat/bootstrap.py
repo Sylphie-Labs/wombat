@@ -180,6 +180,8 @@ from .pathways.dream_trigger import (
     DreamTimerStage,
     build_dream_schedule_pathway,
 )
+from .persona.live import LivePersona
+from .persona.matrix import matrix_from_config
 from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
 from .schema_preflight import ensure_all_schemas
@@ -329,6 +331,7 @@ def build_compose_stage(
     params: OperatingParams | None = None,
     tz: ZoneInfo = _UTC_ZONE,
     daily_ledger: DailyLedger | None = None,
+    live_persona: LivePersona | None = None,
 ) -> ComposeStage:
     """Assemble the mouth's ``ComposeStage`` wired with TK-9 layer 2 (Q-68): a real
     ``DailySpendLedger`` (over a ``DailyLedger`` on ``dsn``) and the ``mouth_daily_token_ceiling``
@@ -339,6 +342,10 @@ def build_compose_stage(
     constructed ``DailyLedger`` so this stage shares that ONE instance/connection/close()
     lifecycle instead of opening a second one on the same ``dsn``. Defaults to constructing a
     fresh ``DailyLedger(dsn, tz=tz)`` for standalone callers (tests, ``scripts/demo_drain.py``).
+
+    ``live_persona`` (TK-209) threads the runtime persona authority through unchanged — ``None``
+    (the default) preserves ``ComposeStage``'s own frozen-at-__init__ instruction behavior for
+    every standalone caller that doesn't wire one.
     """
     op = params if params is not None else load_operating_params()
     ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
@@ -348,6 +355,7 @@ def build_compose_stage(
         template_composer=TemplateComposer(),
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
+        live_persona=live_persona,
     )
 
 
@@ -358,6 +366,7 @@ def build_brief_compose_stage(
     params: OperatingParams | None = None,
     tz: ZoneInfo = _UTC_ZONE,
     daily_ledger: DailyLedger | None = None,
+    live_persona: LivePersona | None = None,
 ) -> BriefComposeStage:
     """Assemble the morning brief's ``BriefComposeStage`` wired with the SAME TK-9 layer 2 budget
     plumbing as ``build_compose_stage``: a real ``DailySpendLedger`` over a ``DailyLedger`` on the
@@ -369,6 +378,10 @@ def build_brief_compose_stage(
     already constructed ``DailyLedger`` so ``assemble_runtime`` closes exactly one connection per
     assembly, not one per compose stage. Defaults to constructing a fresh one for standalone
     callers.
+
+    ``live_persona`` (TK-209) threads the runtime persona authority through unchanged — ``None``
+    (the default) preserves ``BriefComposeStage``'s own frozen-at-__init__ instruction behavior
+    for every standalone caller that doesn't wire one.
     """
     op = params if params is not None else load_operating_params()
     ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
@@ -378,6 +391,7 @@ def build_brief_compose_stage(
         tz=tz,
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
+        live_persona=live_persona,
     )
 
 
@@ -459,6 +473,7 @@ def build_draft_composer_stage(
     writer: DraftTrailWriter,
     clock: Callable[[], datetime] = _utc_now,
     assistant_name: str = "Steward",
+    live_persona: LivePersona | None = None,
 ) -> DraftComposer:
     """Assemble TK-78's ``DraftComposer`` via a small bootstrap factory (TK-177, the Q-69
     assemble-via-factory lesson) — a thin, directly-testable wrapper mirroring
@@ -466,9 +481,13 @@ def build_draft_composer_stage(
     constructing the stage inline. ``DraftComposer.__init__`` already self-binds the TK-151
     external tier policy (``bind_external_tier``) — nothing further to wire here. ``assistant_name``
     (TK-194) threads ``config.wombat_assistant_name`` into the system instruction only; the default
-    preserves every existing caller's behavior unchanged.
+    preserves every existing caller's behavior unchanged. ``live_persona`` (TK-209) threads the
+    runtime persona authority through unchanged — ``None`` (the default) preserves the frozen
+    ``assistant_name``-only instruction for every standalone caller that doesn't wire one.
     """
-    return DraftComposer(writer=writer, clock=clock, assistant_name=assistant_name)
+    return DraftComposer(
+        writer=writer, clock=clock, assistant_name=assistant_name, live_persona=live_persona
+    )
 
 
 def _guard_drain_batch_size(batch_size: int) -> None:
@@ -518,6 +537,11 @@ class RuntimeBundle:
     queue: WombatQueue
     daily_ledger: DailyLedger
     compose_stage: ComposeStage
+    # TK-209 (EP-33, DEC-34/DEC-37(g)): the ONE composition-root-owned runtime persona authority —
+    # the same instance threaded into all four mouth constructions above (AC1's identity-through-
+    # reroute holds because every mouth reads THIS instance). Also the TK-212/TK-214/TK-215
+    # write/read seam (voice commands, nightly persona learning, gate proactivity actuation).
+    live_persona: LivePersona
     # TK-96: the registered ``wombat.brief`` pathway id, or ``None`` when ``config.wombat_brief_
     # path`` was blank/absent and registration was skipped (TK-97's entrypoint reads this field).
     brief_pathway_id: str | None
@@ -591,6 +615,13 @@ def assemble_runtime(
     ``replay_pending=False`` posture stays connection-free as documented above.
     """
     op = params if params is not None else load_operating_params()
+
+    # TK-209 (EP-33, DEC-34/DEC-37(g)): the ONE composition-root-owned runtime persona authority
+    # — built once here from the config-level persona fields, threaded into all four mouth
+    # constructions below, and exposed on RuntimeBundle.live_persona (the TK-212/TK-214/TK-215
+    # write/read seam). Voice-off and default-config boots construct this identically — it is not
+    # a voice feature.
+    live_persona = LivePersona(matrix_from_config(config), config.wombat_assistant_name)
 
     # The v1 cold-boot substrate (Q-36/TK-14): in-memory journal/graph/latent + a FRESH
     # PathwayRegistry. This EXACT registry is handed to build_engine below, so the pathway
@@ -735,7 +766,7 @@ def assemble_runtime(
             exc_info=True,
         )
         reflection_kb = []
-    reflection_compose_stage = ReflectionComposeStage(kb=reflection_kb)
+    reflection_compose_stage = ReflectionComposeStage(kb=reflection_kb, live_persona=live_persona)
     composer_by_kind[ItemKind.REFLECTION] = "reflection_compose"
     draft_composer_stage: DraftComposer | None = None
     action_trail_writer: ActionTrailWriter | None = None
@@ -763,6 +794,7 @@ def assemble_runtime(
                 writer=action_trail_writer,
                 clock=_utc_now,
                 assistant_name=config.wombat_assistant_name,
+                live_persona=live_persona,
             )
             composer_by_kind[ItemKind.DRAFT] = "draft_composer"
     else:
@@ -778,7 +810,12 @@ def assemble_runtime(
     # dsn — runtime.py's teardown only ever closed bundle.daily_ledger, so a second instance
     # would leak its lazily-opened connection past process shutdown.
     compose_stage = build_compose_stage(
-        config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
+        config=config,
+        dsn=dsn,
+        params=op,
+        tz=tz,
+        daily_ledger=daily_ledger,
+        live_persona=live_persona,
     )
     # TK-164 (Q-96): the new drain-graph terminal — compose now transitions onward to "speak"
     # (the EP-30-reserved flip) instead of ending the spine itself; ONE SpeakSink instance is
@@ -928,7 +965,12 @@ def assemble_runtime(
         brief_force_flush_stage = BriefForceFlushStage(select_items=gate.select_items, tz=tz)
         # TK-173 (CR-15): the SAME shared DailyLedger instance, not a third connection.
         brief_compose_stage = build_brief_compose_stage(
-            config=config, dsn=dsn, params=op, tz=tz, daily_ledger=daily_ledger
+            config=config,
+            dsn=dsn,
+            params=op,
+            tz=tz,
+            daily_ledger=daily_ledger,
+            live_persona=live_persona,
         )
         # TK-164 (Q-96): bind the SAME TTS adapter TYPE into the brief's already-built injected
         # speak seam (TK-101) — discharges the "TK-164 binds real TTS into THIS seam" promise
@@ -1022,6 +1064,7 @@ def assemble_runtime(
         queue=queue,
         daily_ledger=daily_ledger,
         compose_stage=compose_stage,
+        live_persona=live_persona,
         brief_pathway_id=brief_pathway_id,
         brief_schedule_pathway_id=brief_schedule_pathway_id,
         entity_kg=entity_kg,

@@ -17,9 +17,12 @@ queue internals (CON-1/Q-50 payload boundary, inherited structurally from
 
 **Assembly** (Q-102d/e): a LOCAL, per-turn ``cogworx.context.assembler.ContextAssembler`` —
 never a shared/global instance — with EXACTLY three slots: ``instructions`` (head, required,
-priority 0) carries a FIXED system prompt (module-local static contributor, never a prompt
-iterated per pattern) forbidding clinical/diagnosis language, motive inference, and multi-sentence
-analytics; ``reflection_hints`` (head, preferred, priority 1) is TK-118's
+priority 0) carries the system prompt, forbidding clinical/diagnosis language, motive inference,
+and multi-sentence analytics. TK-209 (EP-33): its contributor is bound to an OPTIONAL
+``live_persona`` at construction — ``None`` (default, every existing caller unchanged) renders the
+fixed ``_SYSTEM_INSTRUCTION`` constant below (the TK-207 oracle); when bound, it reads
+``live_persona.instruction(Mouth.REFLECTION)`` fresh each turn instead (hot-apply, no restart).
+``reflection_hints`` (head, preferred, priority 1) is TK-118's
 ``PhrasingHintContributor`` bound to this turn's ``pattern_id`` — KB guidance text ONLY, never
 recited verbatim as the model's output (NG-2/CON-6, proven by this stage's own AC4/AC2); ``task``
 (tail, required, priority 0) is left UNWIRED so the assembler's built-in fallback synthesizes it
@@ -60,6 +63,8 @@ from cogworx.loop.stage import StageContext
 from wombat.gate.models import ItemKind
 from wombat.kb.contributors.phrasing_hint_contributor import PhrasingHintContributor
 from wombat.kb.schema import KBEntry
+from wombat.persona.builder import Mouth
+from wombat.persona.live import LivePersona
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     compose_request_from_artifact_data,
@@ -91,29 +96,33 @@ _SLOTS: tuple[SlotSpec, ...] = (
 
 
 class _InstructionsContributor:
-    """Tiny module-local static contributor for the ``instructions`` slot.
+    """The ``instructions`` slot's contributor — bound to an OPTIONAL ``LivePersona`` (TK-209).
 
-    Always returns the SAME one ``SlotChunk`` carrying ``_SYSTEM_INSTRUCTION`` — no per-turn
-    variation, no I/O, never raises.
+    ``live_persona=None`` (the default, byte-identical to pre-TK-209 behavior) always returns
+    ``_SYSTEM_INSTRUCTION`` — the fixed constant, the TK-207 oracle this module is measured
+    against. When bound, ``contribute()`` reads ``live_persona.instruction(Mouth.REFLECTION)``
+    fresh EVERY call (this stage's render time, since ``run()`` builds a LOCAL assembler and calls
+    ``assemble()`` per turn) — a hot-applied persona change lands on the NEXT rendered turn, no
+    restart. No I/O, never raises.
     """
+
+    def __init__(self, live_persona: LivePersona | None = None) -> None:
+        self._live_persona = live_persona
 
     async def contribute(
         self,
         request: ContextRequest,
         allocation: SlotAllocation,
     ) -> SlotContent:
+        text = (
+            self._live_persona.instruction(Mouth.REFLECTION)
+            if self._live_persona is not None
+            else _SYSTEM_INSTRUCTION
+        )
         return SlotContent(
-            chunks=(
-                SlotChunk(
-                    text=_SYSTEM_INSTRUCTION, key="instructions:0", source_slot="instructions"
-                ),
-            ),
+            chunks=(SlotChunk(text=text, key="instructions:0", source_slot="instructions"),),
             status="ok",
         )
-
-
-# ONE shared, stateless instance — safe to reuse across turns/instances (no per-turn state).
-_INSTRUCTIONS_CONTRIBUTOR = _InstructionsContributor()
 
 
 def _task_text(payload: dict[str, Any]) -> str:
@@ -151,9 +160,16 @@ class ReflectionComposeStage:
         *,
         kb: Sequence[KBEntry],
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+        live_persona: LivePersona | None = None,
     ) -> None:
         self._kb = kb
         self._timeout_seconds = timeout_seconds
+        # TK-209 (EP-33): OPTIONAL — None preserves the fixed _SYSTEM_INSTRUCTION constant
+        # (every existing caller/test stands unchanged); when provided, the contributor reads
+        # live_persona.instruction(Mouth.REFLECTION) fresh EVERY turn instead (hot-apply, no
+        # restart). Bound ONCE here — the contributor holds a reference, not a frozen string, so
+        # a later live_persona.set() is still picked up on the NEXT turn.
+        self._instructions_contributor = _InstructionsContributor(live_persona)
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("compose_dispatch")
@@ -167,7 +183,7 @@ class ReflectionComposeStage:
         # PER TURN, a LOCAL assembler — never shared/global (Q-102d): the reflection_hints
         # contributor is bound to THIS turn's pattern_id alone.
         assembler = ContextAssembler(slots=_SLOTS)
-        assembler.register("instructions", _INSTRUCTIONS_CONTRIBUTOR)
+        assembler.register("instructions", self._instructions_contributor)
         assembler.register(
             "reflection_hints", PhrasingHintContributor(pattern_id or "", self._kb)
         )

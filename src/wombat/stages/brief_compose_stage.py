@@ -26,6 +26,11 @@ as ``build_compose_stage``, so drain and brief share ONE daily token cap.
 (provenance only) — this stage NEVER touches ``ctx.journal``. Terminal wire is
 ``wombat.brief_text`` (``BRIEF_TEXT``); the stage always transitions to ``brief_deliver``
 (TK-101's declared-ahead name), even on a fully degraded run.
+
+TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona``) — ``None``
+(the default) keeps the frozen-at-``__init__`` instruction above, byte-identical to every existing
+caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.BRIEF)`` fresh EVERY
+turn instead, so a hot-applied persona matrix change lands on the NEXT rendered turn, no restart.
 """
 
 from __future__ import annotations
@@ -43,6 +48,8 @@ from wombat.compose.brief_template import brief_system_instruction, render_brief
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
 from wombat.domain.brief_decision_artifact import BriefDecisionArtifact
+from wombat.persona.builder import Mouth
+from wombat.persona.live import LivePersona
 from wombat.stages.artifacts import BRIEF_TEXT, brief_text_to_artifact_data
 
 logger = logging.getLogger(__name__)
@@ -66,6 +73,7 @@ class BriefComposeStage:
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         spend_ledger: DailySpendLedger | None = None,
         daily_token_ceiling: int | None = None,
+        live_persona: LivePersona | None = None,
     ) -> None:
         # Fail at CONSTRUCTION, not first call (mirrors ComposeStage's AC3 posture, TK-8).
         if not config.deepseek_api_key.get_secret_value().strip():
@@ -78,8 +86,13 @@ class BriefComposeStage:
         # Layer 2 (Q-68 precedent): both default to None, disabling the daily ceiling gate.
         self._spend_ledger = spend_ledger
         self._daily_token_ceiling = daily_token_ceiling
-        # TK-194: built ONCE from config.wombat_assistant_name — display/persona only.
+        # TK-194: built ONCE from config.wombat_assistant_name — display/persona only. Stands as
+        # the frozen fallback when live_persona is None (TK-209).
         self._system_instruction = brief_system_instruction(config.wombat_assistant_name)
+        # TK-209 (EP-33): OPTIONAL — None preserves the frozen-at-__init__ instruction above
+        # (every existing caller/test stands unchanged); when provided, run() reads
+        # live_persona.instruction(Mouth.BRIEF) fresh EVERY turn instead (hot-apply, no restart).
+        self._live_persona = live_persona
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("brief_force_flush")
@@ -92,8 +105,16 @@ class BriefComposeStage:
         # and the S8 fallback body, so the two paths can never drift apart.
         body = render_brief_lines(artifact, tz=self._tz)
 
+        # TK-209: render-time read when a LivePersona is wired — a matrix change applies on the
+        # NEXT rendered turn, no restart. None -> the frozen-at-__init__ instruction (unchanged).
+        system_instruction = (
+            self._live_persona.instruction(Mouth.BRIEF)
+            if self._live_persona is not None
+            else self._system_instruction
+        )
+
         messages = [
-            ChatMessage(role="system", content=self._system_instruction),
+            ChatMessage(role="system", content=system_instruction),
             ChatMessage(role="user", content=body),
         ]
 

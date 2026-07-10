@@ -22,12 +22,14 @@ from cogworx.model.base import ModelResponse, Usage
 
 from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat.calendar.models import CalendarEvent
-from wombat.compose.brief_template import render_brief_lines
+from wombat.compose.brief_template import brief_system_instruction, render_brief_lines
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
 from wombat.domain.brief_decision_artifact import BriefBucket, BriefDecisionArtifact
 from wombat.domain.brief_payload import GmailBriefItem
 from wombat.integrations.gmail.triage import PriorityBand
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX, Humor, PersonaMatrix
 from wombat.stages.artifacts import BRIEF_DECISION, BRIEF_TEXT, brief_text_from_artifact_data
 from wombat.stages.brief_compose_stage import BriefComposeStage
 
@@ -389,6 +391,47 @@ async def test_tk194_configured_assistant_name_renders_in_system_instruction_onl
     assert "Marvin" in system_msg.content
     # Structural non-goal: the name is display/persona only -- name-free everywhere else.
     assert "Marvin" not in user_msg.content
+
+
+# --- TK-209: OPTIONAL live_persona renders at RENDER time and hot-applies between turns ----------
+
+
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
+    tmp_path: Path,
+) -> None:
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+    sealed = _sealed_artifact()
+    stage = BriefComposeStage(config=_config(), tz=_TZ, live_persona=live_persona)
+
+    model_one = FakeModel(
+        response=ModelResponse(
+            text="Here's your brief.", model_id="deepseek-chat", finish_reason="stop"
+        )
+    )
+    await stage.run(_ctx(model_one, sealed))
+    first_system_msg, _ = model_one.calls[0]
+    assert first_system_msg.content == brief_system_instruction("Steward")
+
+    dry_matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=DEFAULT_MATRIX.directness,
+        humor=Humor.DRY,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    live_persona.set(dry_matrix)  # between two turns — no restart, no new stage instance
+
+    model_two = FakeModel(
+        response=ModelResponse(
+            text="Here's your brief.", model_id="deepseek-chat", finish_reason="stop"
+        )
+    )
+    await stage.run(_ctx(model_two, sealed))
+    second_system_msg, _ = model_two.calls[0]
+
+    assert second_system_msg.content != first_system_msg.content
 
 
 # --- never touches ctx.journal --------------------------------------------------------------------

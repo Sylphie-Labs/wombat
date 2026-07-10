@@ -13,6 +13,7 @@ import asyncio
 import base64
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -41,6 +42,8 @@ from wombat.integrations.gmail.draft_composer import (
     make_drafts_create_capability,
 )
 from wombat.integrations.gmail.reply_intent import ReplyIntent
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX, Directness, PersonaMatrix
 from wombat.safety.taint import READ_EMAIL_BODY_CAPABILITY, BodyProvider, register_read_email_body
 from wombat.safety.tier_policy import EXTERNAL_DISPATCH_POLICY
 from wombat.stages.artifacts import COMPOSE_REQUEST, compose_request_to_artifact_data
@@ -569,6 +572,58 @@ async def test_tk194_configured_assistant_name_renders_in_system_instruction_onl
     assert "Marvin" in system_msg.content
     # Structural non-goal: the name is display/persona only -- name-free everywhere else.
     assert "Marvin" not in user_msg.content
+
+
+# ------------------------------------------------------------------------------------ TK-209
+
+
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
+    tmp_path: Path,
+) -> None:
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+    writer = _RecordingWriter([])
+    reply_intent = _reply_intent()
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW, live_persona=live_persona)
+
+    # A FRESH gate/registry per turn (mirrors production: the engine rebinds the gate fresh
+    # before every stage) — a SECOND dispatch on the SAME gate would raise TierViolation.
+    registry_one = Registry()
+    _register_draft_capability(registry_one, [])
+    gate_one = ToolGate(registry_one, policy=EXTERNAL_DISPATCH_POLICY)
+    model_one = FakeModel(
+        response=ModelResponse(text="Thanks!", model_id="m", finish_reason="stop")
+    )
+    ctx_one = _FakeDraftContext(gate_one, registry_one, reply_intent, model_one)
+
+    await stage.run(ctx_one)  # type: ignore[arg-type]
+    first_system_msg, _ = model_one.calls[0]
+    assert first_system_msg.content.startswith("You are Steward, a quiet steward drafting")
+
+    # Humor never applies to DRAFT (TK-207, DEC-37(c)) — use directness, which applies to every
+    # mouth, so this actually proves the hot-apply.
+    blunt_matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=Directness.BLUNT,
+        humor=DEFAULT_MATRIX.humor,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    live_persona.set(blunt_matrix)  # between two turns — no restart, no new stage instance
+
+    registry_two = Registry()
+    _register_draft_capability(registry_two, [])
+    gate_two = ToolGate(registry_two, policy=EXTERNAL_DISPATCH_POLICY)
+    model_two = FakeModel(
+        response=ModelResponse(text="Thanks again!", model_id="m", finish_reason="stop")
+    )
+    ctx_two = _FakeDraftContext(gate_two, registry_two, reply_intent, model_two)
+
+    await stage.run(ctx_two)  # type: ignore[arg-type]
+    second_system_msg, _ = model_two.calls[0]
+
+    assert second_system_msg.content != first_system_msg.content
 
 
 # ---------------------------------------------------------------------- structural spot-checks

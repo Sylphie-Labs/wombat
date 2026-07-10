@@ -22,6 +22,7 @@ never a hand-rolled fixture.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,10 +34,15 @@ from cogworx.loop.result import Done
 from cogworx.model.base import ModelResponse
 
 from tests.support.stage_context_fake import FakeModel, StageContextFake
-from wombat.behavior.stages.reflection_compose import ReflectionComposeStage
+from wombat.behavior.stages.reflection_compose import (
+    _SYSTEM_INSTRUCTION,
+    ReflectionComposeStage,
+)
 from wombat.gate.models import ItemKind
 from wombat.kb.loader import load_psychology_kb
 from wombat.kb.phrasing_hints import extract_phrasing_hints
+from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX, Directness, PersonaMatrix
 from wombat.stages.artifacts import (
     COMPOSE_REQUEST,
     COMPOSED_OUTPUT,
@@ -300,6 +306,57 @@ async def test_ac4_hints_never_appear_verbatim_in_rendered_output() -> None:
     assert degraded is False
     for hint in hints:
         assert hint not in text
+
+
+# --- TK-209: OPTIONAL live_persona renders at RENDER time and hot-applies between turns ----------
+
+
+async def test_tk209_no_live_persona_preserves_the_fixed_system_instruction() -> None:
+    model = FakeModel(
+        response=ModelResponse(text="a quiet note.", model_id="deepseek-chat", finish_reason="stop")
+    )
+    # live_persona defaults to None.
+    stage = ReflectionComposeStage(kb=[])
+
+    await stage.run(_ctx(model))
+
+    system_msgs = [m for m in model.calls[0] if m.role == "system"]
+    assert system_msgs[0].content == _SYSTEM_INSTRUCTION
+
+
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
+    tmp_path: Path,
+) -> None:
+    live_persona = LivePersona(
+        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
+    )
+    stage = ReflectionComposeStage(kb=[], live_persona=live_persona)
+
+    model_one = FakeModel(
+        response=ModelResponse(text="a quiet note.", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx(model_one))
+    first_system_msgs = [m for m in model_one.calls[0] if m.role == "system"]
+    assert first_system_msgs[0].content == _SYSTEM_INSTRUCTION
+
+    blunt_matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=Directness.BLUNT,
+        humor=DEFAULT_MATRIX.humor,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    live_persona.set(blunt_matrix)  # between two turns — no restart, no new stage instance
+
+    model_two = FakeModel(
+        response=ModelResponse(
+            text="a quiet note, again.", model_id="deepseek-chat", finish_reason="stop"
+        )
+    )
+    await stage.run(_ctx(model_two))
+    second_system_msgs = [m for m in model_two.calls[0] if m.role == "system"]
+
+    assert second_system_msgs[0].content != first_system_msgs[0].content
 
 
 # --- structural: terminal stage, no compose_dispatch output yet raises ----------------------------

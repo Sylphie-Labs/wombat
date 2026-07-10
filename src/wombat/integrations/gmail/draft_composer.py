@@ -38,6 +38,11 @@ on this call is the accepted consequence, not a defect). Its live HTTP path is e
 TK-177's operator smoke; every test in this module dispatches a fake capability instead.
 ``gmail.messages.send`` is NEVER registered anywhere in this codebase — a structural never-send
 guarantee (CON-5/DEC-19/NG-5): there is no send capability for any drive to ever reach for.
+
+TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona``) — ``None``
+(the default) keeps the frozen-at-``__init__`` instruction below, byte-identical to every existing
+caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.DRAFT)`` fresh EVERY
+turn instead, so a hot-applied persona matrix change lands on the NEXT rendered turn, no restart.
 """
 
 from __future__ import annotations
@@ -60,6 +65,8 @@ from cogworx.loop.stage import StageContext
 from cogworx.model.base import ChatMessage
 
 from wombat.integrations.gmail.reply_intent import ReplyIntent
+from wombat.persona.builder import Mouth
+from wombat.persona.live import LivePersona
 from wombat.safety.tier_policy import bind_external_tier
 from wombat.stages.artifacts import compose_request_from_artifact_data
 from wombat.stages.dispatch_base import ProposalWriter
@@ -176,13 +183,19 @@ class DraftComposer:
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         upstream_stage_name: str = "compose_dispatch",
         assistant_name: str = "Steward",
+        live_persona: LivePersona | None = None,
     ) -> None:
         self._writer = writer
         self._clock = clock
         self._timeout_seconds = timeout_seconds
         self._upstream_stage_name = upstream_stage_name
-        # TK-194: built ONCE at construction — display/persona only.
+        # TK-194: built ONCE at construction — display/persona only. Stands as the frozen
+        # fallback when live_persona is None (TK-209).
         self._system_instruction = _system_instruction(assistant_name)
+        # TK-209 (EP-33): OPTIONAL — None preserves the frozen-at-__init__ instruction above
+        # (every existing caller/test stands unchanged); when provided, run() reads
+        # live_persona.instruction(Mouth.DRAFT) fresh EVERY turn instead (hot-apply, no restart).
+        self._live_persona = live_persona
         # The ONE sanctioned admission call site (TK-151/DEC-22) — mirrors dispatch_approved.py's
         # pattern; scoped to this stage instance only, the engine rebinds the gate fresh before
         # every stage, so this never leaks.
@@ -196,8 +209,16 @@ class DraftComposer:
         _item_id, _item_kind, payload = compose_request_from_artifact_data(art.data)
         reply_intent = ReplyIntent.from_payload(payload)
 
+        # TK-209: render-time read when a LivePersona is wired — a matrix change applies on the
+        # NEXT rendered turn, no restart. None -> the frozen-at-__init__ instruction (unchanged).
+        system_instruction = (
+            self._live_persona.instruction(Mouth.DRAFT)
+            if self._live_persona is not None
+            else self._system_instruction
+        )
+
         messages = [
-            ChatMessage(role="system", content=self._system_instruction),
+            ChatMessage(role="system", content=system_instruction),
             ChatMessage(
                 role="user",
                 content=(
