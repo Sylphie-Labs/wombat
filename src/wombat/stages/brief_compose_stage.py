@@ -31,6 +31,12 @@ TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona`
 (the default) keeps the frozen-at-``__init__`` instruction above, byte-identical to every existing
 caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.BRIEF)`` fresh EVERY
 turn instead, so a hot-applied persona matrix change lands on the NEXT rendered turn, no restart.
+
+TK-216 (DEC-37(e), Q-107(b)): the SAME ``live_persona`` also shapes the S8 DEGRADED fallback ONLY
+— at the ``degraded`` branch, ``run()`` reads ``live_persona.matrix`` (``None`` -> the
+``DEFAULT_MATRIX`` identity) and wraps ``body`` through
+``wombat.compose.brief_template.persona_degrade_wrap``. ``render_brief_lines``'s output (``body``)
+and the model's user message built from it stay byte-untouched.
 """
 
 from __future__ import annotations
@@ -44,12 +50,17 @@ from cogworx.loop.result import StageResult, Transition
 from cogworx.loop.stage import StageContext
 from cogworx.model.base import ChatMessage
 
-from wombat.compose.brief_template import brief_system_instruction, render_brief_lines
+from wombat.compose.brief_template import (
+    brief_system_instruction,
+    persona_degrade_wrap,
+    render_brief_lines,
+)
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
 from wombat.domain.brief_decision_artifact import BriefDecisionArtifact
 from wombat.persona.builder import Mouth
 from wombat.persona.live import LivePersona
+from wombat.persona.matrix import DEFAULT_MATRIX
 from wombat.stages.artifacts import BRIEF_TEXT, brief_text_to_artifact_data
 
 logger = logging.getLogger(__name__)
@@ -180,7 +191,11 @@ class BriefComposeStage:
                     )
 
         if degraded:
-            text = body
+            # TK-216: read the CURRENT matrix at this moment (None -> identity, DEFAULT_MATRIX).
+            matrix = (
+                self._live_persona.matrix if self._live_persona is not None else DEFAULT_MATRIX
+            )
+            text = persona_degrade_wrap(body, matrix)
             tokens_spent = 0
 
         assert text is not None  # either the model's text or the template body, always a str

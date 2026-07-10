@@ -29,6 +29,16 @@ at this render boundary, the ONE place both the model prompt and the S8 fallback
 before wrapping) so the quoted region can never be forged open by the field's own content. This is
 a deterministic display-safety mitigation (CON-1: no LLM sanitation, no content/intent inspection)
 — NOT the TK-148 structural taint latch, which stays body-scoped and is untouched by this module.
+
+TK-216 (DEC-37(e), Q-107(b)): :func:`persona_degrade_wrap` wraps ``render_brief_lines``'s output
+for the S8 DEGRADED fallback ONLY — ``render_brief_lines`` itself, and the model's user message
+built from it, stay byte-untouched. The TK-100 single-source invariant is RESTATED under TK-216
+as: ``fallback = persona_degrade_wrap(body, matrix)``, and ``persona_degrade_wrap`` is the
+IDENTITY function at ``DEFAULT_MATRIX`` (``brevity=TERSE``, ``warmth=RESERVED``) — so the default
+fallback stays byte-identical to today. Only ``Brevity`` (a fixed header/closing line) and
+``Warmth`` (one fixed greeting line, WARM only) are honored — ``Directness``/``Humor`` have NO
+degrade variant BY RULING and are never read here (pinned by
+``tests/persona/test_degrade_variants.py``).
 """
 
 from __future__ import annotations
@@ -40,6 +50,7 @@ from zoneinfo import ZoneInfo
 from wombat.calendar.models import CalendarEvent
 from wombat.domain.brief_decision_artifact import BriefDecisionArtifact
 from wombat.domain.brief_payload import GmailBriefItem
+from wombat.persona.matrix import Brevity, PersonaMatrix, Warmth
 
 
 # A fixed, terse steward instruction (mirrors compose.py's _system_instruction posture) — no
@@ -165,4 +176,46 @@ def render_brief_lines(artifact: BriefDecisionArtifact, *, tz: ZoneInfo) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["BRIEF_SYSTEM_INSTRUCTION", "brief_system_instruction", "render_brief_lines"]
+# TK-216 fixed degrade-wrap strings — module-level so they're pinned by test, not buried inline.
+# EXPANSIVE is BALANCED's header line + this ONE closing line, appended. WARM's greeting is
+# prepended AHEAD of everything, including a BALANCED/EXPANSIVE header (Q-107(b)).
+_BRIEF_BALANCED_HEADER_LINE = "Here's the morning brief:"
+_BRIEF_EXPANSIVE_CLOSING_LINE = "That's everything for this morning."
+_BRIEF_WARM_GREETING_LINE = "Good morning!"
+
+
+def persona_degrade_wrap(body: str, matrix: PersonaMatrix) -> str:
+    """Wrap ``render_brief_lines``'s ``body`` for the S8 degraded fallback ONLY (TK-216).
+
+    IDENTITY at ``DEFAULT_MATRIX`` (``brevity=TERSE``, ``warmth=RESERVED``) — ``body`` returns
+    unchanged, so the default fallback stays byte-identical to today (the TK-100 invariant,
+    restated: ``fallback = persona_degrade_wrap(body, matrix)``).
+
+    ``matrix.brevity``: TERSE -> ``body`` untouched; BALANCED -> ``_BRIEF_BALANCED_HEADER_LINE``
+    prepended; EXPANSIVE -> that same header prepended AND ``_BRIEF_EXPANSIVE_CLOSING_LINE``
+    appended. ``matrix.warmth``: WARM -> ``_BRIEF_WARM_GREETING_LINE`` prepended AHEAD of
+    everything above (RESERVED/NEUTRAL add nothing).
+
+    Only ``Brevity``/``Warmth`` are read — ``Directness``/``Humor`` have NO degrade variant BY
+    RULING (a template cannot honestly hedge or joke, Q-107(b)) and are never consulted here, at
+    any level.
+    """
+    if matrix.brevity is Brevity.BALANCED:
+        lines = [_BRIEF_BALANCED_HEADER_LINE, body]
+    elif matrix.brevity is Brevity.EXPANSIVE:
+        lines = [_BRIEF_BALANCED_HEADER_LINE, body, _BRIEF_EXPANSIVE_CLOSING_LINE]
+    else:
+        lines = [body]
+
+    if matrix.warmth is Warmth.WARM:
+        lines = [_BRIEF_WARM_GREETING_LINE, *lines]
+
+    return "\n".join(lines)
+
+
+__all__ = [
+    "BRIEF_SYSTEM_INSTRUCTION",
+    "brief_system_instruction",
+    "persona_degrade_wrap",
+    "render_brief_lines",
+]

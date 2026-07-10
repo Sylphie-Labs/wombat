@@ -346,14 +346,16 @@ def build_compose_stage(
 
     ``live_persona`` (TK-209) threads the runtime persona authority through unchanged — ``None``
     (the default) preserves ``ComposeStage``'s own frozen-at-__init__ instruction behavior for
-    every standalone caller that doesn't wire one.
+    every standalone caller that doesn't wire one. TK-216: the SAME ``live_persona`` is also
+    handed to ``TemplateComposer`` so the degrade path's brevity wrapper variant reads the CURRENT
+    matrix too — the one ``TemplateComposer`` construction site.
     """
     op = params if params is not None else load_operating_params()
     ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
     spend_ledger = DailySpendLedger(ledger)
     return ComposeStage(
         config=config,
-        template_composer=TemplateComposer(),
+        template_composer=TemplateComposer(live_persona=live_persona),
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
         live_persona=live_persona,

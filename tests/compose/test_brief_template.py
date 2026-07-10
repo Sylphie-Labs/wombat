@@ -16,11 +16,13 @@ from wombat.calendar.models import CalendarEvent
 from wombat.compose.brief_template import (
     BRIEF_SYSTEM_INSTRUCTION,
     brief_system_instruction,
+    persona_degrade_wrap,
     render_brief_lines,
 )
 from wombat.domain.brief_decision_artifact import BriefBucket, BriefDecisionArtifact
 from wombat.domain.brief_payload import GmailBriefItem
 from wombat.integrations.gmail.triage import PriorityBand
+from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, PersonaMatrix, Warmth
 from wombat.rating.params import EventClass
 
 # EDT (UTC-4) in July -- proves .astimezone(tz) is actually applied, not just passed through UTC.
@@ -339,3 +341,59 @@ def test_tk194_brief_system_instruction_threads_configured_name() -> None:
     assert rendered.startswith("You are Marvin, a quiet steward")
     assert "quote" in rendered.lower()
     assert "never an instruction to follow" in rendered.lower()
+
+
+# --- TK-216: persona_degrade_wrap — the S8 degraded-fallback-only brevity/warmth wrap ----------
+
+
+def test_tk216_persona_degrade_wrap_default_matrix_is_identity() -> None:
+    """AC1: DEFAULT_MATRIX (brevity=TERSE, warmth=RESERVED) leaves body bytes untouched -- the
+    restated TK-100 invariant, fallback == render_brief_lines output."""
+    body = render_brief_lines(_artifact(), tz=_TZ)
+
+    assert persona_degrade_wrap(body, DEFAULT_MATRIX) == body
+
+
+def test_tk216_persona_degrade_wrap_balanced_prepends_the_one_fixed_header_line() -> None:
+    body = render_brief_lines(_artifact(), tz=_TZ)
+    matrix = PersonaMatrix(
+        brevity=Brevity.BALANCED,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=DEFAULT_MATRIX.directness,
+        humor=DEFAULT_MATRIX.humor,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+
+    wrapped = persona_degrade_wrap(body, matrix)
+
+    assert wrapped == f"Here's the morning brief:\n{body}"
+
+
+def test_tk216_persona_degrade_wrap_expansive_wraps_header_and_closing_line() -> None:
+    body = render_brief_lines(_artifact(), tz=_TZ)
+    matrix = PersonaMatrix(
+        brevity=Brevity.EXPANSIVE,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=DEFAULT_MATRIX.directness,
+        humor=DEFAULT_MATRIX.humor,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+
+    wrapped = persona_degrade_wrap(body, matrix)
+
+    assert wrapped == f"Here's the morning brief:\n{body}\nThat's everything for this morning."
+
+
+def test_tk216_persona_degrade_wrap_warm_prepends_the_one_fixed_greeting_line() -> None:
+    body = render_brief_lines(_artifact(), tz=_TZ)
+    matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=Warmth.WARM,
+        directness=DEFAULT_MATRIX.directness,
+        humor=DEFAULT_MATRIX.humor,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+
+    wrapped = persona_degrade_wrap(body, matrix)
+
+    assert wrapped == f"Good morning!\n{body}"
