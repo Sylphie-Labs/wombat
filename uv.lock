@@ -4395,6 +4395,9 @@ voice = [
     { name = "faster-whisper" },
     { name = "pyttsx3" },
 ]
+voice-cloud = [
+    { name = "httpx" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -4411,13 +4414,14 @@ requires-dist = [
     { name = "cog-worx", extras = ["providers"], editable = "../cog_worx/cog-worx" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.2" },
+    { name = "httpx", marker = "extra == 'voice-cloud'", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=25.0" },
     { name = "openai", marker = "extra == 'providers'", specifier = ">=1.55.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyttsx3", marker = "extra == 'voice'", specifier = ">=2.90" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
-provides-extras = ["providers", "voice"]
+provides-extras = ["providers", "voice", "voice-cloud"]
 
 [package.metadata.requires-dev]
 dev = [

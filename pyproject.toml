@@ -26,6 +26,10 @@ providers = ["anthropic>=0.40.0", "openai>=1.55.0"]
 # the concrete adapters lazy-import these, so a checkout without this extra still boots clean.
 # faster-whisper (TK-162, Q-97) rides the SAME extra alongside pyttsx3 — local ASR, offline.
 voice = ["pyttsx3>=2.90", "faster-whisper>=1.0"]
+# Cloud voice providers (TK-189, EP-31, DEC-28 structural opt-in) — thin httpx REST only, no
+# vendor SDKs (Q-100). Separate from `voice` (local/offline) since cloud providers are an
+# explicit opt-in, never installed by default.
+voice-cloud = ["httpx>=0.27"]
 
 [project.scripts]
 wombat = "wombat:main"
