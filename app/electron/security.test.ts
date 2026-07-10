@@ -97,3 +97,34 @@ describe("preload.ts chat bridge posture", () => {
     expect(source).not.toMatch(/exposeInMainWorld\(\s*["'](?:ipcRenderer|electron|require|process)["']/);
   });
 });
+
+// TK-224 (Q-111(b)): the mic-capture hand-off never lets the renderer choose
+// or learn a filesystem path - it exposes ONLY a buffer-in bridge, backed by
+// ipcRenderer.invoke, the same posture as the settings/chat bridges above.
+describe("preload.ts audio bridge posture", () => {
+  const source = readFileSync(PRELOAD_TS_PATH, "utf-8");
+
+  it("exposes wombatAudio via contextBridge.exposeInMainWorld", () => {
+    expect(source).toMatch(/contextBridge\.exposeInMainWorld\(\s*["']wombatAudio["']/);
+  });
+
+  it("wombatAudio's saveCapture is backed by ipcRenderer.invoke, not a raw ipcRenderer exposure", () => {
+    const match = source.match(
+      /contextBridge\.exposeInMainWorld\(\s*["']wombatAudio["'],\s*\{([\s\S]*?)\}\s*\);/,
+    );
+    expect(match).not.toBeNull();
+    const body = (match as RegExpMatchArray)[1];
+    expect(body).toMatch(
+      /saveCapture:\s*\(buffer[^)]*\)\s*=>\s*ipcRenderer\.invoke\(\s*["']wombat:save-capture["']/,
+    );
+  });
+});
+
+describe("main.ts permission-request posture", () => {
+  const source = readFileSync(MAIN_TS_PATH, "utf-8");
+
+  it("wires setPermissionRequestHandler to the pure isAllowedPermission predicate", () => {
+    expect(source).toMatch(/setPermissionRequestHandler/);
+    expect(source).toMatch(/isAllowedPermission\(permission\)/);
+  });
+});

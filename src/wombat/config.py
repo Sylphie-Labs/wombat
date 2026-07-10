@@ -62,6 +62,11 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     "wombat_persona_directness",
     "wombat_persona_humor",
     "wombat_persona_proactivity",
+    # TK-224 (EP-32, Q-111(b)): app-editable so the Electron settings UI can flip voice
+    # delivery without an env var. Deliberately NOT paired with wombat_asr_drop_dir, which
+    # stays operator .env-tier (the wombat_chat_handshake_file precedent) — a settings UI
+    # toggle has no business relocating where the drop-dir watcher points.
+    "wombat_voice_enabled",
 )
 
 

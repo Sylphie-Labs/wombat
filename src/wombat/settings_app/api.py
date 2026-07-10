@@ -70,6 +70,10 @@ class SettingsUpdate(BaseModel):
     wombat_persona_directness: Literal["gentle", "plain", "blunt"] | None = None
     wombat_persona_humor: Literal["none", "dry"] | None = None
     wombat_persona_proactivity: Literal["minimal", "balanced", "forward"] | None = None
+    # TK-224 (EP-32, Q-111(b)): mirrors WombatConfig.wombat_voice_enabled, newly admitted to
+    # APP_EDITABLE_FIELDS — a bool, not a Literal, so it is exempt from the mirror test's
+    # vocabulary check (there is no vocabulary to drift).
+    wombat_voice_enabled: bool | None = None
 
 
 class KeyBody(BaseModel):

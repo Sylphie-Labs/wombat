@@ -353,6 +353,45 @@ def test_settings_json_persona_field_is_app_editable(
         assert name in APP_EDITABLE_FIELDS
 
 
+# --- TK-224: wombat_voice_enabled joins the app-editable tier -------------------------------
+
+
+def test_load_config_settings_json_accepts_voice_enabled_bool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC (Q-111(b)): a bool value for the newly-admitted field loads."""
+
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(tmp_path, {"wombat_voice_enabled": True})
+
+    config = load_config()
+
+    assert config.wombat_voice_enabled is True
+    assert "wombat_voice_enabled" in APP_EDITABLE_FIELDS
+
+
+def test_load_config_settings_json_drops_non_bool_voice_enabled_with_one_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC (Q-111(b)): a non-bool value is dropped loudly by the existing per-value guard."""
+
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _write_settings_file(
+        tmp_path, {"wombat_voice_enabled": ["nope"], "wombat_assistant_name": "Kip"}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="wombat.config"):
+        config = load_config()  # must not raise
+
+    assert config.wombat_voice_enabled is False  # falls back to the field default
+    assert config.wombat_assistant_name == "Kip"  # the valid sibling value still loads
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat_voice_enabled" in warnings[0].message
+
+
 # --- TK-226 (CR5-1/CR5-2): UTF-8 pin, decode-guard widening, per-value validate-or-drop ------
 
 

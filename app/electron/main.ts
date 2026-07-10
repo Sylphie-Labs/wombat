@@ -1,8 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session } from "electron";
 import path from "node:path";
 
 import { describeFailure, startApiProcess, type ApiProcessHandle } from "./api-process";
 import { readChatInfo } from "./chat-info";
+import { isAllowedPermission } from "./permissions";
+import { saveCapture } from "./save-capture";
 import { WEB_PREFERENCES } from "./window-options";
 
 /**
@@ -51,6 +53,14 @@ app.whenReady().then(async () => {
     return;
   }
 
+  // TK-224 (Q-111(b), TK-198 pinned-posture discipline): Electron's default
+  // permission handler grants EVERYTHING - the wrong posture to ship mic
+  // capture on. Pin it to the pure `isAllowedPermission` predicate ('media'
+  // only) BEFORE any window (and therefore any permission request) can exist.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(isAllowedPermission(permission));
+  });
+
   apiHandle = result.handle;
   const info = result.handle.info;
   // TK-199 pinned renderer surface (TK-200 binds against this channel name) -
@@ -64,6 +74,13 @@ app.whenReady().then(async () => {
   // stale file from a dead runtime is surfaced via chat.ts's send-failure
   // path rather than pinned here.
   ipcMain.handle("wombat:chat-info", () => readChatInfo(process.env, app.getAppPath()));
+
+  // TK-224 (Q-111(b)): the mic-capture hand-off. The renderer never chooses a
+  // filesystem path - only `saveCapture` (this main process) resolves the
+  // operator-tier drop-dir and performs the write.
+  ipcMain.handle("wombat:save-capture", (_event, buffer: ArrayBuffer) =>
+    saveCapture(buffer, process.env, app.getAppPath()),
+  );
 
   createWindow();
 

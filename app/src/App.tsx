@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 
-import { Button, ChatPane, Field, Indicator, Panel, Select, type SelectOption } from "./components";
+import {
+  AudioPanel,
+  Button,
+  ChatPane,
+  Field,
+  Indicator,
+  Panel,
+  Select,
+  type SelectOption,
+} from "./components";
 import { font, ink, surface } from "./tokens";
 import {
   getSettings,
@@ -254,6 +263,8 @@ export function App() {
         <h1 className="text-lg font-semibold">Wombat settings</h1>
 
         <ChatPane />
+
+        <AudioPanel />
 
         {loadError && (
           <Panel>

@@ -192,6 +192,29 @@ def test_put_settings_unknown_key_is_422(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
+def test_put_settings_wombat_voice_enabled_round_trips(tmp_path: Path) -> None:
+    """TK-224 (Q-111(b)): the newly-admitted bool field writes and reads back."""
+    client = _client(tmp_path)
+    response = client.put(
+        "/settings", json={"wombat_voice_enabled": True}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_voice_enabled"] is True
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_voice_enabled"] is True
+
+
+def test_put_settings_wombat_voice_enabled_non_bool_is_422(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    response = client.put(
+        "/settings",
+        json={"wombat_voice_enabled": ["not", "a", "bool"]},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
 def test_put_key_unknown_provider_is_404_or_422(tmp_path: Path) -> None:
     client = _client(tmp_path)
     response = client.put(

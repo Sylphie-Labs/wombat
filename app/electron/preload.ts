@@ -25,3 +25,14 @@ contextBridge.exposeInMainWorld("wombatSettings", {
 contextBridge.exposeInMainWorld("wombatChat", {
   getInfo: () => ipcRenderer.invoke("wombat:chat-info"),
 });
+
+/**
+ * TK-224 (Q-111(b)): mic-capture hand-off. The renderer hands over raw WAV
+ * bytes ONLY - it never chooses or learns a filesystem path; `main.ts`'s
+ * `wombat:save-capture` handler resolves the drop-dir itself and does the
+ * write. The renderer surface (`window.wombatAudio.saveCapture(buffer)`) is
+ * pinned - `app/src/audio.ts` binds against this exact name.
+ */
+contextBridge.exposeInMainWorld("wombatAudio", {
+  saveCapture: (buffer: ArrayBuffer) => ipcRenderer.invoke("wombat:save-capture", buffer),
+});

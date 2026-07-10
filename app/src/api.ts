@@ -49,6 +49,9 @@ export interface SettingsFields {
   wombat_persona_directness: Directness | null;
   wombat_persona_humor: Humor | null;
   wombat_persona_proactivity: Proactivity | null;
+  // TK-224 (Q-111(b)): the newly-admitted app-editable field - a bootstrap-read bool gating
+  // voice delivery (wombat.bootstrap), so a save PUTting it carries the DEC-32 restart notice.
+  wombat_voice_enabled: boolean | null;
 }
 
 export interface SettingsResponse {
