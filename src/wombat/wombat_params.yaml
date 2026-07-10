@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 6
+version: 7
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -73,6 +73,22 @@ rating_tuner:
   delta_bound: 0.05             # max per-night change to any one parameter
   gain: 0.20                    # tuner learning gain
   surfacing_ceiling_per_day: 12.0  # hard daily surfacing ceiling the band is chosen to respect
+
+# --- Personality band (TK-215, DEC-37(a)/Q-107(a)) --------------------------------------
+# PROVISIONAL: fixture-confirmed only, pending Jim's confirmatory label pass under DEF-1;
+# safe to revise. HUMAN-EDITED ONLY — same custody as every other gate constant in this file;
+# there is no tuner or runtime writer for this block (the RatingTuner never writes it).
+# Proactivity is the ONE persona axis with gate-side actuation (DEC-37(a)): a bounded
+# deterministic offset ADDED to urgency_threshold, zero LLM (NG-4/CON-1). "minimal" raises the
+# effective threshold (lowers willingness to surface); "forward" lowers it (raises willingness);
+# "balanced" is 0.0 -- today's gate behavior exactly. floor/cap clamp the result so no level can
+# push the effective threshold outside this bounded band.
+personality_band:
+  minimal: 0.10
+  balanced: 0.00
+  forward: -0.10
+  floor: 0.60
+  cap: 0.95
 
 # --- Presence hold (TK-11) --------------------------------------------------------------
 # CHOSEN-HERE, ported from the TK-4 spike's proven values. The production presence_hold

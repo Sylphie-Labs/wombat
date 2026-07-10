@@ -11,6 +11,12 @@ Two small, load-bearing pieces live here so the immediate arm and ``gate.select_
   unit tests run un-gated against a fake and only ``CeilingLedger``'s own tests
   (``gate/ceiling.py``) need a real Postgres (Q-46).
 
+``effective_urgency_threshold`` (TK-215, DEC-37(a)/Q-107(a)) is the pure gate-side actuation of
+the ONE persona axis with any gate effect: a bounded deterministic offset on
+``urgency_threshold`` keyed by the live ``Proactivity`` level, zero LLM (NG-4/CON-1). It does
+NOT change ``is_surfacing_worthy`` itself — callers compute the effective threshold first, then
+pass it in, so the one-predicate invariant (Q-55) stays intact.
+
 ``CeilingHit`` is defined here (not ``models.py``, TK-21's canonical decision vocabulary is
 untouched) mirroring how ``pending_set.py`` homes ``CapacityEviction`` alongside the module
 that raises it rather than in the shared model file.
@@ -22,6 +28,8 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from wombat.gate.models import ScoredItem
+from wombat.params import PersonalityBand
+from wombat.persona.matrix import Proactivity
 from wombat.rating.params import EventClass
 
 
@@ -33,6 +41,26 @@ def is_surfacing_worthy(scored: ScoredItem, urgency_threshold: float) -> bool:
     ceiling read, no presence, no clock.
     """
     return scored.urgency > urgency_threshold
+
+
+def effective_urgency_threshold(
+    base: float, proactivity: Proactivity, band: PersonalityBand
+) -> float:
+    """TK-215 (DEC-37(a)/Q-107(a)): ``base`` offset by ``proactivity``'s ``band`` level, clamped
+    to ``[band.floor, band.cap]``. Pure — no I/O, no clock, no persona read (the CALLER reads
+    ``LivePersona.matrix.proactivity`` at scoring time and passes it in here).
+
+    Weak monotonicity by construction: MINIMAL's offset is documented >= 0 (raises the
+    threshold, lowers willingness), FORWARD's is documented <= 0 (lowers the threshold, raises
+    willingness), so ``eff(MINIMAL) >= eff(BALANCED) >= eff(FORWARD)`` before clamping; the
+    shared floor/cap clamp can only narrow, never invert, that ordering.
+    """
+    offset = {
+        Proactivity.MINIMAL: band.minimal,
+        Proactivity.BALANCED: band.balanced,
+        Proactivity.FORWARD: band.forward,
+    }[proactivity]
+    return max(band.floor, min(band.cap, base + offset))
 
 
 @runtime_checkable
@@ -64,4 +92,4 @@ class CeilingHit:
     event_class: EventClass
 
 
-__all__ = ["CeilingHit", "CeilingProtocol", "is_surfacing_worthy"]
+__all__ = ["CeilingHit", "CeilingProtocol", "effective_urgency_threshold", "is_surfacing_worthy"]

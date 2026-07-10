@@ -18,6 +18,14 @@ Composition (all values keyword-injected — NO inline literals; composition pas
   ``gate/ceiling.py``; a fake in arm unit tests).
 * ``urgency_threshold`` / ``load_flush_threshold`` / ``flush_min_age_seconds`` — the TK-13
   ``OperatingParams`` values the two arms compare against.
+* ``threshold_fn`` (TK-215, DEC-37(a)/Q-107(a)) — OPTIONAL keyword, default ``None``. When
+  ``None`` (every existing caller/test), both worth checks compare against the constant
+  ``urgency_threshold`` above — today's gate, byte-unaffected. When provided, it is a zero-arg
+  callable evaluated PER ITEM inside the scoring loop (``pipeline()``) and per item in
+  ``select_items()`` — never once per call — so a live proactivity change lands on the very
+  next scored item, no restart. Composition wires a closure over ``LivePersona.matrix
+  .proactivity`` and ``trigger.effective_urgency_threshold``; the one-predicate invariant (Q-55)
+  stays intact because BOTH call sites resolve the SAME effective threshold for a given item.
 * ``clock``        — injected epoch-seconds callable; no wall-clock read happens here.
 * ``on_event``     — routes ``CeilingHit`` (trigger.py), ``CapacityEviction``
   (pending_set.py), ``DecayEvent`` (models.py) and ``LedgerReset`` (decay.py) events out of
@@ -87,6 +95,7 @@ class Gate:
         day_rollover: DayRolloverProtocol,
         clock: Clock,
         on_event: Callable[[object], None] = _log_event_loudly,
+        threshold_fn: Callable[[], float] | None = None,
     ) -> None:
         self._user_model = user_model
         self._pending_set = pending_set
@@ -98,6 +107,13 @@ class Gate:
         self._day_rollover = day_rollover
         self._clock = clock
         self._on_event = on_event
+        self._threshold_fn = threshold_fn
+
+    def _current_urgency_threshold(self) -> float:
+        """TK-215: the threshold this item scores against — the injected ``threshold_fn`` if
+        wired (evaluated fresh, per item), else the constant ``urgency_threshold`` (today's
+        gate, byte-unaffected when ``threshold_fn`` is ``None``)."""
+        return self._threshold_fn() if self._threshold_fn is not None else self._urgency_threshold
 
     async def _score(self, item: GateItem) -> tuple[EventClass, ScoredItem]:
         """Resolve the event class and score one item via the injected user-model seam."""
@@ -161,7 +177,9 @@ class Gate:
 
         for item in items:
             event_class, scored = await self._score(item)
-            worthy = surfacing_permitted and is_surfacing_worthy(scored, self._urgency_threshold)
+            worthy = surfacing_permitted and is_surfacing_worthy(
+                scored, self._current_urgency_threshold()
+            )
 
             if worthy and self._ceiling.allow(event_class):
                 self._ceiling.record(event_class)
@@ -191,12 +209,12 @@ class Gate:
         read/record, no events. The live pending set's contents and ``cumulative_load()`` are
         identical before and after any call to this method.
         """
-        scored_items: list[ScoredItem] = []
+        worthy: list[ScoredItem] = []
         for item in items:
             _, scored = await self._score(item)
-            scored_items.append(scored)
+            if is_surfacing_worthy(scored, self._current_urgency_threshold()):
+                worthy.append(scored)
 
-        worthy = [s for s in scored_items if is_surfacing_worthy(s, self._urgency_threshold)]
         worthy.sort(key=lambda scored: scored.urgency, reverse=True)
         return worthy
 

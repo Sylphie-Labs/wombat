@@ -32,7 +32,7 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "wombat"
 def _valid_mapping() -> dict[str, object]:
     """A complete, well-typed parameter mapping (mirrors the shipped wombat_params.yaml)."""
     return {
-        "version": 6,
+        "version": 7,
         "urgency_threshold": 0.75,
         "load_flush_threshold": 1.0,
         "per_class_daily_ceiling": 3,
@@ -50,6 +50,13 @@ def _valid_mapping() -> dict[str, object]:
             "delta_bound": 0.05,
             "gain": 0.20,
             "surfacing_ceiling_per_day": 12.0,
+        },
+        "personality_band": {
+            "minimal": 0.10,
+            "balanced": 0.00,
+            "forward": -0.10,
+            "floor": 0.60,
+            "cap": 0.95,
         },
         "presence_staleness_ceiling_seconds": 300.0,
         "presence_confidence_floor": 0.5,

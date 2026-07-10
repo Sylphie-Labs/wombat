@@ -143,6 +143,7 @@ from .gate.models import GateAction, GateDecision, ItemKind
 from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
+from .gate.trigger import effective_urgency_threshold
 from .integrations.gmail.draft_composer import (
     DraftComposer,
     DraftTrailWriter,
@@ -672,6 +673,11 @@ def assemble_runtime(
         decay_ttl_seconds=op.decay_ttl_seconds,
         day_rollover=day_rollover,
         clock=_epoch_now,
+        # TK-215 (DEC-37(a)/Q-107(a)): reads the LIVE proactivity level at scoring time — a
+        # live_persona.set() between two scored items lands on the very next item, no restart.
+        threshold_fn=lambda: effective_urgency_threshold(
+            op.urgency_threshold, live_persona.matrix.proactivity, op.personality_band
+        ),
     )
     presence_provider = make_presence_provider(
         clock=_epoch_now,

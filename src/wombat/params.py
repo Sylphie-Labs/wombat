@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Bump in lock-step with wombat_params.yaml's ``version`` whenever a field is added, removed,
 # or renamed, so a persisted file can be reconciled against the code's expectation.
-OPERATING_PARAMS_VERSION = 6
+OPERATING_PARAMS_VERSION = 7
 
 _PARAMS_FILENAME = "wombat_params.yaml"
 
@@ -57,6 +57,26 @@ class RatingTunerBounds(BaseModel):
     delta_bound: float  # max per-night change to any one parameter (LOCKED 0.05)
     gain: float  # tuner learning gain (LOCKED 0.20)
     surfacing_ceiling_per_day: float  # hard daily surfacing ceiling (LOCKED 12.0)
+
+
+class PersonalityBand(BaseModel):
+    """TK-215 (DEC-37(a), Q-107(a)): the bounded deterministic ``urgency_threshold`` offset per
+    ``Proactivity`` level — the ONE persona axis with gate-side actuation, zero LLM (NG-4/CON-1).
+
+    ``minimal``/``balanced``/``forward`` are the per-level offsets ADDED to the base
+    ``urgency_threshold`` (``gate.trigger.effective_urgency_threshold``); ``floor``/``cap`` clamp
+    the result so no level can push the effective threshold outside a bounded band. Human-edited
+    only, same custody as every other gate constant here — the RatingTuner never writes this
+    block (non_goal).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    minimal: float  # offset at Proactivity.MINIMAL (PROVISIONAL, >=0 -> raises the threshold)
+    balanced: float  # offset at Proactivity.BALANCED (PROVISIONAL, 0.0 = today's gate exactly)
+    forward: float  # offset at Proactivity.FORWARD (PROVISIONAL, <=0 -> lowers the threshold)
+    floor: float  # the effective threshold never drops below this (PROVISIONAL)
+    cap: float  # the effective threshold never exceeds this (PROVISIONAL)
 
 
 class OperatingParams(BaseModel):
@@ -99,6 +119,9 @@ class OperatingParams(BaseModel):
 
     # --- RatingTuner bounded-update block (TK-48, LOCKED) ---
     rating_tuner: RatingTunerBounds
+
+    # --- Personality band (TK-215, DEC-37(a)/Q-107(a), PROVISIONAL) ---
+    personality_band: PersonalityBand
 
     # --- Presence hold (TK-11) ---
     presence_staleness_ceiling_seconds: float
