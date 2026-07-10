@@ -27,6 +27,9 @@ class ItemKind(Enum):
     REFLECTION = "reflection"
     DRAFT = "draft"
     GENERIC = "generic"
+    # TK-222 (EP-32, Q-110(d)): chat is a REAL input source, never a side-channel to the model
+    # (CON-1) — the runtime chat surface stamps this kind on every message it pushes.
+    CHAT = "chat"
 
 
 @dataclass(frozen=True, slots=True)

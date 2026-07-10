@@ -22,6 +22,15 @@ next drain. Real-substrate resume interplay (a durable parked run surviving a re
 a freshly-started one) is explicitly OUT of v1 scope — revisit once a real (non-cold-boot)
 journal adapter is first wired.
 
+TK-222 (EP-32, Q-110(d) ruling 5): when ``bundle.chat_surface`` is wired (``config.wombat_chat_
+handshake_file`` non-blank), ``_drive_and_serve`` starts it right after the source registry and
+writes EXACTLY ONE ``{"port": ..., "token": ...}`` handshake JSON line to its configured path
+(parent dirs created, overwrite) — the Electron main process's read side (TK-223) is OUT of this
+ticket's scope. Both the start and the write are GUARDED (CON-3): any failure — a bind failure,
+an unwritable handshake path — is caught, logged as ONE loud WARNING, and the rest of assembly/
+serve proceeds exactly as it would chat-less. Stopped, also guarded, in the SAME ``finally`` as
+every other seam below.
+
 SHUTDOWN is minimal by ruling (Q-71): a cooperative cancellation (``asyncio.CancelledError``) or
 a ``KeyboardInterrupt`` stops the ``SourceRegistry`` and closes the queue/daily-ledger/pending-
 journal/behavior-event-log/action-trail-writer (TK-184, when present) connections best-effort via
@@ -32,19 +41,25 @@ given Postgres at a time.
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.runtime.sweeper import Sweeper
 
 from wombat.bootstrap import RuntimeBundle, assemble_runtime
+from wombat.chat.surface import ChatSurface
 from wombat.config import ConfigurationError, load_config
 from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
 from wombat.safety.local_residency import check_config
+
+logger = logging.getLogger(__name__)
 
 _HEARTBEAT_ARTIFACT_KIND = "drain-tick"
 _RUNTIME_RUN_ID_PREFIX = "wombat-drain"
@@ -87,6 +102,47 @@ def _heartbeat_artifact() -> Artifact:
     )
 
 
+def _write_chat_handshake(surface: ChatSurface) -> None:
+    """Write EXACTLY ONE ``{"port": ..., "token": ...}`` handshake JSON line for ``surface``
+    (TK-222 ruling 5) — parent dirs created, overwrite. Raises on any filesystem failure; the
+    caller (``_start_chat_surface``) is the guard."""
+    path = Path(surface.handshake_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"port": surface.port, "token": surface.token}), encoding="utf-8"
+    )
+
+
+async def _start_chat_surface(surface: ChatSurface | None) -> None:
+    """Start ``surface`` and write its handshake file, GUARDED (CON-3, TK-222 ruling 5): a
+    ``None`` surface (chat disabled) is a silent no-op; any OTHER failure — a bind failure, an
+    unwritable handshake path — is caught, logged as ONE loud WARNING, and never propagates —
+    the drain loop/brief/other sources are unaffected either way. Takes the bare ``ChatSurface``
+    (not the whole ``RuntimeBundle``) so this seam is testable/callable standalone."""
+    if surface is None:
+        return
+    try:
+        await surface.start()
+        _write_chat_handshake(surface)
+    except Exception:
+        logger.warning(
+            "serve: chat surface failed to start; the chat input surface is disabled for this "
+            "run (drain loop/brief/other sources unaffected)",
+            exc_info=True,
+        )
+
+
+async def _stop_chat_surface(surface: ChatSurface | None) -> None:
+    """Stop ``surface``, GUARDED — mirrors ``_start_chat_surface``'s posture so a stop failure
+    never blocks the rest of the ``finally`` teardown below."""
+    if surface is None:
+        return
+    try:
+        await surface.stop()
+    except Exception:
+        logger.warning("serve: chat surface failed to stop cleanly", exc_info=True)
+
+
 async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) -> None:
     """Start the source registry, fire the ONE initial drive, then run the Sweeper forever.
 
@@ -95,6 +151,7 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
     best-effort cleanup (Q-71 ruling 7).
     """
     await bundle.source_registry.start()
+    await _start_chat_surface(bundle.chat_surface)
     try:
         run_id = f"{_RUNTIME_RUN_ID_PREFIX}-{uuid4()}"
         await bundle.engine.run(
@@ -138,6 +195,7 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
         )
     finally:
         await bundle.source_registry.stop()
+        await _stop_chat_surface(bundle.chat_surface)
         bundle.queue.close()
         bundle.daily_ledger.close()
         bundle.pending_journal.close()

@@ -44,6 +44,9 @@ _ITEM_KIND_FALLBACK: dict[ItemKind, EventClass] = {
     ItemKind.REFLECTION: EventClass.REFLECTION,
     ItemKind.DRAFT: EventClass.DRAFT_REPLY,
     ItemKind.GENERIC: EventClass.GENERIC,
+    # TK-222 (EP-32, Q-110(d)): chat rides the GENERIC rating vocabulary — deliberately NO new
+    # EventClass for chat.
+    ItemKind.CHAT: EventClass.GENERIC,
 }
 
 

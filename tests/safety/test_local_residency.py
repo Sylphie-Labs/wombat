@@ -407,7 +407,7 @@ async def test_ac2_only_the_configured_deepseek_host_is_ever_dialed(
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is False  # the real (faked) call succeeded — never fell back to the template
     assert text == "ok"

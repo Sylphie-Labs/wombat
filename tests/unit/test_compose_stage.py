@@ -77,7 +77,7 @@ async def test_ac1_success_path_phrases_via_model_and_prompt_excludes_internals(
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
     assert result.output.kind == COMPOSED_OUTPUT
     assert result.output.produced_by == "compose"
     text, item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
@@ -114,7 +114,7 @@ async def test_ac2a_provider_error_degrades_to_template_without_raising() -> Non
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
     text, item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -138,7 +138,7 @@ async def test_ac2b_timeout_degrades_to_template_within_bound() -> None:
 
     assert elapsed < 1.0  # bounded by wait_for's 0.05s timeout, not the model's 5s sleep
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
     _text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
 
@@ -157,7 +157,7 @@ async def test_empty_or_whitespace_response_text_degrades(blank_text: str | None
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -174,7 +174,7 @@ async def test_budget_exceeded_error_degrades_not_raises() -> None:
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
     text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
     assert degraded is True
     assert text == TemplateComposer().render(_ITEM_KIND, _PAYLOAD)
@@ -213,15 +213,15 @@ async def test_compose_stage_touches_no_ctx_member_beyond_model_last_output_and_
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"  # TK-164, Q-96: the mouth now transitions onward to the sink
+    assert result.to == "chat_reply"  # TK-222, Q-110(d): the mouth now hops through chat_reply
 
 
-# --- TK-164, Q-96: ComposeStage declares "speak" as its one edge (the EP-30-reserved flip) --------
+# --- TK-222, Q-110(d): ComposeStage declares "chat_reply" as its one edge -----------------------
 
 
-def test_compose_stage_transitions_declares_speak_as_its_only_edge() -> None:
+def test_compose_stage_transitions_declares_chat_reply_as_its_only_edge() -> None:
     stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
-    assert stage.transitions == ("speak",)
+    assert stage.transitions == ("chat_reply",)
 
 
 # --- TK-194: assistant name threads into the system instruction only -----------------------------

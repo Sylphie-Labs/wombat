@@ -63,6 +63,7 @@ from wombat.queue import WombatQueue
 from wombat.queue import ensure_schema as ensure_queue_schema
 from wombat.rating.rating_tuner import RatingTuner
 from wombat.sinks.speak import SpeakSink
+from wombat.stages.chat_reply import ChatReplyStage
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
@@ -236,8 +237,11 @@ def _build_stack_with_raising_dream(
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
-    # TK-164 (Q-96): compose now transitions onward to "speak" — voice-off (this module isn't
-    # testing voice, only dream/drain off-path isolation).
+    # TK-164 (Q-96): compose transitions onward to "chat_reply" (TK-222) — voice-off (this
+    # module isn't testing voice, only dream/drain off-path isolation). chat_reply is wired
+    # with broker=None (chat-disabled shape, pure pass-through) — this module isn't testing
+    # chat either.
+    chat_reply_stage = ChatReplyStage(broker=None)
     speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     drain_graph = build_drain_pathway(
@@ -246,6 +250,7 @@ def _build_stack_with_raising_dream(
         review_or_speak_stage,
         compose_dispatch_router,
         compose_stage,
+        chat_reply_stage,
         speak_stage,
     )
 

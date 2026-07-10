@@ -227,6 +227,16 @@ class WombatConfig(BaseSettings):
     wombat_persona_humor: Literal["none", "dry"] = "none"
     wombat_persona_proactivity: Literal["minimal", "balanced", "forward"] = "balanced"
 
+    # OPTIONAL (TK-222, EP-32, Q-110(d)): the runtime chat surface's handshake-file path — an
+    # operator .env-tier setting, deliberately NOT in APP_EDITABLE_FIELDS (this is a launch-time
+    # process wiring concern, not a persona/voice preference a settings UI edits). Chat is
+    # enabled IFF this is non-blank (loud-skip parity with sources.bootstrap's
+    # ``_maybe_register_*`` pattern); ``wombat.runtime.serve()`` writes exactly one
+    # ``{"port": ..., "token": ...}`` JSON line here per launch, once the surface has bound its
+    # ephemeral port. Deliberately NOT in REQUIRED_ENV — the drain spine/demo/tests must keep
+    # booting fully offline with chat disabled.
+    wombat_chat_handshake_file: str | None = None
+
     @classmethod
     def settings_customise_sources(
         cls,

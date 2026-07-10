@@ -26,10 +26,15 @@ NO scores/``GateAction``/queue internals may cross it (Q-50) — the prompt the 
 ONLY from the wire's ``payload`` + ``item_kind``, never from anything else.
 
 TK-164 (Q-96) lands the EP-30-reserved flip: ``ComposeStage`` is no longer the drain spine's
-terminal node. ``transitions`` is now ``("speak",)`` and ``run()`` returns ``Transition(to=
-"speak", output=...)`` carrying the SAME ``wombat.composed_output`` artifact, byte-identical,
-instead of ``Done`` — ``SpeakSink`` (``sinks/speak.py``) is the new terminal, reading this exact
-artifact via ``ctx.last_output("compose")``.
+terminal node — it transitions onward carrying the SAME ``wombat.composed_output`` artifact,
+byte-identical, instead of returning ``Done``.
+
+TK-222 (EP-32, Q-110(d)) inserts the chat-reply hop between this stage and the voice sink:
+``transitions`` is now ``("chat_reply",)`` and ``run()`` returns ``Transition(to="chat_reply",
+output=...)``. ``SpeakSink`` (``sinks/speak.py``) is UNAFFECTED — it reads this exact artifact via
+``ctx.last_output("compose")`` BY STAGE NAME, not via whatever stage ran immediately before it,
+so inserting ``chat_reply`` (``stages/chat_reply.py``) as a pass-through hop between ``compose``
+and ``speak`` leaves ``SpeakSink`` byte-identical.
 
 TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona``) — ``None``
 (the default) keeps the frozen-at-``__init__`` instruction above, byte-identical to every existing
@@ -78,9 +83,10 @@ class ComposeStage:
     """Phrases ONE surfaced item via the DeepSeek mouth; degrades to a terse template (TK-8)."""
 
     name: str = "compose"
-    # TK-164, Q-96: the EP-30-reserved flip — the mouth transitions onward to the new terminal
-    # voice sink instead of ending the drain spine itself.
-    transitions: tuple[str, ...] = ("speak",)
+    # TK-164, Q-96: the EP-30-reserved flip — the mouth transitions onward instead of ending the
+    # drain spine itself. TK-222, Q-110(d): the onward edge is now "chat_reply" (a pass-through
+    # hop to "speak") rather than "speak" directly — see the module docstring.
+    transitions: tuple[str, ...] = ("chat_reply",)
 
     def __init__(
         self,
@@ -204,11 +210,12 @@ class ComposeStage:
 
         assert text is not None  # either the model's text or the template's render, always a str
 
-        # TK-164, Q-96: transitions onward to "speak" carrying the SAME artifact, byte-identical
-        # (SpeakSink reads it back via ctx.last_output("compose") + composed_output_from_
-        # artifact_data — this is the one and only wire it consumes).
+        # TK-164/TK-222: transitions onward to "chat_reply" carrying the SAME artifact,
+        # byte-identical (SpeakSink still reads it back via ctx.last_output("compose") +
+        # composed_output_from_artifact_data — this is the one and only wire it consumes,
+        # unaffected by the chat_reply hop in between).
         return Transition(
-            to="speak",
+            to="chat_reply",
             output=Artifact(
                 kind=COMPOSED_OUTPUT,
                 produced_by=self.name,

@@ -75,6 +75,7 @@ from wombat.sinks.speak import SpeakSink
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.brief_compose_stage import BriefComposeStage
+from wombat.stages.chat_reply import ChatReplyStage
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
@@ -186,8 +187,11 @@ def _build_in_memory_stack(
     review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
-    # TK-164 (Q-96): compose now transitions onward to "speak" — voice-off (no adapter) here,
-    # this module isn't testing voice, only that the Sweeper/pathway wiring reaches the terminal.
+    # TK-164 (Q-96): compose transitions onward to "chat_reply" (TK-222) -- voice-off (no
+    # adapter) here, this module isn't testing voice, only that the Sweeper/pathway wiring
+    # reaches the terminal. chat_reply is wired with broker=None (chat-disabled shape, pure
+    # pass-through) -- this module isn't testing chat either.
+    chat_reply_stage = ChatReplyStage(broker=None)
     speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     graph = build_drain_pathway(
@@ -196,6 +200,7 @@ def _build_in_memory_stack(
         review_or_speak_stage,
         compose_dispatch_router,
         compose_stage,
+        chat_reply_stage,
         speak_stage,
     )
     journal = InMemoryJournal()

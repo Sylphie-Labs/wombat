@@ -103,6 +103,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -131,6 +132,7 @@ from .behavior.event_log import BehaviorEventLog
 from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.reflection_compose import ReflectionComposeStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
+from .chat.surface import ChatReplyBroker, ChatSurface
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
@@ -192,6 +194,7 @@ from .sources.bootstrap import (
     build_brief_fetches,
     build_source_registry,
 )
+from .sources.chat_source import ChatSource
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
 from .stages.brief_compose_stage import BriefComposeStage
@@ -199,6 +202,7 @@ from .stages.brief_deliver_stage import BriefDeliverStage
 from .stages.brief_force_flush_stage import BriefForceFlushStage
 from .stages.brief_gather_stage import BriefGatherStage
 from .stages.brief_timer_stage import BriefTimerStage
+from .stages.chat_reply import ChatReplyStage
 from .stages.compose import ComposeStage
 from .stages.compose_dispatch_router import ComposeDispatchRouter
 from .stages.draft_dispatch import DraftDispatchStage
@@ -571,6 +575,11 @@ class RuntimeBundle:
     # closed it (the exact leak class TK-173/CR-15 closed for DailyLedger). ``None`` on a
     # Google-less/token-less boot; ``runtime.py``'s teardown closes it only when non-None.
     action_trail_writer: ActionTrailWriter | None = None
+    # TK-222 (EP-32, Q-110(d)): the loopback chat surface — ``None`` when ``config.wombat_chat_
+    # handshake_file`` was blank/absent (chat disabled). ``runtime.serve()`` starts/stops this
+    # GUARDED (CON-3): any start/run failure is ONE loud WARNING, the rest of the bundle
+    # (drain loop, brief, other sources) is unaffected.
+    chat_surface: ChatSurface | None = None
 
 
 def assemble_runtime(
@@ -760,6 +769,10 @@ def assemble_runtime(
     # BYTE-IDENTICAL to the pre-TK-177 5-stage construction.
     capability_registry = Registry()
     composer_by_kind = {ItemKind.GENERIC: "compose"}
+    # TK-222 (EP-32, Q-110(d) ruling 2): chat rides the EXISTING generic mouth — no new
+    # composer/pathway. Wired UNCONDITIONALLY (harmless even when the chat surface itself is
+    # never enabled below: no ItemKind.CHAT item can originate without it).
+    composer_by_kind[ItemKind.CHAT] = "compose"
     # TK-114 (EP-22, Q-102b-f): the reflection-render leg is UNCONDITIONAL (mirrors dream_pattern's
     # own posture below) — no external deps beyond the psychology KB, loaded once here and wrapped
     # the SAME CON-3 default as TK-113's own load further down: a load failure never fails the
@@ -825,11 +838,37 @@ def assemble_runtime(
         daily_ledger=daily_ledger,
         live_persona=live_persona,
     )
-    # TK-164 (Q-96): the new drain-graph terminal — compose now transitions onward to "speak"
-    # (the EP-30-reserved flip) instead of ending the spine itself; ONE SpeakSink instance is
+    # TK-164 (Q-96): the new drain-graph terminal — compose now transitions onward (TK-222: via
+    # chat_reply, see below) instead of ending the spine itself; ONE SpeakSink instance is
     # appended to BOTH graph variants below (draft_dispatch stays its own separate terminal,
     # untouched).
     speak_stage = build_speak_sink(config)
+
+    # TK-222 (EP-32, Q-110(d) ruling 5): the chat input surface — enabled IFF
+    # config.wombat_chat_handshake_file is non-blank (loud-skip parity with sources.bootstrap's
+    # own _maybe_register_* pattern). chat_reply_stage is built UNCONDITIONALLY either way —
+    # EVERY compose-composed item hops through it now (ruling 3) — but its broker is None on a
+    # chat-disabled boot, making it a pure pass-through (chat_source/chat_surface stay None too,
+    # so nothing is registered into source_registry below).
+    chat_source: ChatSource | None = None
+    chat_reply_broker: ChatReplyBroker | None = None
+    chat_surface: ChatSurface | None = None
+    raw_chat_handshake_path = (config.wombat_chat_handshake_file or "").strip()
+    if not raw_chat_handshake_path:
+        logger.warning(
+            "assemble_runtime: WOMBAT_CHAT_HANDSHAKE_FILE not configured — skipping the chat "
+            "input surface (boot continues without it)"
+        )
+    else:
+        chat_source = ChatSource()
+        chat_reply_broker = ChatReplyBroker()
+        chat_surface = ChatSurface(
+            source=chat_source,
+            broker=chat_reply_broker,
+            token=secrets.token_urlsafe(32),
+            handshake_path=Path(raw_chat_handshake_path),
+        )
+    chat_reply_stage = ChatReplyStage(broker=chat_reply_broker)
 
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
@@ -852,6 +891,7 @@ def assemble_runtime(
         graph = build_drain_pathway(
             *pre_dispatch_stages,
             compose_stage,
+            chat_reply_stage,
             speak_stage,
             reflection_compose_stage,
             draft_dispatch_stage,
@@ -863,6 +903,7 @@ def assemble_runtime(
             review_or_speak_stage,
             compose_dispatch_router,
             compose_stage,
+            chat_reply_stage,
             speak_stage,
             reflection_compose_stage,
         )
@@ -1006,6 +1047,10 @@ def assemble_runtime(
         live_persona=live_persona,
         speak=speak,
     )
+    if chat_source is not None:
+        # TK-222 (Q-110(d) ruling 1): registered exactly like every other source — the registry
+        # never learns chat is push-backed/HTTP-fed (registration-not-rewrite, DEC-5).
+        source_registry.register(chat_source)
 
     # TK-97 (Q-80): register wombat.brief_schedule — the once-daily brief timer — inside the SAME
     # brief-path conditional (blank brief path already loud-skipped BOTH above, leaving
@@ -1086,4 +1131,5 @@ def assemble_runtime(
         observation_writer=observation_writer,
         behavior_event_log=behavior_event_log,
         action_trail_writer=action_trail_writer,
+        chat_surface=chat_surface,
     )
