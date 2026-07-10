@@ -5224,6 +5224,229 @@ nodes:
     files_in_scope:
       - tests/gate/test_boot_replay_pg.py
       - tests/integration/test_outbound_wiring_e2e.py
+  - id: TK-230
+    kind: ticket
+    parent: EP-4
+    title: "CRF-2 (CRITICAL) - the drain becomes bounded-episode runs launched by a wombat-owned drain pump (DEC-41) - DrainQueueStage returns Done on empty, serve() peeks the durable queue and fires a fresh journaled engine.run per work cycle; the queue can never again go deaf after one item"
+    intent: "The closeout register's critical finding (planning/code-review-2026-07-10-closeout.md CRF-2, repro scratchpad/repro_drain.py) - the single standing drain run reaches terminal Done after its FIRST processed item (review_or_speak returns Done on HOLD; SpeakSink returns Done or a terminal Degraded), the engine then cancels its timers (cog-worx engine.py:855-857), and the Sweeper re-drives ONLY runs whose status is WAITING/RETRYING with a due timer (fire_timer no-ops on terminal runs, engine.py:577) - so every item enqueued after the first is stranded until full process restart. The same shape also deafens the queue whenever the drain run parks AWAITING_HUMAN on the draft leg. Fix per DEC-41 - (a) DrainQueueStage's empty branch returns Done with a terminal drain-idle Artifact instead of Wait(to=self); transitions become ('gate',) and the drain pathway never parks WAITING; (b) NEW read-only WombatQueue.pending_count() (one SELECT over un-leased rows); (c) runtime._drive_and_serve runs a drain-pump coroutine CONCURRENTLY with Sweeper.run_forever - each beat (the existing drain poll interval) it peeks pending_count(), fires engine.run with a fresh wombat-drain-<uuid> run id while work remains (chained back-to-back until the peek reports empty), then sleeps; idle beats start ZERO runs and write ZERO journal records. ONE pump, sequential awaits - ASMP-2 single-drainer preserved. The initial boot drive is subsumed by the pump's first beat. The AC5 single-item blind spot in tests/integration/test_serve_boot.py that masked this bug is corrected here - the test must now prove a SECOND item drains."
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: production
+    complexity_budget: "Three product files (drain_queue.py empty-branch swap + transitions tuple; queue.py one read-only count method; runtime.py pump coroutine gathered with the sweeper) plus test updates. NO Sweeper changes, NO brief/dream pathway changes, NO queue schema change, NO drain-graph rewiring beyond the stage's own transitions tuple. The pump is run-LAUNCH scheduling only - zero stage logic, zero gate calls, zero model calls."
+    acceptance_criteria:
+      - given: "a serve()-shaped composition over a throwaway pg queue with item A enqueued"
+        when: "the pump drains A to a terminal run and item B is enqueued AFTERWARD"
+        then: "B is drained and acked WITHOUT process restart (tick-driven, bounded) - the corrected test_serve_boot AC5 now enqueues a second item after the first cycle completes and asserts BOTH processed; this exact scenario is the CRF-2 repro inverted."
+      - given: "an empty queue"
+        when: "the pump beats several times"
+        then: "ZERO engine runs start (pending_count() peek only, no journal records), and a unit test pins DrainQueueStage returning Done (terminal drain-idle Artifact kind) on an empty drain - no drain stage result is ever a Wait."
+      - given: "K>1 items pre-enqueued (a wake burst)"
+        when: "one pump beat runs"
+        then: "fresh runs chain back-to-back until the queue is empty within that beat - all K items acked, each run a fresh wombat-drain-<uuid>, at most one run in flight at any instant (ASMP-2 held by sequential awaits)."
+      - given: "a drain run parked AWAITING_HUMAN on the draft leg (real Engine + InMemoryJournal, the test_approval_gate harness precedent)"
+        when: "a new item is enqueued and the pump beats"
+        then: "the new item drains in a FRESH run while the parked run stays parked (provide_human_input still re-drives it) - an approval no longer deafens the queue; full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No Sweeper/brief/dream changes - the calendar timers keep their Wait-self-park + Sweeper shape (TK-231 owns their ceiling and loudness)."
+      - "No multi-drainer and no advisory lock - ASMP-2 stands as documented."
+      - "No queue schema change; pending_count is one read-only SELECT."
+    depends_on:
+      - TK-53
+      - TK-177
+    files_in_scope:
+      - src/wombat/stages/drain_queue.py
+      - src/wombat/queue.py
+      - src/wombat/runtime.py
+      - tests/unit/test_drain_queue_stage.py
+      - tests/unit/test_queue.py
+      - tests/unit/test_runtime.py
+      - tests/integration/test_serve_boot.py
+  - id: TK-231
+    kind: ticket
+    parent: EP-1
+    title: "CRF-3 (MAJOR) - build_engine pins max_steps=100_000 and wires a logging event_sink so the eternal timer runs never hit the silent 1000-step FAILED ceiling and NO run can ever again die silent"
+    intent: "Closeout register CRF-3 (repro scratchpad/repro_maxsteps.py) - build_engine constructs Engine without max_steps or event_sink, so the cog-worx defaults stand - max_steps=1000 (engine.py:112) and a None sink. Every Wait-self-parking eternal run accrues ONE committed step per Sweeper re-drive (fire_timer replays the committed prefix from entry and commits one new step), and at seq>=1000 the engine flips the run FAILED and cancels its timers (engine.py:747-751) with the RUN_FAILED emit going NOWHERE (no sink wired). With TK-230/DEC-41 the drain no longer self-parks, but brief_timer (TK-97) and dream_timer (TK-52) remain deliberately-eternal Wait-self-park runs that would die silently after ~1000 days. Fix per DEC-41(e) - build_engine passes max_steps=100_000 EXPLICITLY (keeps the framework's runaway-loop guard real - a hot loop still fails fast in framework terms - while a once-daily self-park outlives any plausible process lifetime by centuries) and wires event_sink to a small logging sink over cogworx.coordination.events (Event/EventType) that logs RUN_FAILED at ERROR naming the run_id, other lifecycle events at DEBUG or not at all."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One product file (bootstrap.py) - two new Engine kwargs + one module-level sink function - plus tests. No Engine subclassing, no cog-worx edits (DEC-12), no per-run overrides, no new config fields (the ceiling is a build_engine constant with an explaining comment)."
+    acceptance_criteria:
+      - given: "the assembled wombat Engine"
+        when: "a test inspects the construction (constructor spy or engine attribute)"
+        then: "max_steps == 100_000 explicitly and event_sink is the wombat logging sink, never None."
+      - given: "a Wait-self-parking stage (the BriefTimerStage shape) driven by a tick-driven Sweeper harness over InMemoryJournal against an engine built with build_engine's kwargs"
+        when: "the run is re-driven well past 1000 wakes (double the OLD default ceiling)"
+        then: "the run is still WAITING, never FAILED - the ~83-minute/1000-day silent-death class is closed (the CRF-3 repro inverted)."
+      - given: "a run that genuinely exceeds the ceiling (a harness engine built with a tiny max_steps and the SAME wombat sink)"
+        when: "the ceiling trips"
+        then: "an ERROR log line naming the run_id is emitted via the wired sink (caplog-proven) - a FAILED run is never silent; full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No removal of the ceiling - unbounded runs are the framework's own named anti-pattern (engine.py:18)."
+      - "No re-architecture of the brief/dream timer pathways - their Wait-self-park + Sweeper shape stands (TK-97/TK-52)."
+    depends_on:
+      - TK-230
+    files_in_scope:
+      - src/wombat/bootstrap.py
+      - tests/unit/test_bootstrap.py
+      - tests/unit/test_runtime.py
+  - id: TK-232
+    kind: ticket
+    parent: EP-3
+    title: "CRF-4 (MAJOR) - guard the SourceRegistry enqueue seam (the pattern_detector two-arm precedent) and make registry.stop() teardown-proof, so a full/erroring queue can neither kill a source nor break shutdown"
+    intent: "Closeout register CRF-4 - in sources/registry.py _poll_loop the try/except wraps only await source.poll(); the else-branch enqueue() is UNGUARDED, so a QueueFullError (wombat_queue at max_pending) or any psycopg error (a reaped/dropped live-pg connection) terminates that source's asyncio task permanently - the source silently stops polling until full restart. Compounding, the dead task's stored exception is not CancelledError, so registry.stop() re-raises it from await task and aborts the remaining stop() iterations AND runtime._drive_and_serve's whole finally teardown (stop() is its first line - queue/ledger/pending_journal/behavior_event_log connections leak). Fix rides the verified in-repo precedent at the IDENTICAL seam - behavior/stages/pattern_detector.py:184-201 (TK-204/CR3-2) - a kept-specific QueueFullError arm plus a broad Exception arm around the enqueue block (log loud naming the source and the dropped event, mark degraded, CONTINUE the loop; pull sources redeliver on a later poll, a push-buffered event is honestly dropped-and-logged), and stop() suppresses-and-logs any non-CancelledError from awaited tasks so every source stops and the runtime finally always completes."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One product file (sources/registry.py) - the poll loop gains the two-arm guard around the enqueue block and stop() gains a suppress-and-log; tests in the existing registry module. No retry machinery, no backoff policy, no queue changes, no InputSource contract change."
+    acceptance_criteria:
+      - given: "a registered source emitting one event per poll and an enqueuer raising QueueFullError"
+        when: "the poll loop runs several intervals"
+        then: "the task stays ALIVE and keeps polling (the CRF-4 repro inverted - task.done() stays False), each failure logs loud naming the source, and the source is marked degraded."
+      - given: "the same source with an enqueuer raising a generic Exception (the reaped-pg OperationalError class)"
+        when: "the poll loop runs and the enqueuer then recovers"
+        then: "the task survives, and a subsequent successful poll+enqueue clears the degraded mark - two-arm parity with behavior/stages/pattern_detector.py (specific QueueFullError arm + broad Exception arm)."
+      - given: "a poll task that died with a stored non-CancelledError exception (simulated)"
+        when: "registry.stop() runs"
+        then: "stop() suppresses-and-logs it, every remaining task is awaited, every source's stop() runs, and a runtime-shaped finally sequence after it completes (the shutdown-leak half closed); full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No retry/backoff policy and no dead-letter store - fault absorption matching the pattern_detector precedent (NG-3)."
+      - "No change to the enqueue-only ASMP-2 posture; the registry never drains."
+    depends_on:
+      - TK-3
+    files_in_scope:
+      - src/wombat/sources/registry.py
+      - tests/unit/test_source_registry.py
+  - id: TK-233
+    kind: ticket
+    parent: EP-31
+    title: "CRF-6 (MAJOR) - _build_local_transcriber broadens its except to Exception (the _build_local_tts sibling shape) so a whisper model-load failure degrades voice instead of crashing boot (CON-3)"
+    intent: "Closeout register CRF-6 - voice/select.py _build_local_transcriber wraps FasterWhisperTranscriber construction in except ImportError ONLY, while the sibling _build_local_tts catches broad Exception. FasterWhisperTranscriber.__init__ loads the whisper model AT CONSTRUCTION and raises non-ImportError on realistic conditions (model uncached + offline, bad WOMBAT_ASR_MODEL name, corrupted HF cache), which propagates unguarded through _maybe_register_asr -> build_source_registry -> assemble_runtime and CRASHES BOOT - violating CON-3 (voice is additive, never blocks boot), the function's own docstring, and _maybe_register_asr's neither-piece-ever-raises claim. It also poisons the healthy-cloud-primary path (the fallback-slot construction raising despite a working cloud STT). Fix - broaden the except to Exception matching the TTS sibling byte-shape; both role-discriminated messages (TK-217) stay, the install-the-voice-extra wording preserved as the common case."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: production
+    complexity_budget: "A one-word except broadening in ONE function of voice/select.py plus tests. No provider changes, no new config, no fallback-direction change (DEC-28 cloud-to-local stands)."
+    acceptance_criteria:
+      - given: "FasterWhisperTranscriber monkeypatched to raise RuntimeError at construction (the register's repro) under default local STT config"
+        when: "build_transcriber(cfg, key_store=None) runs"
+        then: "it returns None with the loud primary-role warning - never a raise - and _maybe_register_asr/build_source_registry complete without raising (boot survives; the CRF-6 repro inverted)."
+      - given: "a healthy cloud STT primary whose local fallback-slot constructor raises a non-ImportError"
+        when: "build_transcriber runs"
+        then: "the cloud primary is returned wrapped with an absent local fallback and the fallback-role message (TK-217 shape) - the cloud primary remains active."
+      - given: "the ImportError path (voice extra absent)"
+        when: "both roles run"
+        then: "today's messages are byte-preserved; full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No retry, no lazy model loading, no provider-construction changes - the guard breadth is the whole fix."
+    depends_on:
+      - TK-193
+      - TK-217
+    files_in_scope:
+      - src/wombat/voice/select.py
+      - tests/voice/test_select.py
+  - id: TK-234
+    kind: ticket
+    parent: EP-26
+    title: "CRF-1 (MAJOR, latent) - the _checked_fill password deny-always guard normalizes attribute casing to lowercase before comparing, so page-controlled type=PASSWORD casing can never defeat it"
+    intent: "Closeout register CRF-1 (reproduced end-to-end on installed Chromium) - _checked_fill (capabilities/playwright_capability.py:255) decides on a case-sensitive compare of the raw locator.get_attribute('type') value against the lowercase word password, and get_attribute returns the page's VERBATIM attribute casing. A password input authored type=PASSWORD (or Password) is a genuine browser-masked password field (its live element type IS password) yet the guard does not fire and the fill lands - the documented UNCONDITIONAL deny-always guarantee (TK-136/Q-114 ruling h - no code path may EVER bypass) is defeated by trivial page-controlled casing, untrusted content in the browsing threat model. Latent today (the capability is not runtime-wired) but it ships on the closed board with tests exercising this exact fill path. Fix - lowercase-normalize the attribute (empty-string default for absent) before the compare; absent-attribute behavior unchanged."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: production
+    complexity_budget: "A one-line normalization in _checked_fill plus tests. No detection-heuristic change, no schema change, no new actions."
+    acceptance_criteria:
+      - given: "local fixture pages authored type=PASSWORD and type=Password (real chromium, Q-113(b) skip-gating, never the live internet)"
+        when: "the type action and a submit_form whose field list includes the mixed-case password field are invoked"
+        then: "BOTH fill call sites return password_field_blocked, the field value stays empty, and the mixed-case password field among submit_form fields blocks the whole submit with NO submit click (the CRF-1 repro inverted at both sites)."
+      - given: "the lowercase type=password page and ordinary non-password inputs"
+        when: "the same actions run"
+        then: "behavior is byte-unchanged - lowercase still blocks, non-password fields still fill, and an element with NO type attribute still fills (the normalization changes no absent-attribute behavior)."
+      - given: "no chromium available"
+        when: "a hermetic unit twin drives the guard decision over a fake locator returning PASSWORD/Password/password/None"
+        then: "the compare is proven case-insensitive without a browser; full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No change to the aria-snapshot courtesy detection (the TK-136 recorded limitation stands - the guard is the strong guarantee)."
+      - "No runtime wiring of the browser capability (still deliberately out of v1 pathways)."
+    depends_on:
+      - TK-136
+    files_in_scope:
+      - src/wombat/capabilities/playwright_capability.py
+      - tests/capabilities/test_password_guard.py
+  - id: TK-235
+    kind: ticket
+    parent: EP-32
+    title: "CRF-7 (minor) - settings.json writes become atomic (temp file + os.replace, the trail/renderer.py precedent) so a torn write can never silently reset the operator's saved settings"
+    intent: "Closeout register CRF-7 (reproduced via TestClient) - put_settings (settings_app/api.py:148) does existing.update then a bare write_text over the live file. A crash/kill/full-disk mid-write leaves truncated JSON; _read_settings swallows JSONDecodeError/OSError to an empty dict, so the next GET shows every app-editable field null and the next PUT persists only the touched fields - all previously-saved persona/provider/voice settings silently discarded. Fix rides the verified in-repo atomic-write precedent (trail/renderer.py:136-148) - write to a temp file in the SAME directory, then os.replace into place; a crash mid-write leaves the OLD intact file."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One write-path change in api.py plus tests. No _read_settings change (its degrade-to-empty stays the honest corrupt-file posture), no new endpoints, no schema change; the TK-197 zero-runtime-imports discipline untouched."
+    acceptance_criteria:
+      - given: "a seeded settings file and os.replace patched to raise mid-PUT (the torn-write instant simulated at the atomic boundary)"
+        when: "PUT /settings runs and then GET /settings"
+        then: "the original file bytes are UNCHANGED and GET returns the previously-saved values - the CRF-7 silent-reset chain is broken."
+      - given: "a normal PUT"
+        when: "it completes"
+        then: "the file contains the merged settings, written via temp-then-os.replace in the same directory (structurally asserted), and no temp file remains; full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No recovery/backup machinery and no UI error-banner work - atomicity removes the loss window; the corrupt-file read degrade stays as-is."
+    depends_on:
+      - TK-197
+    files_in_scope:
+      - src/wombat/settings_app/api.py
+      - tests/settings_app/test_api.py
+  - id: TK-236
+    kind: ticket
+    parent: EP-1
+    title: "CRF-9 (minor) - .env.example gains the omitted operator vars (brief/voice/OAuth/chat/feedback/ASR) and drops the stale nothing-reads-persona-yet comment"
+    intent: "Closeout register CRF-9 - the operator template omits WOMBAT_BRIEF_PATH and WOMBAT_VOICE_ENABLED (the morning brief - the headline daily feature), GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET (the gcal/gmail sources), WOMBAT_CHAT_HANDSHAKE_FILE (the chat pane), WOMBAT_FEEDBACK_FILE, and WOMBAT_ASR_DROP_DIR/WOMBAT_ASR_MODEL - all real WombatConfig fields documented in README. The persona-axes comment near line 43 (nothing reads these yet) is stale - persona axes ARE read at boot (matrix_from_config into LivePersona) and gate-actuated (effective_urgency_threshold). Docs-only template completeness; every field stays optional-with-default, no boot behavior changes."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "One file (.env.example) - commented example lines with one-line descriptions matching README, plus the corrected persona comment. No config.py changes, no README changes needed."
+    acceptance_criteria:
+      - given: "the updated .env.example"
+        when: "each named var is checked"
+        then: "WOMBAT_BRIEF_PATH, WOMBAT_VOICE_ENABLED, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, WOMBAT_CHAT_HANDSHAKE_FILE, WOMBAT_FEEDBACK_FILE, WOMBAT_ASR_DROP_DIR, and WOMBAT_ASR_MODEL all appear as commented examples with an accurate one-liner, and every var name in the file matches a real WombatConfig field (no drift, greppable)."
+      - given: "the persona axes block"
+        when: "its comment is read"
+        then: "it truthfully states the axes are read at boot into LivePersona and hot-applied (TK-209) - the stale nothing-reads-these-yet line is gone; suite untouched and green."
+    non_goals:
+      - "No new config fields, no value changes, no README edits."
+    depends_on:
+      - TK-228
+    files_in_scope:
+      - .env.example
+  - id: TK-237
+    kind: ticket
+    parent: EP-1
+    title: "CRF-10 (minor) - the wombat console script boots the real runtime (a main() in wombat.__main__) instead of the Hello-World stub"
+    intent: "Closeout register CRF-10 - pyproject [project.scripts] points the wombat command at wombat:main, the scaffold-era two-line Hello-World stub in __init__.py, so an installed wombat command does nothing while the real boot is only python -m wombat. Fix - add def main() in __main__.py wrapping asyncio.run(serve()) (the module-level boot moves into it, python -m behavior unchanged), point the script entry at wombat.__main__:main, and delete the Hello-World stub from __init__.py."
+    status: todo
+    priority: P3
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Three tiny files (pyproject.toml script target, __main__.py gains def main(), __init__.py stub deleted). No runtime.py changes, no CLI framework."
+    acceptance_criteria:
+      - given: "a synced venv on a bare env (no WOMBAT_PG_DSN)"
+        when: "uv run wombat executes"
+        then: "it enters the REAL boot and fails loud with the ConfigurationError naming WOMBAT_PG_DSN - behavior parity with python -m wombat on the same env; the Hello-World string exists nowhere under src."
+      - given: "python -m wombat"
+        when: "it runs on the same env"
+        then: "behavior is unchanged (the module guard now calls main()); full suite green, ruff clean, mypy strict clean."
+    non_goals:
+      - "No CLI arguments or subcommands - the entry point is boot-only parity, nothing more."
+    depends_on:
+      - TK-53
+    files_in_scope:
+      - pyproject.toml
+      - src/wombat/__init__.py
+      - src/wombat/__main__.py
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -6007,6 +6230,24 @@ governance:
       description: "Facts verified against installed source THIS session (never memory) - cogworx/capability/router.py dispatch_one pipeline ORDER (step 1 check_dispatch tier gate runs BEFORE step 2.5 check_approval; taint latch step 3 then invoke step 4), policy.py (ToolGate._effective_tiers drops external whenever tainted AND taint_drops_external - which DEC-26 pins True on the ONLY external-admitting policy, EXTERNAL_DISPATCH_POLICY; check_approval fires only when tainted AND consequential+irreversible tags AND not approved), runtime/context.py (RunContext.dispatch_approved bypasses ONLY ApprovalRequired - tier/schema/taint/timeout stay enforced; read_human_input + last_output are journal-backed pulls), runtime/engine.py (provide_human_input records the answer at the parked step_index then CAS AWAITING_HUMAN to RUNNING and re-drives from entry; resume rehydrates tainted=state.tainted so taint SURVIVES the AwaitHuman park; a committed AwaitHuman replays as a plain advance), wombat as-built - stages/dispatch_base.py (ProposeDispatchStage non-overridable run = record_proposal then AwaitHuman, action_id run_id colon stage_name, dispatch_args ride the parked output Artifact) + stages/dispatch_approved.py (generic DispatchApprovedStage - position-independent locate, decision approve/reject, dispatch_approved exactly once, binds EXTERNAL_DISPATCH_POLICY at __init__) + draft_composer/draft_dispatch (Q-92 fresh-drive/park-makes-taint-harmless precedent) + capabilities/playwright_capability.py (action enum navigate/snapshot/click/type/select/screenshot, _act_role structured element_not_found return, session-holder direct ungated snapshot use documented) + trail (ActionType FORM_SUBMIT/LOGIN_HANDOFF exist; record_refusal writes the terminal blocked_by_taint row) + tests/safety/test_approval_gate.py (real-Engine + InMemoryJournal park/approve/reject harness incl. a mock SubmitBrowserForm stub over the TK-149 base).",
       resolution: "RULED 2026-07-10, batch TK-135 -> TK-136 closes EP-26 and the board; neither needs the OAuth bring-up. (a) THE PRECEDENCE RULING (deferred at v2.26) - human approval does NOT re-admit the external tier on a tainted drive. dispatch_approved bypasses ONLY ApprovalRequired; the tier check runs FIRST in dispatch_one and DEC-26 taint_drops_external=True is absolute, so a tainted drive raises TierViolation even with approved=True. Corollary - for external-tier capabilities check_approval is structurally UNREACHABLE (tainted implies tier refusal first), so the browser capability carries NO consequential/irreversible tags; approval for external side effects is carried ENTIRELY by the TK-149 journal to AwaitHuman to dispatch_approved pattern executing on an UNTAINTED drive. TK-135 lands a ruling test - tainted drive + approved answer -> TierViolation, ZERO capability invocations, mark_dispatched never called; the loud raise (RUN_CRASHED path) is accepted v1 behavior, no swallow/auto-retry, and the TK-148 blocked_by_taint trail rendering is NOT extended here. (b) FLOW CONSEQUENCE - the form-submit propose side dispatches NOTHING pre-park (unlike draft_composer), so the re-driven drive is untainted and the ONE approved submit_form dispatch passes the tier gate and is itself the taint-latching dispatch, harmless because the dispatch stage is terminal (Q-92 parallel). A drive that browsed untrusted pages CANNOT then submit a form in that same drive - designed refusal per (a); cross-drive shapes are future wiring, out of scope. (c) TK-135 SHAPE - FormSubmitStage subclasses ProposeDispatchStage (name form_submit, ActionType.FORM_SUBMIT, dispatch_stage_name form_dispatch); the dispatch side is the EXISTING generic DispatchApprovedStage parameterized capability=browser - zero new dispatch-side code. Input wire - ctor upstream_stage_name + ctx.last_output pull (the ingest_email_body idiom); artifact kind wombat.form_submit_request, data {url, fields list of {role,name,value}, submit {role,name}}; malformed payload -> loud ValueError. human_summary enumerates the exact target URL and every field name+value - the human approves exactly what dispatches, and record_proposal lands the trail row BEFORE the park (AC1). (d) ATOMIC submit_form ACTION added to PlaywrightCapability - ONE gated dispatch performs goto(url) + fill each field via get_by_role + click submit inside a single invoke (the Q-113c one-dispatch shape - any follow-up dispatch is dead post-latch); BROWSER_INPUT_SCHEMA extended in place (fields array + submit object + per-action allOf, additionalProperties false); first unresolved locator -> structured {ok false, error element_not_found, role, name} return with NO submit click, never a raise. (e) TK-135 AC4 closure is structural and already policed - DEFAULT_TOOL_POLICY has no external tier so any stage without bind_external_tier gets TierViolation; test_tier_policy proves the single external-admitting construction site; TK-135 adds the default-policy-refusal assertion plus the (a) ruling test. (f) TK-136 SHAPE - standalone stages, NOT ProposeDispatchStage subclasses (its run() unconditionally parks, but login detection must PASS THROUGH when no login page is present - draft_composer standalone precedent; ProposalWriter/ApprovalTrailWriter seams + the action_id convention are REUSED, not reimplemented). LoginHandoffStage (name login_handoff, transitions (login_confirm,)) takes an injected PageStateProvider seam - an async callable returning {url, snapshot} for the CURRENT page; production wiring is a direct UNGATED snapshot read on the shared session (TK-131 documented direct-use note) because the resumed drive is tainted and a gated snapshot dispatch would TierViolation - the re-check must never need the external tier. Detection-negative -> Done wombat.login_check_passed; detection-positive -> record_proposal (ActionType.LOGIN_HANDOFF, target=domain from the provider url) then AwaitHuman (question login required at domain, to login_confirm). LoginConfirmStage (name login_confirm, transitions (login_confirm,) self-park) - locates the LATEST parked step whose stage_name is login_handoff OR login_confirm (the newest answer lands at the newest park - draft_dispatch position-independent idiom widened to both names), read_human_input there; decision login-complete -> fresh {url,snapshot} from the provider -> password textbox GONE -> mark_dispatched + Done wombat.login_confirmed; still present -> AwaitHuman again to itself; absent/malformed decision -> MissingApprovalAnswer-style loud refusal (imported type + record_refusal, never silent). (g) DETECTION HEURISTIC - a pure function over the JSON-native aria snapshot walking nested lists/dicts for a textbox node whose accessible name matches a closed case-insensitive set (password/passcode/passphrase). RECORDED LIMITATION - aria snapshots surface password inputs as textbox-by-name (no type attribute in the snapshot); the STRONG guarantee is (h), detection is the courtesy handoff; no pixel matching (non-goal held). (h) THE PASSWORD FIELD GUARD (wombat-authored, Q-32) - lives INSIDE PlaywrightCapability as ONE shared checked-fill helper used by BOTH the type action AND submit_form field loop; before ANY fill it reads the LIVE element type attribute via the locator; type password -> structured {ok false, error password_field_blocked} + WARNING log, the fill never happens. RULED STRICTER THAN THE AC TEXT - the guard is UNCONDITIONAL deny-always; NO human-confirm token parameter exists because no code path may ever issue one (the no-autofill-under-any-code-path non-goal made structural; a token would be unearned bypass surface). The AC3 token clause is satisfied by strengthening - no token exists so every attempt is refused; the cannot-be-bypassed test asserts the guard covers both fill call sites. (i) TK-136 AC4 - real-Engine + InMemoryJournal park test (test_approval_gate harness precedent) - after the AwaitHuman commits the run stays AWAITING_HUMAN, no further step executes, no retry, the journal records the park; only provide_human_input re-drives. (j) TESTS + SCOPE - hermetic tests need no browser (fake capabilities/providers over the REAL Registry+ToolGate+dispatch_one and real Engine+InMemoryJournal); real-chromium submit_form/guard tests ride the Q-113b skip-gating (importorskip + launch probe) over a local stdlib fixture server, never the live internet. files_in_scope normalized on both tickets (playwright_capability.py + the two new test modules each). Build order TK-135 then TK-136 so the guard lands covering BOTH fill call sites.",
       links: ["EP-26","TK-135","TK-136","TK-149","TK-151","TK-148","Q-91","Q-92","Q-113","Q-32","DEC-19","DEC-22","DEC-26","NG-5","CON-4","CON-5","CST-5"] }
+  - { id: Q-115, type: open_question, status: resolved, scope: project, date_raised: "2026-07-10", date_updated: "2026-07-10", title: "Route-and-rule for the board-empty closeout register (planning/code-review-2026-07-10-closeout.md, CRF-1..CRF-10) - the drain-lifecycle fix design (the crux), the priority fix batch, the cleanup batch, and the two deferrals",
+      description: "Facts re-verified against installed source THIS session (never memory). cog-worx ground truth - Sweeper.tick only re-drives runs claimed from due timers (sweeper.py:67-69); fire_timer no-ops unless the run is WAITING/RETRYING (engine.py:577), so a terminal run is unreachable forever; Done -> COMPLETED + cancel_timers_for_run (engine.py:855-857); max_steps defaults 1000 and FAILS the run at seq>=max_steps with RUN_FAILED emitted only into an optional event_sink (engine.py:112, 747-751); the module's own framing (engine.py:18) - the step ceiling exists to FAIL a run that would loop forever, i.e. cog-worx runs are bounded episodes BY DESIGN and no sanctioned perpetual-service-run pattern exists. wombat ground truth - the drain graph is linear with no edge back to drain_queue (bootstrap.py:897-928); DrainQueueStage Wait-self-parks on empty (drain_queue.py:74); build_engine passes neither max_steps nor event_sink (bootstrap.py:322-339); runtime fires ONE drain run then only the Sweeper (runtime.py:156-195). CRF-2 (critical) and CRF-3 therefore CONFIRMED exactly as registered. Remaining seams verified - registry.py poll loop guards only poll() while the enqueue block is bare, vs the two-arm precedent at behavior/stages/pattern_detector.py:184-201; select.py _build_local_transcriber except-ImportError-only vs the sibling _build_local_tts broad except; _checked_fill case-sensitive password compare at playwright_capability.py:255; settings_app/api.py:148 bare write_text vs the trail/renderer.py:136-148 os.replace precedent.",
+      resolution: "RULED by architect 2026-07-10 (within authority - review routing + pipeline-level how; no locked DEC or v1 scope touched; DEC-8 idles-on-empty and DEC-12 no-cognitive-loop/never-fork explicitly held). THE CRUX -> DEC-41 (bounded-episode drain runs launched by a wombat-owned pump; the timer runs keep Sweeper custody with an explicit max_steps=100_000 + a wired logging event_sink). ROUTING - CRF-2 -> TK-230 (P1 CRITICAL, EP-4); CRF-3 -> TK-231 (P1, EP-1); CRF-4 -> TK-232 (P1, EP-3, the pattern_detector two-arm precedent + stop() suppress-and-log); CRF-6 -> TK-233 (P1, EP-31, broaden to the TTS-sibling except shape); CRF-1 -> TK-234 (P1, EP-26, lowercase-normalize the deny-always compare at both fill sites). CLEANUP batch - CRF-7 -> TK-235 (P3, EP-32, atomic temp+os.replace); CRF-9 -> TK-236 (P3, EP-1, .env.example completeness + stale persona comment); CRF-10 -> TK-237 (P3, EP-1, real console entry point). DEFERRALS - CRF-5 -> DEF-9 (pending_journal compaction; single-operator replay measured ~4000 rows in 5ms); CRF-8 -> DEF-10 (macOS reopen lifecycle; operator on Windows). BUILD ORDER - TK-230 -> TK-231 -> TK-232 -> TK-233 -> TK-234 (the daily-driver batch; wombat is not daily-reliable until it lands), then TK-235 -> TK-236 -> TK-237. The AC5 single-item verification blind spot that let CRF-2 slip is corrected structurally inside TK-230 AC1 - a SECOND enqueued item must be proven drained without restart.",
+      links: ["DEC-41","TK-230","TK-231","TK-232","TK-233","TK-234","TK-235","TK-236","TK-237","DEF-9","DEF-10","DEC-8","DEC-12","CON-3","EP-4","EP-1","EP-3","EP-31","EP-26","EP-32"] }
+  - { id: DEC-41, type: decision, status: accepted, scope: EP-4, date_raised: "2026-07-10", converted_from: "Q-115", title: "The drain becomes BOUNDED-EPISODE runs launched by a wombat-owned drain pump - DrainQueueStage terminates Done on empty, serve() peeks the durable queue and fires a fresh journaled engine.run per work cycle; the Sweeper remains the beat for the calendar timers only, whose step accrual is bounded by an explicit max_steps=100_000 plus a wired logging event_sink so no run ever dies silent",
+      context: "CRF-2 (critical) + CRF-3 (major), proven with runnable repros against installed cog-worx - fire_timer no-ops on non-parked runs (engine.py:577), Done -> COMPLETED + cancel_timers_for_run (855-857), the Sweeper wakes only due-timer runs, so the single eternal drain run (the TK-53/Q-71 shape) COMPLETES on its first drained item and the queue goes permanently deaf; independently every Wait-self-park accrues one committed step per wake and the engine FAILS the run at the default max_steps=1000 (747-751) SILENTLY (no event_sink wired) - an idle drain dies in ~83 minutes. The framework's own docstring (engine.py:18) frames max_steps as failing a run that would loop forever - cog-worx runs are bounded episodes BY DESIGN and no sanctioned perpetual-run pattern exists; the eternal-drain-run shape was fighting the framework.",
+      decision: "(a) BOUNDED EPISODES - DrainQueueStage's empty branch returns Done (terminal drain-idle Artifact) instead of Wait(to=self); the drain pathway never parks WAITING and the eternal-run pattern is removed from the drain entirely. (b) THE DRAIN PUMP - _drive_and_serve runs a wombat-owned pump coroutine concurrently with Sweeper.run_forever; each beat it peeks the durable queue read-only (new WombatQueue.pending_count()) and, while work exists, fires engine.run with a fresh wombat-drain-<uuid> run id chained back-to-back until the peek reports empty, then sleeps - idle beats start zero runs and write zero journal records. (c) ASMP-2 PRESERVED - one pump, sequential awaits, at most one run executing drain_queue at any instant; a drain run parked AWAITING_HUMAN (the draft leg) no longer deafens the queue - later items ride later runs while approval re-drives the parked run as before. (d) DEC-8/DEC-12 COHERENCE RECORDED - the pump is run-LAUNCH scheduling, the same act serve() already performs three times at boot and the same altitude as the DEC-5 SourceRegistry poll loops; every stage execution stays inside journaled Engine runs, so DEC-12's no-loop-code clause keeps its established project-wide meaning (no bespoke cognitive loop, never fork the Engine) and DEC-8's idles-on-empty holds (the pump sleeps, never invents work) - nothing in any locked DEC is superseded; what IS superseded is the TK-53-era Q-71 architect ruling that ONE eternal drain run re-driven by the Sweeper is the loop shape. (e) THE TIMER RUNS STAY - brief/dream schedule pathways keep their Wait-self-park + Sweeper shape (genuinely timer-shaped, TK-97/TK-52); their once-daily step accrual is bounded by build_engine pinning max_steps=100_000 explicitly (the runaway-loop guard stays real while a daily self-park outlives any plausible process lifetime by centuries) and build_engine wires an event_sink (cogworx.coordination.events) logging RUN_FAILED at ERROR - no run can ever again die silent. (f) VERIFICATION HONESTY - the AC5 single-item blind spot that masked CRF-2 is corrected in the fix ticket's ACs - a SECOND item enqueued after the first completed cycle must be proven drained without restart.",
+      consequences: "(+) The queue can never again go deaf - fresh per-cycle runs are re-drivable by construction. (+) No step-ceiling death and no O(n^2) prefix replay for the drain. (+) Idle costs nothing (no run, no journal record - cheaper than today's 5s Wait-step accrual). (+) Approval-parked drafts stop starving the drain. (-) Two beats now exist (pump + Sweeper) instead of one. (-) Per-cycle run records accrue in the in-memory journal proportional to REAL work - negligible at personal-assistant volume and cleared by the v1 clean-slate restart posture.",
+      alternatives: ["A perpetual single run with a loop-back graph edge (rejected - fights the framework: max_steps exists to fail forever-loops, full-prefix replay makes every re-drive O(n), and the run journal grows unboundedly)", "A Sweeper-fire wrapper respawning terminal drain runs plus idle-recycle counters (rejected - three mechanisms to preserve one aesthetic, with FAILED-as-routine or artifact-counter complexity)", "Raising max_steps alone (rejected - a snooze, not a fix: the deaf-after-first-item defect is untouched)", "Per-item runs fired from the source-enqueue path (rejected - couples enqueue to drive and erodes the ASMP-2 single-drainer discipline)"],
+      links: ["Q-115","TK-230","TK-231","DEC-8","DEC-12","TK-53","TK-97","TK-52","EP-4","EP-1","CON-3"] }
+  - { id: DEF-9, type: deferral, status: deferred, scope: EP-8, date_raised: "2026-07-10", date_updated: "2026-07-10", title: "Defer pending_journal compaction/checkpointing (CRF-5) - the append-only WAL replays its full history each boot, correct-but-monotonic; operationally negligible for the single operator",
+      description: "Closeout register CRF-5 (minor, adversarially verified) - PgPendingJournal.append only INSERTs, replay() reads all rows ORDER BY seq with no checkpoint, so the table and boot replay grow monotonically with lifetime usage. Final rebuilt state is CORRECT (proven); measured replay of ~4000 rows took 5ms on real pg. This is the deliberate WAL+replay design under NG-3 austerity - a compaction/snapshot layer today would be speculative machinery for a single-operator assistant with a small bounded live pending set.",
+      revisit_trigger: "Boot-time pending_journal replay observed above ~1 second, the table passing ~1M rows, or any relaxation of the ASMP-2 single-process posture (whose revisit inventory this joins).",
+      links: ["TK-29","EP-8","NG-3"] }
+  - { id: DEF-10, type: deferral, status: deferred, scope: EP-32, date_raised: "2026-07-10", date_updated: "2026-07-10", title: "Defer the macOS reopen-after-close settings-API respawn fix (CRF-8) - window-all-closed kills the API child before the darwin guard and activate never respawns it; the operator runs Windows",
+      description: "Closeout register CRF-8 (minor, verified in app/electron/main.ts) - on macOS, closing all windows tears down the settings-API child while the app stays dock-resident, and the activate handler recreates only the BrowserWindow over the dead child's stale port/token, so the reopened window shows a permanent settings load error until relaunch. On Windows (the only deployed platform, DEC-6 laptop posture) window-all-closed quits the app and the path never executes.",
+      revisit_trigger: "Any macOS deployment of the Electron app - the fix is small (respawn startApiProcess in the activate handler, or move teardown behind the darwin guard) and rides whichever ticket first targets macOS.",
+      links: ["EP-32","DEC-31","DEC-6"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -6250,3 +6491,4 @@ changelog:
   - { date: "2026-07-10", version: "2.37", by: "architect", change: "GOVERNANCE - the EP-25 reviewer's goto-timeout minor finding RULED RESOLVED-AS-MISCHARACTERIZED, NO code change (within authority - disposition of a review finding against source-verified behavior; no locked decision touched). Facts - src/wombat/capabilities/playwright_capability.py calls page.goto(url) with no explicit timeout at both call sites (navigate ~332, submit_form ~356), BUT Playwright's default navigation timeout is 30000ms; nothing in the module zeroes or raises that default, so goto raises TimeoutError after 30s and a raise out of invoke routes into the already-tested raise -> Degraded failure path (TK-133 AC). The hangs-indefinitely characterization was therefore overstated - actual behavior is bounded-at-30s-by-default with a handled failure path, which meets the batch's acceptance bar as-built. RECORDED HARDENING NOTE (deliberately NOT a ticket - the board is closed and no v1 runtime pathway dispatches a live browser) - an explicit pinned navigation timeout is sound hardening for whichever future ticket first wires a live browser pathway into the runtime, and it rides together with the Q-113(d) BrowserSession.close() runtime-wiring obligation already recorded for that same future ticket." }
   - { date: "2026-07-10", version: "2.38", by: "architect (recording Jim's explicit cadence ruling; supersede-not-edit per append-only)", change: "GOVERNANCE - THE CR6 STANDING OBLIGATION IS SUPERSEDED (Jim's explicit v2-cadence ruling, 2026-07-10 - no reason to verify twice, one Opus reviewer reviewing the whole code). The v2.26-era batch-selection standing obligation (that the CR6 app-arc review pass plus pending batch verifies run before the browser arc dispatches) - and any earlier note carrying the same CR6 line - is superseded WITHOUT editing those notes: the separate CR6 arc-level pass is CANCELLED. Full accounting so nothing is silently dropped - TK-213/TK-214 were batch-verified in wf_a13d4b29 (Q-112 era, recorded); TK-228/TK-229 were independently Opus-verified in the dedicated timezone-fix workflow (reviewer proved 07:00-local year-round + full pg suite 1541/0; recorded at v2.23-v2.25); the EP-25 and EP-26 batch verifies are discharged at v2.35/v2.36; and the whole-repo closeout review running NOW at board-empty is the final independent pass and subsumes any residual arc-level review obligation. Nothing remains owed under the CR6 line." }
   - { date: "2026-07-10", version: "2.39", by: "architect (recording the board-empty closeout review outcome; append-only, no decision edits)", change: "GOVERNANCE - FINAL WHOLE-REPO CLOSEOUT REVIEW COMPLETE (the board-empty pass that v2.38 records as subsuming all residual review obligations, incl. the superseded CR6 line). Scope - the whole repo at HEAD bd32890, 146/146 done, 8 dimensions (safety, runtime, persistence, voice, persona, app, tests, integration), every claim adversarially verified with runnable repros against real seams (installed Chromium, real cog-worx Engine/Sweeper, throwaway pg on 5438, TestClient). Register at planning/code-review-2026-07-10-closeout.md. OUTCOME - 10 CONFIRMED (1 critical, 4 major, 5 minor), 0 downgraded, 2 refuted. Clean bills - persona (structural guard-suffix invariant, hostile-policy rejection, 262 tests), tests (no suite-integrity defects; all 70 pg skips proven live on real pg, 1496/70 default run), safety spine (taint latch, CON-5 never-send, Q-114 precedence, DEC-28 egress, CON-7 residency all hold), app security posture, config/graph integration. CONFIRMED - CRF-2 CRITICAL runtime (standing drain run COMPLETES after one item, Sweeper can never re-drive a terminal run, queue permanently deaf per process lifetime; AC5 test masked it); CRF-3 MAJOR runtime (eternal self-park runs accumulate 1 journal step per Sweeper poll and FAIL silently at cogworx max_steps=1000 - idle drain dies in ~83 min); CRF-1 MAJOR safety-latent (password deny-always guard defeated by page-controlled type-attribute casing, case-sensitive compare in _checked_fill; latent - capability unwired in bootstrap); CRF-4 MAJOR persistence (SourceRegistry _poll_loop leaves enqueue() unguarded - QueueFullError/psycopg error permanently kills a source and re-raises through stop(), breaking shutdown teardown); CRF-6 MAJOR voice (_build_local_transcriber catches ImportError only - non-ImportError whisper load failure crashes boot, violating CON-3 voice-additive); CRF-5/7/8/9/10 MINOR (pending_journal unbounded append-only growth; non-atomic settings.json write; macOS reopen-after-close API-child gap; .env.example operator-var omissions + stale persona comment; wombat console-script Hello-World stub). NEXT - route-and-fix - the critical/major set (CRF-1..4, CRF-6) enters the normal ticket loop before daily-driver reliance; nothing here reopens a locked DEC or v1 scope." }
+  - { date: "2026-07-10", version: "2.40", by: "architect", change: "GOVERNANCE - CLOSEOUT REGISTER ROUTED AND RULED (Q-115; the v2.39 route-and-fix step). THE CRUX RULED as DEC-41 - the drain becomes BOUNDED-EPISODE runs launched by a wombat-owned drain pump (DrainQueueStage returns Done on empty; serve() peeks a new read-only pending_count() and fires a fresh journaled engine.run per work cycle, chained until empty, sleeping on idle beats with zero runs started; ASMP-2 one-pump sequential; DEC-8 idles-on-empty and DEC-12 no-cognitive-loop/never-fork explicitly HELD - what is superseded is only the TK-53-era Q-71 one-eternal-run HOW, because installed cog-worx proves runs are bounded episodes by design with no perpetual-run pattern: fire_timer no-ops on terminal runs at engine.py:577, Done cancels timers at 855-857, and max_steps exists to fail forever-loops per engine.py:18); the brief/dream timer runs keep Sweeper custody with build_engine pinning max_steps=100_000 explicitly + a wired logging event_sink so RUN_FAILED is never silent. EIGHT fix tickets minted (board 146/154) - PRIORITY daily-driver batch in build order TK-230 (CRF-2 CRITICAL drain pump; also corrects the AC5 second-item blind spot in test_serve_boot that masked the bug) -> TK-231 (CRF-3 max_steps + event_sink) -> TK-232 (CRF-4 registry enqueue guard on the pattern_detector two-arm precedent + stop() suppress-and-log teardown) -> TK-233 (CRF-6 transcriber except broadened to the TTS-sibling shape, CON-3) -> TK-234 (CRF-1 password-guard casing normalization covering both fill sites); CLEANUP batch TK-235 (CRF-7 atomic settings write, trail/renderer os.replace precedent) -> TK-236 (CRF-9 .env.example completeness + stale persona comment) -> TK-237 (CRF-10 real console entry point). TWO deferrals recorded, not dropped - DEF-9 (CRF-5 pending_journal compaction; ~4000-row replay measured 5ms; revisit at ~1s replay / ~1M rows / any ASMP-2 relaxation) and DEF-10 (CRF-8 macOS reopen respawn; operator on Windows; revisit at any macOS deployment). Every seam re-verified against installed cog-worx + wombat source this session. validate PASS; gate PASS." }
