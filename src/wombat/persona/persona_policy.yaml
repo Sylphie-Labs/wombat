@@ -48,8 +48,18 @@ mouth_axes:
 clauses:
   brevity:
     terse: ""
-    balanced: "A sentence or two is fine if it helps clarity."
-    expansive: "Feel free to add a bit more detail and context."
+    # TK-221 (ISS-7, DEC-38, Q-108(c)): the shipped "A sentence or two is fine if it helps
+    # clarity." was too weak to reliably out-rank TERSE on a mouth also instructed to be
+    # terse — a live re-derivation found the literal three-level chain (terse<balanced<
+    # expansive) non-monotone at practical N. This clause text is strengthened to explicitly
+    # ask for two-to-three FULL sentences (not merely "fine if it helps"), which a live
+    # re-derivation (N=9, median char length) confirmed orders strictly between TERSE and
+    # EXPANSIVE with a wide margin (medians ~98/171/334 on the repeated-fixture harness).
+    balanced: "Write two to three sentences -- enough to give the key detail without over-explaining."
+    # TK-221: strengthened in lock-step with `balanced` above so the three levels stay a
+    # strictly ordered chain rather than collapsing into each other; asks for a short
+    # paragraph rather than merely "a bit more detail and context."
+    expansive: "Write a short paragraph, roughly four to six sentences, with full context, detail, and any relevant nuance."
   warmth:
     reserved: ""
     neutral: "Keep the tone even and matter-of-fact."
@@ -60,4 +70,11 @@ clauses:
     blunt: "Be direct and blunt, without hedging."
   humor:
     none: ""
-    dry: "A touch of dry humor is welcome."
+    # TK-221 (ISS-7, DEC-38, Q-108(c)): the shipped "A touch of dry humor is welcome." produced
+    # no dry-vs-none separation on the live mouth (majority=False at BOTH levels) — too weak to
+    # move a mouth also instructed to phrase things in "one terse, calm line." This clause names
+    # the mechanism explicitly (one aside, set off in parentheses or dashes) rather than the
+    # vaguer "a touch of ... is welcome," which a live re-derivation confirmed reliably produces
+    # a structurally-detectable prose aside (eval_fixtures.has_humor_aside) on both COMPOSE and
+    # BRIEF.
+    dry: "Work in one dry, understated aside, set off in parentheses or dashes."
