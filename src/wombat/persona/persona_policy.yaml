@@ -1,0 +1,63 @@
+# wombat persona policy — the SINGLE versioned source-of-truth for per-mouth axis
+# applicability and per-axis-level clause text (TK-220, EP-33, DEC-38(1)/(4), Q-108(b)).
+#
+# This file is loaded once by `wombat.persona.policy.load_policy` into a frozen
+# `PersonaPolicy` (see policy.py). RESTART-TO-APPLY v1: there is no hot-reload — a running
+# process keeps the policy it loaded at first use (mirrors `wombat.params`'s custody
+# discipline; see that module's `wombat_params.yaml` for the sibling pattern).
+#
+# RULES OF THE ROAD
+#   * Human-edited only. There is no runtime writer of this file.
+#   * Change a value -> BUMP `version` in lock-step with `PERSONA_POLICY_VERSION` in
+#     policy.py, so a stale/mismatched file fails loud at load time instead of silently
+#     reconciling.
+#   * Exactly FOUR prompt axes are policy-governed: brevity, warmth, directness, humor.
+#     Proactivity is NOT a policy axis — its actuation is gate-side (TK-215), a designed
+#     no-op at the prompt layer. The loader REJECTS `proactivity` appearing anywhere below,
+#     in either `mouth_axes` or `clauses`.
+#   * Every axis's DEFAULT level (brevity=terse, warmth=reserved, directness=plain,
+#     humor=none — the `DEFAULT_MATRIX` levels) MUST map to the empty string. This is the
+#     DEC-38(5) byte-identity invariant, enforced structurally by the loader — not just by
+#     convention — so DEFAULT_MATRIX always renders zero added bytes from clauses.
+
+version: 1
+
+# mouth_axes: per-mouth list of the prompt axes that RENDER for that mouth (DEC-38(1) unbars
+# per-mouth placement structurally, superseding-in-part DEC-37(c)'s code walls — this SHIPPED
+# DEFAULT keeps today's placement EXACTLY; an operator may retune it here without a code
+# change). The render ORDER is fixed in builder.py as brevity, warmth, directness, humor,
+# filtered down to whichever axes a mouth lists here — order within a list below is cosmetic.
+mouth_axes:
+  # compose/brief: the steward's OWN voice (phrasing an item / the morning brief for the
+  # user) — humor is in-bounds here (DEC-37(c)'s original placement).
+  compose: [brevity, warmth, directness, humor]
+  brief: [brevity, warmth, directness, humor]
+  # draft: the USER'S outbound voice — wombat is drafting a reply ON THE USER'S BEHALF, not
+  # speaking in its own steward voice, so a joke here would be putting words in the user's
+  # mouth. Humor is withheld by default for this outbound-voice rationale.
+  draft: [brevity, warmth, directness]
+  # reflection: NG-2 adjacency — behavioral reflections sit right next to the CON-6/NG-2
+  # clinical-register guard (never diagnose, never infer motive); humor is withheld by
+  # default so a joke can never read as minimizing or clinical-adjacent commentary.
+  reflection: [brevity, warmth, directness]
+
+# clauses: axis -> level -> fixed additive sentence, single-space-joined onto the mouth's
+# base role by builder.py. A FAITHFUL transcription of the pre-TK-220
+# _LENGTH_CLAUSES/_REGISTER_CLAUSES/_HEDGING_CLAUSES/_HUMOR_CLAUSES module tables. Every
+# DEFAULT-level entry is the empty string (see RULES OF THE ROAD above).
+clauses:
+  brevity:
+    terse: ""
+    balanced: "A sentence or two is fine if it helps clarity."
+    expansive: "Feel free to add a bit more detail and context."
+  warmth:
+    reserved: ""
+    neutral: "Keep the tone even and matter-of-fact."
+    warm: "Let the tone feel warm and friendly."
+  directness:
+    gentle: "Soften the phrasing and hedge gently."
+    plain: ""
+    blunt: "Be direct and blunt, without hedging."
+  humor:
+    none: ""
+    dry: "A touch of dry humor is welcome."

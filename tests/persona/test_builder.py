@@ -30,7 +30,6 @@ from wombat.behavior.stages.reflection_compose import _SYSTEM_INSTRUCTION as REF
 from wombat.compose.brief_template import brief_system_instruction as brief_live
 from wombat.integrations.gmail.draft_composer import _system_instruction as draft_live
 from wombat.persona.builder import (
-    _HUMOR_CLAUSES,
     Mouth,
     instruction_for,
 )
@@ -43,6 +42,7 @@ from wombat.persona.matrix import (
     Proactivity,
     Warmth,
 )
+from wombat.persona.policy import default_policy
 from wombat.stages.compose import _system_instruction as compose_live
 
 _NAMES = ("Steward", "Marvin")
@@ -175,7 +175,7 @@ def test_non_default_humor_changes_compose_and_brief() -> None:
 
 @pytest.mark.parametrize("mouth", (Mouth.DRAFT, Mouth.REFLECTION))
 def test_humor_clause_text_absent_from_draft_and_reflection_at_every_level(mouth: Mouth) -> None:
-    humor_sentence = _HUMOR_CLAUSES[Humor.DRY]
+    humor_sentence = default_policy().clauses["humor"][Humor.DRY.value]
     for humor_level in Humor:
         matrix = PersonaMatrix(
             brevity=DEFAULT_MATRIX.brevity,
@@ -211,7 +211,10 @@ def test_proactivity_changes_nothing(mouth: Mouth) -> None:
 
 def test_builder_module_has_no_disallowed_imports() -> None:
     """AC3: builder.py imports nothing beyond stdlib enum/dataclasses/typing plus
-    wombat.persona.matrix — no IO, no config, no model/httpx clients, no other wombat modules."""
+    wombat.persona.matrix/expression/policy — no other IO, no config, no model/httpx clients,
+    no other wombat modules. wombat.persona.policy (TK-220) is permitted: it types/default-
+    constructs ClauseAlgebraStrategy.policy at CONSTRUCTION; render() itself still performs no
+    IO."""
 
     source_path = Path(__file__).resolve().parents[2] / "src" / "wombat" / "persona" / "builder.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
@@ -223,6 +226,7 @@ def test_builder_module_has_no_disallowed_imports() -> None:
         "typing",
         "wombat.persona.matrix",
         "wombat.persona.expression",
+        "wombat.persona.policy",
     }
     imported_modules: set[str] = set()
     for node in ast.walk(tree):

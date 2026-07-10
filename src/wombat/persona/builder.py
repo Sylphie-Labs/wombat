@@ -1,11 +1,15 @@
 """wombat.persona.builder — ``ClauseAlgebraStrategy``: the v1 :class:`~wombat.persona.expression.
 RenderStrategy`, assembling ONE mouth's instruction BODY from a
-:class:`~wombat.persona.matrix.PersonaMatrix` (TK-207, refactored into a strategy by TK-219, EP-33,
-DEC-33/DEC-37/DEC-38 per Jim's frame: the clause algebra is a PURE FUNCTION, "math algo" — no IO,
-no config reads, no model calls; every clause is fixed text in a module-level table).
+:class:`~wombat.persona.matrix.PersonaMatrix` (TK-207, refactored into a strategy by TK-219, and
+made policy-DATA-DRIVEN by TK-220, EP-33, DEC-33/DEC-37/DEC-38 per Jim's frame: the clause algebra
+is a PURE FUNCTION, "math algo" — ``render()`` itself does no IO, no config reads, no model calls;
+every clause and every mouth's axis applicability lives in the versioned, human-edited
+``wombat.persona.policy`` custody, not in a module-level table here).
 
 ``instruction_for(mouth, matrix, assistant_name) -> str`` STAYS as a thin compatibility delegate
-(TK-219, Q-108(a)): it builds a ``ClauseAlgebraStrategy(assistant_name)`` and routes it through
+(TK-219, Q-108(a)): it builds a ``ClauseAlgebraStrategy(assistant_name)`` — which resolves its
+``policy`` field to ``wombat.persona.policy.default_policy()``'s lazily-loaded, process-cached
+default (TK-220) unless one is passed explicitly — and routes it through
 ``wombat.persona.expression.render_expression`` with ``EMPTY_CUES``, returning the resulting
 ``Expression.instruction``. Every existing call site and test is byte-unaffected by this refactor.
 
@@ -25,18 +29,24 @@ clause renders the EMPTY STRING (zero added bytes) so at ``DEFAULT_MATRIX`` the 
 exactly ``base_role``, and the seam's ``body + " " + guard_suffix`` join reproduces today's four
 live strings byte-for-byte (the oracles this ticket is measured against; they are NOT edited here).
 
-CLAUSE TABLES (module-level, fixed additive sentences — DEC-33/DEC-37 axes):
-    - ``_LENGTH_CLAUSES``   (Brevity)    — brevity/length guidance, all mouths.
-    - ``_REGISTER_CLAUSES`` (Warmth)     — tone/warmth guidance, all mouths.
-    - ``_HEDGING_CLAUSES``  (Directness) — hedging/bluntness guidance, all mouths.
-    - ``_HUMOR_CLAUSES``    (Humor)      — consulted ONLY for COMPOSE/BRIEF (DEC-37(c)); never
-      for DRAFT (the user's outbound voice) or REFLECTION (NG-2 adjacency), at ANY level.
+PER-MOUTH AXIS APPLICABILITY + CLAUSE TEXT (TK-220, DEC-38(1)/(4), Q-108(b)) now live in
+``wombat.persona.policy.PersonaPolicy``, loaded from the versioned, human-edited
+``persona_policy.yaml`` (restart-to-apply v1, no hot-reload):
+    - ``policy.mouth_axes[mouth]`` — which of the FOUR prompt axes (brevity, warmth,
+      directness, humor) render for ``mouth``. The render ORDER is fixed here as brevity,
+      warmth, directness, humor, filtered to whichever axes the policy lists for that mouth.
+      The SHIPPED DEFAULT keeps today's placement EXACTLY (humor for compose/brief only,
+      DEC-37(c)'s original placement) — but DEC-38(1) unbars per-mouth placement structurally,
+      superseding-in-part DEC-37(c)'s code walls, so an operator MAY grant/withhold any axis
+      for any mouth by editing the YAML, with zero code changes.
+    - ``policy.clauses[axis][level]`` — the fixed additive sentence for that axis/level.
     - Proactivity renders NO text at any level, for any mouth — a DESIGNED no-op at the prompt
-      layer (actuation is gate-side, TK-215), not a placebo; there is deliberately no clause
-      table for it.
+      layer (actuation is gate-side, TK-215), not a placebo. It is NOT a policy axis at all —
+      ``wombat.persona.policy``'s loader REJECTS it appearing in ``mouth_axes`` or ``clauses``.
 
 GUARD SUFFIX (verbatim substring of the output for every mouth/matrix combination, Q-106(a)) now
-lives in ``wombat.persona.expression`` (TK-219) — consumed ONLY by the seam, never by this module:
+lives in ``wombat.persona.expression`` (TK-219) — consumed ONLY by the seam, never by this module,
+and it is NOT policy (TK-220): it stays seam-owned, never editable via ``persona_policy.yaml``:
     - compose    = ``"No preamble."``
     - brief      = ``"No preamble."`` plus the DEC-27 quoted-data sentence through the end.
     - draft      = ``"No preamble, no signature."``
@@ -44,20 +54,23 @@ lives in ``wombat.persona.expression`` (TK-219) — consumed ONLY by the seam, n
       CON-6/NG-1 bars ARE the guard (DEC-37(d)).
 
 PURITY (AC3): this module imports nothing beyond stdlib ``enum``/``dataclasses`` plus
-``wombat.persona.matrix`` and ``wombat.persona.expression`` (the TK-219 seam types) — no IO, no
-config reads, no model calls, no other wombat modules. NO call-site rewiring lives here (TK-209
-owns that) and no output-effect measurement (TK-210). The four live mouth modules are NOT touched
-by this ticket — they remain the DEFAULT-identity oracles ``tests/persona/test_builder.py``
-measures this module against.
+``wombat.persona.matrix``, ``wombat.persona.expression`` (the TK-219 seam types), and
+``wombat.persona.policy`` (TK-220 — used only to type/default-construct
+``ClauseAlgebraStrategy.policy``; ``render()`` itself performs no IO — the policy load, if any,
+happens at STRATEGY CONSTRUCTION via that field's default factory, never inside ``render()``). NO
+call-site rewiring lives here (TK-209 owns that) and no output-effect measurement (TK-210). The
+four live mouth modules are NOT touched by this ticket — they remain the DEFAULT-identity oracles
+``tests/persona/test_builder.py`` measures this module against.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from wombat.persona.expression import EMPTY_CUES, Cues, Expression, render_expression
-from wombat.persona.matrix import Brevity, Directness, Humor, PersonaMatrix, Warmth
+from wombat.persona.matrix import PersonaMatrix
+from wombat.persona.policy import PersonaPolicy, default_policy
 
 
 class Mouth(StrEnum):
@@ -114,44 +127,40 @@ _BASE_ROLE_BUILDERS = {
 
 
 # --------------------------------------------------------------------------------------------
-# Clause tables — fixed additive sentences per non-default axis level. The DEFAULT level of every
-# axis maps to "" (zero added bytes), which is what makes DEFAULT_MATRIX byte-identical to the
-# live oracles. No clause table exists for Proactivity — it is a designed no-op (TK-215 owns
-# actuation).
+# Axis rendering order (TK-220) — FIXED here, independent of the data-driven policy. A policy's
+# mouth_axes[mouth] is a SET of which of these axes apply; this tuple is the ORDER they are
+# consulted and joined in, matching the pre-TK-220 length/register/hedging/humor join order
+# exactly (byte-identity, AC1).
 # --------------------------------------------------------------------------------------------
 
-_LENGTH_CLAUSES: dict[Brevity, str] = {
-    Brevity.TERSE: "",
-    Brevity.BALANCED: "A sentence or two is fine if it helps clarity.",
-    Brevity.EXPANSIVE: "Feel free to add a bit more detail and context.",
-}
+_AXIS_ORDER: tuple[str, ...] = ("brevity", "warmth", "directness", "humor")
 
-_REGISTER_CLAUSES: dict[Warmth, str] = {
-    Warmth.RESERVED: "",
-    Warmth.NEUTRAL: "Keep the tone even and matter-of-fact.",
-    Warmth.WARM: "Let the tone feel warm and friendly.",
-}
 
-_HEDGING_CLAUSES: dict[Directness, str] = {
-    Directness.GENTLE: "Soften the phrasing and hedge gently.",
-    Directness.PLAIN: "",
-    Directness.BLUNT: "Be direct and blunt, without hedging.",
-}
+def _axis_value(matrix: PersonaMatrix, axis: str) -> str:
+    """The matrix's current level, as a plain string, for a policy axis name."""
 
-# Consulted ONLY for COMPOSE/BRIEF (DEC-37(c)) — see instruction_for below. Never applied to
-# DRAFT or REFLECTION at any level, regardless of matrix.humor.
-_HUMOR_CLAUSES: dict[Humor, str] = {
-    Humor.NONE: "",
-    Humor.DRY: "A touch of dry humor is welcome.",
-}
+    return {
+        "brevity": matrix.brevity.value,
+        "warmth": matrix.warmth.value,
+        "directness": matrix.directness.value,
+        "humor": matrix.humor.value,
+    }[axis]
 
 
 @dataclass(frozen=True, slots=True)
 class ClauseAlgebraStrategy:
     """The v1 :class:`~wombat.persona.expression.RenderStrategy` (TK-219) — the TK-207 clause
-    algebra. ``assistant_name`` is held at CONSTRUCTION, not read from ``cues`` (RULED: the name
-    is boot-static config, not a per-render cue — DEC-38's ``render(mouth, matrix, cues)`` seam
-    signature stays verbatim; a name never becomes a ``Cues`` field).
+    algebra, made policy-DATA-DRIVEN by TK-220. ``assistant_name`` is held at CONSTRUCTION, not
+    read from ``cues`` (RULED: the name is boot-static config, not a per-render cue — DEC-38's
+    ``render(mouth, matrix, cues)`` seam signature stays verbatim; a name never becomes a
+    ``Cues`` field).
+
+    ``policy`` (TK-220) is ALSO held at CONSTRUCTION — a
+    :class:`~wombat.persona.policy.PersonaPolicy` supplying per-mouth axis applicability
+    (``mouth_axes``) and per-axis-level clause text (``clauses``). It defaults to
+    ``wombat.persona.policy.default_policy()`` (the lazily-loaded, process-cached packaged
+    ``persona_policy.yaml``) via this field's default factory — resolved at CONSTRUCTION time,
+    never inside ``render()``, which performs no IO at all.
 
     ``render`` returns ONLY the body — ``base_role + non-default clauses`` — and never the guard
     suffix (Q-108(a)): ``wombat.persona.expression.render_expression`` appends it unconditionally,
@@ -160,23 +169,33 @@ class ClauseAlgebraStrategy:
     """
 
     assistant_name: str
+    policy: PersonaPolicy = field(default_factory=default_policy)
 
     def render(self, mouth: Mouth, matrix: PersonaMatrix, cues: Cues) -> Expression:
-        """Render ``mouth``'s BODY from ``matrix`` (pure function, TK-207). ``cues`` is accepted
-        for ``RenderStrategy`` conformance but never read — v1 wires no live cue producer.
+        """Render ``mouth``'s BODY from ``matrix`` and ``self.policy`` (TK-207, made
+        policy-data-driven by TK-220 — this method itself performs NO IO; ``self.policy`` was
+        already a loaded value by the time this runs). ``cues`` is accepted for
+        ``RenderStrategy`` conformance but never read — v1 wires no live cue producer.
 
-        ``body = base_role + clauses``: every non-default axis level contributes a fixed additive
-        sentence (single-space-joined) after the base role; every default-level axis contributes
-        nothing. At ``DEFAULT_MATRIX`` this degenerates to exactly ``base_role`` — the seam then
-        joins it with the guard suffix, reproducing the live TK-194 builder byte-for-byte for
-        COMPOSE/BRIEF/DRAFT, and ``reflection_compose._SYSTEM_INSTRUCTION`` for REFLECTION.
+        ``body = base_role + clauses``: for each axis in ``self.policy.mouth_axes[mouth]``
+        (consulted in the FIXED order brevity, warmth, directness, humor — ``_AXIS_ORDER``),
+        the matrix's current level for that axis is looked up in
+        ``self.policy.clauses[axis]`` and, if non-empty, single-space-joined after the base
+        role. Every DEFAULT-level clause is the empty string (enforced at policy load,
+        DEC-38(5)), so at ``DEFAULT_MATRIX`` this degenerates to exactly ``base_role`` — the
+        seam then joins it with the guard suffix, reproducing the live TK-194 builder
+        byte-for-byte for COMPOSE/BRIEF/DRAFT, and ``reflection_compose._SYSTEM_INSTRUCTION``
+        for REFLECTION.
 
         REFLECTION has no name slot (Q-106(a)): ``assistant_name`` is never rendered for this
         mouth, for any input.
 
-        Humor is consulted ONLY for COMPOSE/BRIEF (DEC-37(c)) — DRAFT and REFLECTION never render
-        a humor clause, at any ``matrix.humor`` level. Proactivity never renders any text, at any
-        level, for any mouth (a designed no-op — actuation is gate-side, TK-215).
+        Which axes render for which mouth is entirely policy-data-driven (DEC-38(1)) — the
+        SHIPPED DEFAULT policy grants humor to COMPOSE/BRIEF only (DEC-37(c)'s original
+        placement), never DRAFT or REFLECTION, but an operator may retune this per-mouth via
+        ``persona_policy.yaml`` with zero code changes. Proactivity never renders any text, at
+        any level, for any mouth — it is not a policy axis at all (a designed no-op, actuation
+        gate-side, TK-215).
         """
 
         if mouth is Mouth.REFLECTION:
@@ -184,14 +203,12 @@ class ClauseAlgebraStrategy:
         else:
             base = _BASE_ROLE_BUILDERS[mouth](self.assistant_name)
 
+        axes_for_mouth = self.policy.mouth_axes[mouth.value]
         clauses = [
-            _LENGTH_CLAUSES[matrix.brevity],
-            _REGISTER_CLAUSES[matrix.warmth],
-            _HEDGING_CLAUSES[matrix.directness],
+            self.policy.clauses[axis][_axis_value(matrix, axis)]
+            for axis in _AXIS_ORDER
+            if axis in axes_for_mouth
         ]
-        if mouth in (Mouth.COMPOSE, Mouth.BRIEF):
-            clauses.append(_HUMOR_CLAUSES[matrix.humor])
-        # Proactivity: deliberately no clause appended — see module docstring.
 
         non_empty_clauses = [clause for clause in clauses if clause]
         return Expression(instruction=" ".join([base, *non_empty_clauses]))
@@ -199,10 +216,12 @@ class ClauseAlgebraStrategy:
 
 def instruction_for(mouth: Mouth, matrix: PersonaMatrix, assistant_name: str) -> str:
     """Thin TK-219 compatibility delegate (Q-108(a)): build a ``ClauseAlgebraStrategy`` bound to
-    ``assistant_name`` and route it through ``wombat.persona.expression.render_expression`` with
-    ``EMPTY_CUES``, returning the resulting ``Expression.instruction``. Every existing call site
-    and test is byte-unaffected — see ``ClauseAlgebraStrategy.render`` and the module docstring
-    for the composition rules this reproduces exactly.
+    ``assistant_name`` (its ``policy`` field resolves to
+    ``wombat.persona.policy.default_policy()`` — TK-220's lazily-loaded default) and route it
+    through ``wombat.persona.expression.render_expression`` with ``EMPTY_CUES``, returning the
+    resulting ``Expression.instruction``. Every existing call site and test is byte-unaffected —
+    see ``ClauseAlgebraStrategy.render`` and the module docstring for the composition rules this
+    reproduces exactly.
     """
 
     strategy = ClauseAlgebraStrategy(assistant_name)
