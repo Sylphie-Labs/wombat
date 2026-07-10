@@ -39,6 +39,12 @@ voice-cloud = ["httpx>=0.27"]
 # out of the base dependency set for the same reason as `voice`/`voice-cloud`: a checkout that
 # never runs the settings app still boots clean without it.
 settings-app = ["fastapi>=0.115", "uvicorn>=0.30"]
+# The browser Capability (TK-131, heads the browser arc) — headless Chromium via Playwright.
+# Never a hard dep (the voice/voice-cloud precedent): the session holder lazy-imports
+# `playwright` inside itself, so a base checkout still boots clean without this extra installed.
+# Dev step after `uv sync --extra browser`: `uv run playwright install chromium` (downloads the
+# browser binary itself — not a pip dependency, so it is not declared here).
+browser = ["playwright>=1.49"]
 
 [project.scripts]
 wombat = "wombat:main"
@@ -62,6 +68,10 @@ dev = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "httpx>=0.27",
+    # TK-131: mypy strict covers files=[src, tests], so playwright_capability's browser-arc
+    # deps must resolve in the dev env even though `browser` is an optional extra for end users
+    # (the fastapi precedent above); tests importorskip it at collection time regardless.
+    "playwright>=1.49",
 ]
 
 [build-system]
@@ -102,6 +112,13 @@ ignore_missing_imports = true
 # default (TK-162, Q-97) — mypy must not fail to resolve it inside FasterWhisperTranscriber's
 # lazy import.
 module = ["faster_whisper.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# jsonschema (a transitive cog-worx dependency) ships no bundled stubs in this env — its own
+# separate `types-jsonschema` PyPI package isn't carried here. TK-131's input-schema test is the
+# first place wombat imports jsonschema directly (to assert on jsonschema.ValidationError).
+module = ["jsonschema.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
