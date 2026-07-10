@@ -32,15 +32,44 @@ does (Q-46/Q-72).
 DEC-28 (zero egress by default): nothing here is constructed anywhere in ``src`` outside of a
 caller wombat doesn't yet have — this ticket only sets the pattern. TK-193 wires selection;
 nothing here is reachable from boot.
+
+TK-192 (EP-31, Q-105(c)) adds the remaining two launch-roster providers on the SAME pattern:
+``ElevenLabsTTSAdapter`` and ``DeepgramAuraTTSAdapter``. ElevenLabs' response body is HEADERLESS
+16-bit mono 16 kHz PCM (no RIFF/WAV container), so ``ElevenLabsTTSAdapter.speak`` wraps it into a
+proper WAV image via ``_wrap_pcm16_mono_16k_as_wav`` (stdlib ``wave`` over ``io.BytesIO`` — zero
+new dependency, CST-1) before the ONE ``player.play(...)`` call; ``WinsoundPlayer.play`` requires a
+full RIFF/WAV image (``PlaySound`` + ``SND_MEMORY``). Deepgram Aura's response is ALREADY a WAV
+container (``container=wav`` in the request), so it is played back verbatim, unwrapped.
 """
 
 from __future__ import annotations
+
+import io
+import wave
 
 from wombat.voice.playback import AudioPlayer, WinsoundPlayer
 from wombat.voice.transport import HttpxVoiceTransport, VoiceTransport
 
 # Best-effort endpoint pin (Q-104) — truthed later by the DEF-7 live smoke.
 FISH_AUDIO_TTS_URL = "https://api.fish.audio/v1/tts"
+
+# Best-effort endpoint pins (Q-105(c)) — truthed later by the DEF-7 live smoke.
+ELEVENLABS_TTS_URL_TEMPLATE = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+DEEPGRAM_AURA_TTS_URL = "https://api.deepgram.com/v1/speak"
+DEEPGRAM_AURA_DEFAULT_MODEL = "aura-asteria-en"
+
+
+def _wrap_pcm16_mono_16k_as_wav(pcm_bytes: bytes) -> bytes:
+    """Wrap headerless 16-bit mono 16 kHz PCM samples (ElevenLabs' ``output_format=pcm_16000``
+    response body) into a full RIFF/WAV image via stdlib ``wave`` (CST-1: zero new dependency) —
+    ``WinsoundPlayer.play`` requires a complete WAV image, not raw PCM."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(pcm_bytes)
+    return buffer.getvalue()
 
 
 class FishAudioTTSAdapter:
@@ -80,4 +109,90 @@ class FishAudioTTSAdapter:
         self._player.play(wav_bytes)
 
 
-__all__ = ["FISH_AUDIO_TTS_URL", "FishAudioTTSAdapter"]
+class ElevenLabsTTSAdapter:
+    """Cloud TTS via the ElevenLabs REST endpoint (Q-105(c)). Implements
+    ``sinks.tts_adapter.TTSAdapter`` structurally (one method, ``speak``) — no inheritance
+    required, so it drops straight into ``SpeakSink`` alongside ``Pyttsx3Adapter`` /
+    ``FishAudioTTSAdapter``."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        voice_id: str,
+        model: str | None = None,
+        transport: VoiceTransport | None = None,
+        player: AudioPlayer | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._voice_id = voice_id
+        self._model = model
+        self._transport: VoiceTransport = (
+            transport if transport is not None else HttpxVoiceTransport()
+        )
+        self._player: AudioPlayer = player if player is not None else WinsoundPlayer()
+
+    def speak(self, text: str) -> None:
+        """Speak ``text`` via ONE ElevenLabs TTS POST, wrapping the returned headerless PCM into a
+        WAV image, followed by ONE playback call. Raises on a transport failure
+        (``VoiceTransportError``, non-2xx response) or a player failure — never caught here;
+        ``SpeakSink`` owns the degrade (CON-3)."""
+        headers = {"xi-api-key": self._api_key}
+        json_body: dict[str, object] = {"text": text}
+        if self._model is not None:
+            json_body["model_id"] = self._model
+        url = (
+            f"{ELEVENLABS_TTS_URL_TEMPLATE.format(voice_id=self._voice_id)}"
+            "?output_format=pcm_16000"
+        )
+        _status, pcm_bytes = self._transport.post(url, headers=headers, json=json_body)
+        wav_bytes = _wrap_pcm16_mono_16k_as_wav(pcm_bytes)
+        self._player.play(wav_bytes)
+
+
+class DeepgramAuraTTSAdapter:
+    """Cloud TTS via the Deepgram Aura REST endpoint (Q-105(c)). Implements
+    ``sinks.tts_adapter.TTSAdapter`` structurally (one method, ``speak``) — no inheritance
+    required, so it drops straight into ``SpeakSink`` alongside ``Pyttsx3Adapter`` /
+    ``FishAudioTTSAdapter``."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        voice_id: str | None = None,
+        transport: VoiceTransport | None = None,
+        player: AudioPlayer | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._voice_id = voice_id
+        self._transport: VoiceTransport = (
+            transport if transport is not None else HttpxVoiceTransport()
+        )
+        self._player: AudioPlayer = player if player is not None else WinsoundPlayer()
+
+    def speak(self, text: str) -> None:
+        """Speak ``text`` via ONE Deepgram Aura TTS POST followed by ONE playback call — the
+        response is already a WAV container, played back verbatim. Raises on a transport failure
+        (``VoiceTransportError``, non-2xx response) or a player failure — never caught here;
+        ``SpeakSink`` owns the degrade (CON-3)."""
+        headers = {"Authorization": f"Token {self._api_key}"}
+        json_body: dict[str, object] = {"text": text}
+        model = self._voice_id if self._voice_id is not None else DEEPGRAM_AURA_DEFAULT_MODEL
+        url = (
+            f"{DEEPGRAM_AURA_TTS_URL}?model={model}&encoding=linear16"
+            "&sample_rate=24000&container=wav"
+        )
+        _status, wav_bytes = self._transport.post(url, headers=headers, json=json_body)
+        self._player.play(wav_bytes)
+
+
+__all__ = [
+    "DEEPGRAM_AURA_DEFAULT_MODEL",
+    "DEEPGRAM_AURA_TTS_URL",
+    "ELEVENLABS_TTS_URL_TEMPLATE",
+    "FISH_AUDIO_TTS_URL",
+    "DeepgramAuraTTSAdapter",
+    "ElevenLabsTTSAdapter",
+    "FishAudioTTSAdapter",
+]
