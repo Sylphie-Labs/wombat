@@ -11,6 +11,11 @@ provider stack (TK-190/191/192 ride this same pattern).
 that records the call and returns a canned ``(status_code, body_bytes)`` pair, or raises
 ``VoiceTransportError`` to simulate a non-2xx response (DEF-7: no live calls in tests).
 
+Q-105(a) (binding, TK-190): ``post`` also accepts OPTIONAL ADDITIVE ``data``/``files`` params for
+multipart-form callers (e.g. ``ElevenLabsScribeTranscriber``) — mapped straight to httpx's
+``data=``/``files=``. Existing ``content=``/``json=`` callers are byte-untouched; same timeout
+and non-2xx-raise semantics apply regardless of which body kind is used.
+
 ``HttpxVoiceTransport`` is the ONE concrete production adapter, over ``httpx`` (rides the
 optional ``voice-cloud`` extra — Q-46/Q-72 clean-checkout bar). ``httpx`` is LAZILY imported
 inside ``__init__``, never at this module's top level, so ``import wombat.voice.transport``
@@ -50,10 +55,13 @@ class VoiceTransport(Protocol):
         headers: dict[str, str],
         content: bytes | None = None,
         json: dict[str, object] | None = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes]] | None = None,
     ) -> tuple[int, bytes]:
-        """POST to ``url`` with ``headers`` and either raw ``content`` bytes or a ``json`` body
-        (never both). Returns ``(status_code, body_bytes)`` on a 2xx response; raises
-        ``VoiceTransportError`` otherwise."""
+        """POST to ``url`` with ``headers`` and one of: raw ``content`` bytes, a ``json`` body, or
+        a ``data``/``files`` multipart-form pair (Q-105(a)) — never more than one kind at once.
+        Returns ``(status_code, body_bytes)`` on a 2xx response; raises ``VoiceTransportError``
+        otherwise."""
         ...
 
 
@@ -76,12 +84,16 @@ class HttpxVoiceTransport:
         headers: dict[str, str],
         content: bytes | None = None,
         json: dict[str, object] | None = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes]] | None = None,
     ) -> tuple[int, bytes]:
         response = self._httpx.post(
             url,
             headers=headers,
             content=content,
             json=json,
+            data=data,
+            files=files,
             timeout=VOICE_HTTP_TIMEOUT_SECONDS,
         )
         if not (200 <= response.status_code < 300):

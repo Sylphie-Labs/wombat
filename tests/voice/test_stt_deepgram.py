@@ -55,6 +55,8 @@ class _RecordingFakeTransport:
         headers: dict[str, str],
         content: bytes | None = None,
         json: dict[str, object] | None = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes]] | None = None,
     ) -> tuple[int, bytes]:
         self.calls.append({"url": url, "headers": headers, "content": content, "json": json})
         return self._status_code, self._body
@@ -71,6 +73,8 @@ class _RaisingFakeTransport:
         headers: dict[str, str],
         content: bytes | None = None,
         json: dict[str, object] | None = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes]] | None = None,
     ) -> tuple[int, bytes]:
         raise VoiceTransportError(f"voice transport POST {url} returned 401: 'unauthorized'")
 
