@@ -184,7 +184,6 @@ from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
 from .schema_preflight import ensure_all_schemas
 from .sinks.speak import SpeakSink
-from .sinks.tts_adapter import Pyttsx3Adapter, TTSAdapter
 from .sources.bootstrap import (
     _has_google_client_credentials,
     build_brief_fetches,
@@ -211,6 +210,7 @@ from .user_model.observation_writer import ObservationWriter
 from .user_model.outcome_inference import ItemDisposition
 from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
+from .voice.select import build_tts_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -410,50 +410,33 @@ def build_brief_deliver_stage(
     )
 
 
-def _construct_tts_adapter() -> TTSAdapter | None:
-    """Attempt to construct the ONE concrete ``TTSAdapter`` (``Pyttsx3Adapter``, Q-96).
-
-    Shared by ``build_speak_sink`` and ``make_speak_callable`` below — both catch a failure here
-    identically: log LOUD naming what broke (missing ``voice`` extra -> ``ImportError``, or any
-    OS TTS engine-init failure) and degrade to ``None`` rather than blocking boot (AC4's lesion
-    bar: no import error, no capability blocked).
-    """
-    try:
-        return Pyttsx3Adapter()
-    except Exception:
-        logger.warning(
-            "voice: TTS adapter failed to construct (is the 'voice' extra installed? "
-            "`uv sync --extra voice`) — voice output disabled for this boot",
-            exc_info=True,
-        )
-        return None
-
-
 def build_speak_sink(config: WombatConfig) -> SpeakSink:
-    """Assemble the drain pathway's terminal ``SpeakSink`` (TK-164, Q-96).
+    """Assemble the drain pathway's terminal ``SpeakSink`` (TK-164, Q-96; rerouted by TK-193).
 
     ``config.wombat_voice_enabled`` gates voice; when it is true, this ALSO attempts to construct
-    the real ``Pyttsx3Adapter`` — a construction failure (lazy import or engine init) degrades to
-    ``adapter=None`` (logged loud) rather than raising, so a voice-off/lib-less boot is unaffected
-    (AC4). ``voice_enabled=False`` never even attempts construction.
+    the configured ``TTSAdapter`` via ``voice.select.build_tts_adapter`` (local by default, or a
+    cloud provider wrapped in a local-fallback wrapper per DEC-28) — any construction/selection
+    gap degrades to ``adapter=None`` (logged loud by ``build_tts_adapter``) rather than raising,
+    so a voice-off/lib-less boot is unaffected (AC4). ``voice_enabled=False`` never even attempts
+    construction — no cloud, no local.
     """
-    adapter = _construct_tts_adapter() if config.wombat_voice_enabled else None
+    adapter = build_tts_adapter(config) if config.wombat_voice_enabled else None
     return SpeakSink(voice_enabled=config.wombat_voice_enabled, adapter=adapter)
 
 
 def make_speak_callable(config: WombatConfig) -> Callable[[str], None] | None:
     """Build the voice closure ``BriefDeliverStage``'s injected ``speak`` seam consumes (TK-101,
-    Q-78) — the SAME adapter TYPE ``build_speak_sink`` binds into the drain pathway (Q-96's "ONE
-    adapter, two delivery points").
+    Q-78; rerouted by TK-193) — the SAME adapter TYPE/selection ``build_speak_sink`` binds into
+    the drain pathway (Q-96's "ONE adapter, two delivery points").
 
-    Returns a closure over a freshly constructed ``Pyttsx3Adapter`` iff
-    ``config.wombat_voice_enabled`` AND that adapter constructs; otherwise ``None`` (logged loud
-    by ``_construct_tts_adapter``) — ``BriefDeliverStage`` already treats ``speak=None`` as
-    text-only delivery (TK-101), so a voice-off/lib-less boot stays byte-identical to today.
+    Returns a closure over ``voice.select.build_tts_adapter``'s result iff
+    ``config.wombat_voice_enabled`` AND that construction/selection succeeds; otherwise ``None``
+    (logged loud by ``build_tts_adapter``) — ``BriefDeliverStage`` already treats ``speak=None``
+    as text-only delivery (TK-101), so a voice-off/lib-less boot stays byte-identical to today.
     """
     if not config.wombat_voice_enabled:
         return None
-    adapter = _construct_tts_adapter()
+    adapter = build_tts_adapter(config)
     if adapter is None:
         return None
     return adapter.speak

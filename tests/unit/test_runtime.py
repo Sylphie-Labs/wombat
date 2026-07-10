@@ -371,12 +371,15 @@ def test_build_speak_sink_voice_disabled_by_default_carries_no_adapter(
 
 
 def test_build_speak_sink_voice_enabled_but_pyttsx3_absent_degrades_to_no_adapter(
+    _no_env_file: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Lesion proof (AC4): pyttsx3 rides the optional 'voice' extra, simulated absent here
     (TK-202/Q-103 — a dev/operator checkout MAY have it installed anyway) — construction must
-    not raise, only loud-skip to adapter=None."""
+    not raise, only loud-skip to adapter=None. ``_no_env_file`` (TK-193) keeps this test's
+    provider selection at the 'local' default regardless of the operator's own populated .env
+    (which may configure a real cloud provider, e.g. Jim's Fish voice)."""
     _simulate_absent(monkeypatch, "pyttsx3")
     with caplog.at_level(logging.WARNING):
         stage = bootstrap.build_speak_sink(_config_voice_enabled())
@@ -391,9 +394,12 @@ def test_make_speak_callable_returns_none_when_voice_disabled(_no_env_file: None
 
 
 def test_make_speak_callable_returns_none_when_pyttsx3_absent_even_if_voice_enabled(
+    _no_env_file: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """``_no_env_file`` (TK-193) keeps this test's provider selection at the 'local' default
+    regardless of the operator's own populated .env."""
     _simulate_absent(monkeypatch, "pyttsx3")
     with caplog.at_level(logging.WARNING):
         speak = bootstrap.make_speak_callable(_config_voice_enabled())

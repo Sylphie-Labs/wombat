@@ -52,11 +52,11 @@ triage rule set is loaded ONCE (``load_triage_rules()``, at source-construction 
 TK-162 (EP-29, Q-97): ``_maybe_register_asr`` registers ``ASRSource`` (``sources/asr.py``) under
 id ``"asr"`` following the SAME loud-skip pattern as the sources above, but with TWO independent
 skip conditions instead of one: an unset/blank ``config.wombat_asr_drop_dir`` (naming
-``WOMBAT_ASR_DROP_DIR``), and separately faster-whisper (the ``[voice]`` extra) not being
-installed (an ``ImportError`` constructing ``FasterWhisperTranscriber``) — either skips the
-source with its own loud log, never raises. The real ``FasterWhisperTranscriber`` is constructed
-ONLY here (``sources/asr.py`` never constructs it itself). Registration-not-rewrite (DEC-5/
-TK-161): ``SourceRegistry``/``sources/base.py`` are untouched.
+``WOMBAT_ASR_DROP_DIR``, checked here), and separately no ``Transcriber`` being constructible at
+all (TK-193: delegated to ``voice.select.build_transcriber``, which already logs LOUD naming the
+exact gap — local faster-whisper absent, or a selected cloud provider's key/extra/voice_id gap
+falling through to a local build that itself fails) — either skips the source, never raises.
+Registration-not-rewrite (DEC-5/TK-161): ``SourceRegistry``/``sources/base.py`` are untouched.
 """
 
 from __future__ import annotations
@@ -83,10 +83,11 @@ from wombat.integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
-from wombat.sources.asr import ASRSource, FasterWhisperTranscriber
+from wombat.sources.asr import ASRSource
 from wombat.sources.base import InputSource, SourceEvent
 from wombat.sources.registry import Enqueuer, SourceRegistry
 from wombat.user_model.feedback_source import FeedbackInputSource
+from wombat.voice.select import build_transcriber
 
 logger = logging.getLogger(__name__)
 
@@ -301,13 +302,15 @@ def _maybe_register_asr(
     *,
     poll_interval_seconds: float,
 ) -> None:
-    """TK-162 (Q-97): register the local ASR drop-directory source (``ASRSource``) iff
-    ``config.wombat_asr_drop_dir`` is non-blank AND faster-whisper is importable — the SAME
-    loud-skip pattern as ``_maybe_register_gcal``/``_maybe_register_gmail``/
+    """TK-162 (Q-97), rerouted by TK-193: register the ASR drop-directory source (``ASRSource``)
+    iff ``config.wombat_asr_drop_dir`` is non-blank AND a ``Transcriber`` is constructible — the
+    SAME loud-skip pattern as ``_maybe_register_gcal``/``_maybe_register_gmail``/
     ``_maybe_register_feedback`` above, with two independent skip conditions. Neither missing
-    piece ever raises: voice is additive (CON-3), so a checkout without the ``[voice]`` extra,
-    or one with no drop directory configured, still boots clean with every other source intact.
-    The real ``FasterWhisperTranscriber`` is constructed ONLY here."""
+    piece ever raises: voice is additive (CON-3), so a checkout without the ``[voice]`` extra
+    (or an absent/blocked cloud key/extra falling through to that same local gap), or one with no
+    drop directory configured, still boots clean with every other source intact. Transcriber
+    construction is delegated to ``voice.select.build_transcriber`` (TK-193), which already logs
+    LOUD naming the exact gap on any skip path — nothing further to log here."""
     raw_dir = (config.wombat_asr_drop_dir or "").strip()
     if not raw_dir:
         logger.warning(
@@ -315,14 +318,8 @@ def _maybe_register_asr(
             "voice drop-directory channel (boot continues without it)"
         )
         return
-    try:
-        transcriber = FasterWhisperTranscriber(model_name=config.wombat_asr_model)
-    except ImportError:
-        logger.warning(
-            "asr source not wired: faster-whisper is not installed — install the [voice] "
-            "extra (`uv sync --extra voice`) to enable local ASR (boot continues without it)",
-            exc_info=True,
-        )
+    transcriber = build_transcriber(config)
+    if transcriber is None:
         return
     registry.register(
         ASRSource(
