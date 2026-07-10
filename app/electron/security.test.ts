@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 const INDEX_HTML_PATH = path.join(__dirname, "..", "index.html");
 const MAIN_TS_PATH = path.join(__dirname, "main.ts");
+const PRELOAD_TS_PATH = path.join(__dirname, "preload.ts");
 
 const LOOPBACK_SOURCE = /^(https?|wss?):\/\/(127\.0\.0\.1|localhost)(:\*|:\d+)?$/;
 
@@ -70,5 +71,29 @@ describe("main.ts loaded-URL posture", () => {
 
   it("never references a remote http(s) URL literal", () => {
     expect(source).not.toMatch(/["'`]https?:\/\/(?!127\.0\.0\.1|localhost)/);
+  });
+});
+
+// TK-223 AC3(ii): chat port+token reach the renderer ONLY via the
+// contextBridge, never a URL parameter or a raw Node/Electron global -
+// extends the existing preload/security scan pattern above.
+describe("preload.ts chat bridge posture", () => {
+  const source = readFileSync(PRELOAD_TS_PATH, "utf-8");
+
+  it("exposes wombatChat via contextBridge.exposeInMainWorld", () => {
+    expect(source).toMatch(/contextBridge\.exposeInMainWorld\(\s*["']wombatChat["']/);
+  });
+
+  it("wombatChat's getInfo is backed by ipcRenderer.invoke, not a raw ipcRenderer exposure", () => {
+    const match = source.match(
+      /contextBridge\.exposeInMainWorld\(\s*["']wombatChat["'],\s*\{([\s\S]*?)\}\s*\);/,
+    );
+    expect(match).not.toBeNull();
+    const body = (match as RegExpMatchArray)[1];
+    expect(body).toMatch(/getInfo:\s*\(\)\s*=>\s*ipcRenderer\.invoke\(\s*["']wombat:chat-info["']/);
+  });
+
+  it("never exposes the raw ipcRenderer object or a Node global to the renderer", () => {
+    expect(source).not.toMatch(/exposeInMainWorld\(\s*["'](?:ipcRenderer|electron|require|process)["']/);
   });
 });

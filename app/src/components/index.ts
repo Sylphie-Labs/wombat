@@ -15,3 +15,5 @@ export type { IndicatorProps } from "./Indicator";
 
 export { Icon } from "./Icon";
 export type { IconProps } from "./Icon";
+
+export { ChatPane } from "./ChatPane";

@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "node:path";
 
 import { describeFailure, startApiProcess, type ApiProcessHandle } from "./api-process";
+import { readChatInfo } from "./chat-info";
 import { WEB_PREFERENCES } from "./window-options";
 
 /**
@@ -56,6 +57,13 @@ app.whenReady().then(async () => {
   // the ONLY way the renderer learns the port+token is via this handle,
   // reached through the preload contextBridge; never a URL parameter.
   ipcMain.handle("wombat:settings-api-info", () => info);
+
+  // TK-223 (Q-111(a)): the chat handshake is RE-RESOLVED and RE-READ on
+  // EVERY invocation - deliberately no caching, since a runtime started
+  // after the app is already open (no app restart) must be picked up, and a
+  // stale file from a dead runtime is surfaced via chat.ts's send-failure
+  // path rather than pinned here.
+  ipcMain.handle("wombat:chat-info", () => readChatInfo(process.env, app.getAppPath()));
 
   createWindow();
 

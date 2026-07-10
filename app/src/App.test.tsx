@@ -47,6 +47,14 @@ function installFakeApi(
       getInfo: vi.fn().mockResolvedValue({ port: PORT, token: TOKEN }),
     };
 
+  // TK-223: App now always mounts ChatPane, which reads window.wombatChat on
+  // mount - stub it here (chat-absent baseline) so these TK-200-era tests,
+  // which don't exercise chat, don't crash on an undefined bridge. TK-223's
+  // own chat.test.ts/ChatPane.test.tsx cover the chat behavior itself.
+  (window as unknown as { wombatChat: { getInfo: () => Promise<unknown> } }).wombatChat = {
+    getInfo: vi.fn().mockResolvedValue(null),
+  };
+
   const calls: FetchCall[] = [];
   const currentSettings = { ...settings };
   const currentKeys = { ...keys };

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { Button, Field, Indicator, Panel, Select, type SelectOption } from "./components";
+import { Button, ChatPane, Field, Indicator, Panel, Select, type SelectOption } from "./components";
 import { font, ink, surface } from "./tokens";
 import {
   getSettings,
@@ -252,6 +252,8 @@ export function App() {
     <div className={`${surface.canvas} ${font.sans} ${ink.primary} min-h-screen p-8`}>
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
         <h1 className="text-lg font-semibold">Wombat settings</h1>
+
+        <ChatPane />
 
         {loadError && (
           <Panel>
