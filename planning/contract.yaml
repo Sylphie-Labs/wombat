@@ -140,7 +140,7 @@ nodes:
   - { id: EP-29, kind: epic, parent: FEAT-12, title: "Voice input source (ASR) on the queue", intent: "ASR listener registered as one input source feeding the same queue (DEC-7); no special path.", status: todo, priority: P2 }
   - { id: EP-30, kind: epic, parent: FEAT-12, title: "Terse spoken/text output sink", intent: "Speak only on rare speak-events the gate decided; full capability without speech (CON-3).", status: todo, priority: P2 }
   - { id: EP-31, kind: epic, parent: FEAT-12, title: "Pluggable voice provider slots (STT/TTS)", intent: "Cloud STT/TTS providers (ElevenLabs, Deepgram, Fish Audio) behind the EXISTING Transcriber/TTSAdapter seams; local-free defaults stand; egress is structural per-provider user opt-in with strictly cloud-to-local degrade (DEC-28, Q-100).", status: todo, priority: P2 }
-  - { id: EP-32, kind: epic, parent: FEAT-13, title: "Local settings app (Electron shell)", intent: "Electron + React settings app over the loopback Python settings API - v1 is the configuration surface ONLY (DEC-29/DEC-30); the shell is deliberately sized for the app's stated trajectory as wombat's front-end (future 3D assistant avatar - flagged future feature, NOT a v1 ticket) (DEC-31/DEC-32).", status: todo, priority: P2 }
+  - { id: EP-32, kind: epic, parent: FEAT-13, title: "Local settings app (Electron shell)", intent: "Electron + React settings app over the loopback Python settings API - v1 is the configuration surface ONLY (DEC-29/DEC-30); the shell is deliberately sized for the app's stated trajectory as wombat's front-end (future 3D assistant avatar - flagged future feature, NOT a v1 ticket) (DEC-31/DEC-32). RESCOPED v1.98 (DEC-39, Jim directive) - the app gains a basic CHAT pane riding the queue/gate/mouth discipline (TK-222/TK-223), mic + audio controls on the existing drop-dir/ASRSource path (TK-224), and the tokenized bright Tailwind design system (TK-225); the v1-is-config-surface-ONLY clause is superseded-in-part, DEC-29 zero-analytics binds every new surface.", status: todo, priority: P2 }
   - { id: EP-33, kind: epic, parent: FEAT-14, title: "Persona core - matrix type, pure prompt builder, config, hot-apply, output-effect eval", intent: "PersonaMatrix (5 named-level axes, DEC-33) + the pure clause-algebra builder instruction_for(mouth, matrix) whose DEFAULT reproduces today's prompts BYTE-FOR-BYTE, the config/persistence surface riding the existing config tiers, the LivePersona hot-apply seam (DEC-34), and the env-gated live-eval harness proving each axis has a MEASURABLE output effect - no placebo axes (the epic does not close while an axis ships unmeasured and unflagged). RESTORED v1.84 (DEC-37) - the gate personality_band actuation for proactivity (TK-215), the deterministic degrade-path brevity/warmth variants with the recorded directness/humor model-path-only asymmetry (TK-216), and reflection as the FOURTH persona mouth. AMENDED v1.97 (DEC-38, Jim directive) - the pure builder generalizes to the Expression STRATEGY seam render(mouth, matrix, cues) with per-mouth behavior as POLICY DATA and clause-strength calibration (TK-219/TK-220/TK-221); the epic's done-bar remains TK-210 under its amended no-placebo ACs.", status: todo, priority: P2 }
   - { id: EP-34, kind: epic, parent: FEAT-14, title: "Voice persona commands - closed grammar, pre-queue interception", intent: "Spoken persona tuning ('be more brief') via a deterministic CLOSED grammar intercepted at ASRSource BEFORE the queue - matched utterances never enter the queue/gate/mouth; unmatched speech flows unchanged (DEC-35, CON-1/CON-2).", status: todo, priority: P2 }
   - { id: EP-35, kind: epic, parent: FEAT-14, title: "Persona learning - feedback tokens into dream_persona (bounded)", intent: "Explicit deterministic feedback tokens aggregated nightly by a dream_persona stage under RatingTuner-pattern custody (bounded, clamped, journaled - DEC-36); automatic tone-adaptation from implicit behavior is DEFERRED (DEF-8). Sequenced LAST: EP-33 (TK-196 pulled forward as the persistence prerequisite) -> EP-34 -> the EP-32 remainder -> EP-35.", status: todo, priority: P3 }
@@ -4262,7 +4262,7 @@ nodes:
     priority: P2
     estimate: M
     engineering_level: prototype
-    complexity_budget: "The FIRST JS toolchain in the repo - keep it minimal: Vite scaffold, electron + electron-vite (or equivalent minimal wiring), typescript, one lint/typecheck npm script. app/ SOURCE is committed; node_modules and build output are gitignored; Node is a dev toolchain for app/ only, never a wombat-core dependency. No API spawn here (TK-199), no forms (TK-200), no packaging (DEC-30/DEC-31 dev-launch clause)."
+    complexity_budget: "The FIRST JS toolchain in the repo - keep it minimal: Vite scaffold, Tailwind wired at the scaffold (DEC-39 - Tailwind, never MUI; the token/theme system itself is TK-225), electron + electron-vite (or equivalent minimal wiring), typescript, one lint/typecheck npm script. app/ SOURCE is committed; node_modules and build output are gitignored; Node is a dev toolchain for app/ only, never a wombat-core dependency. No API spawn here (TK-199), no forms (TK-200), no packaging (DEC-30/DEC-31 dev-launch clause)."
     acceptance_criteria:
       - given: "a checkout with Node installed"
         when: "npm install + npm start run in app/"
@@ -4320,7 +4320,7 @@ nodes:
     kind: ticket
     parent: EP-32
     title: "Settings UI forms - name, provider selects, persona axis selects (FEAT-14 amendment), write-only masked key fields with configured-indicators, voice id, save + restart-to-apply notice; zero analytics"
-    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save. FEAT-14 AMENDMENT (v1.81): five persona axis selects (the DEC-33 named levels) join the form, saved to the persona fields like any non-secret; CORRECTED v1.84 (DEC-37) - persona edits from the app HOT-APPLY (the TK-209 mtime poll picks them up on the next timer beat): the persona selects show an 'applies on the next turn' hint, NOT the restart notice; the restart notice remains for providers/keys/name."
+    intent: "As the user, the renderer shows one settings form - assistant name, STT provider select, TTS provider select, TTS voice id, and per-provider masked key fields that are WRITE-ONLY with a configured/not-configured indicator - loading current values from GET /settings, saving via PUT (keys only when touched), and showing the restart-to-apply notice (DEC-32) after save. FEAT-14 AMENDMENT (v1.81): five persona axis selects (the DEC-33 named levels) join the form, saved to the persona fields like any non-secret; CORRECTED v1.84 (DEC-37) - persona edits from the app HOT-APPLY (the TK-209 mtime poll picks them up on the next timer beat): the persona selects show an 'applies on the next turn' hint, NOT the restart notice; the restart notice remains for providers/keys/name. RESCOPED CONTEXT v1.98 (DEC-39) - the form renders in the TK-225 tokenized theme; the DEC-38 persona policy tweak surface stays FILE-based in v1 (an app policy editor is a flagged follow-up, recorded in DEC-39, not silent)."
     status: todo
     priority: P2
     estimate: M
@@ -4345,6 +4345,7 @@ nodes:
     depends_on:
       - TK-199
       - TK-208
+      - TK-225
     files_in_scope:
       - app/src/App.tsx
       - app/src/api.ts
@@ -4881,6 +4882,133 @@ nodes:
       - src/wombat/persona/persona_policy.yaml
       - tests/persona/eval_fixtures.py
       - tests/persona/test_output_effects_live.py
+  - id: TK-222
+    kind: ticket
+    parent: EP-32
+    title: "Runtime chat seam - ChatSource on the PushSource pattern + a loopback token-guarded chat surface owned by the RUNNING wombat process; messages ride queue -> gate -> compose, replies ride the existing mouth-output wire"
+    intent: "Per DEC-39(1): chat is a REAL INPUT SOURCE, never a side-channel to the model (CON-1). NEW ChatSource rides the TK-161 PushSource pattern and registers with the source registry like every source; an inbound chat message becomes a SourceEvent -> QueueItem with its own chat item kind/event class, scored by the SAME deterministic gate (the user-addressed ASR precedent - enqueued, gate-rated, never gate-bypassed), rendered by the EXISTING compose mouth, and the reply returns to the connected client off the stage-name-addressed composed-output wire (the SpeakSink last_output pattern; the exact reply-sink/correlation mechanics get the pre-build Q ruling at batch time). The chat surface is RUNTIME-owned and RUNTIME-scoped: binds 127.0.0.1 ONLY with a per-launch random token, and writes ONE machine-readable handshake JSON (port + token) into the runtime data dir for the Electron main to read (the TK-197 posture; CON-7 residency). The settings API keeps its zero-runtime-imports invariant untouched - chat is the second, runtime-owned surface (DEC-39 supersedes-in-part the entire-backend clause). Chat surface failure or absence never affects the drain loop or the brief (CON-3)."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "One source module + one small loopback surface module + bootstrap wiring; ride the existing queue/gate/compose machinery end to end - NO new pathway, NO new mouth, NO history store beyond the existing journal/trail discipline, NO streaming. The structural no-side-channel test is the load-bearing addition."
+    acceptance_criteria:
+      - given: "a running runtime with the chat surface up and a tokened client"
+        when: "a chat message is sent"
+        then: "it is enqueued through the source registry, scored by the deterministic gate (a structural test proves NO path from chat input to the model skips queue + gate), and the reply text delivered back on the same connection equals the composed mouth output."
+      - given: "a tokenless or wrong-token request, and the bind address"
+        when: "probed"
+        then: "the request is rejected and the surface is bound to 127.0.0.1 exclusively; exactly one parseable handshake JSON exists in the runtime data dir per launch."
+      - given: "the chat surface failing to start or dying mid-run"
+        when: "the runtime operates"
+        then: "one loud WARNING; the drain loop, brief, and every other source are unaffected (CON-3)."
+    non_goals:
+      - "No streaming replies, no chat-history persistence beyond the existing journal/trail discipline."
+      - "No model side-channel of any kind (CON-1)."
+      - "No renderer UI (TK-223)."
+    depends_on:
+      - TK-161
+    files_in_scope:
+      - src/wombat/chat/__init__.py
+      - src/wombat/chat/surface.py
+      - src/wombat/sources/chat_source.py
+      - src/wombat/bootstrap.py
+      - tests/chat/test_chat_surface.py
+      - tests/sources/test_chat_source.py
+  - id: TK-223
+    kind: ticket
+    parent: EP-32
+    title: "Chat UI - the app's chat pane over the runtime chat handshake; send/receive with the agent; visible degraded state when wombat is down"
+    intent: "Per DEC-39(1): the renderer gains a basic chat pane - a transcript view and send box rendered in the TK-225 theme. The Electron main reads the TK-222 runtime handshake JSON and exposes port + token to the renderer ONLY via the preload contextBridge (the TK-199 posture - never a URL parameter). When the runtime or its chat surface is absent, the pane shows a visible 'wombat is not running' state - never a dead pane, never a silent spinner. Zero analytics (DEC-29 binds every new surface)."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "Plain React over the bridge - no state framework, no router. Send, render reply, degraded state; nothing else. The heavy correctness load (gate discipline) is TK-222's Python-side tests."
+    acceptance_criteria:
+      - given: "the app open with wombat running"
+        when: "a message is typed and sent"
+        then: "the reply renders in the transcript - the TK-222 round trip proven through the UI."
+      - given: "wombat not running (no handshake or a dead port)"
+        when: "the chat pane loads or a send fails"
+        then: "a visible degraded state explains it; the app does not crash and the settings surfaces keep working."
+      - given: "the renderer context"
+        when: "probed"
+        then: "chat port + token are reachable ONLY through the contextBridge; no Node globals, no token in any URL."
+    non_goals:
+      - "No streaming/typing indicators, no chat history persistence in the app."
+      - "No analytics or usage views (DEC-29)."
+    depends_on:
+      - TK-222
+      - TK-199
+      - TK-225
+    files_in_scope:
+      - app/src/components/
+      - app/src/chat.ts
+      - app/electron/main.ts
+      - app/electron/preload.ts
+  - id: TK-224
+    kind: ticket
+    parent: EP-32
+    title: "Mic + audio controls - renderer mic capture (device select, mute) feeding the EXISTING voice drop-dir/ASRSource path; voice on/off via settings; NO placebo controls"
+    intent: "Per DEC-39(3): the renderer captures the mic via getUserMedia and the Electron main writes WAV files into the configured voice drop-dir - the EXISTING ASRSource path transcribes them byte-untouched (zero new Python on the ingest side). Controls - input device selection and mute are renderer-local (they govern capture only); voice on/off toggles the settings field through the settings API with the DEC-32 restart notice. HONESTY BAR (DEC-39 - the no-placebo rule extends to CONTROLS): OUTPUT VOLUME is EXCLUDED from v1 because the winsound playback primitive has no gain seam - a real volume control needs a Python playback-seam param (flagged follow-up in DEC-39); no control that actuates nothing may ship."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "One capture module (device enumeration, record, WAV encode, hand to main for the file write) + a small controls panel in the TK-225 theme. No Python changes, no VAD/wake-word, no streaming ASR (recorded creep exclusions stand)."
+    acceptance_criteria:
+      - given: "a selected input device with capture on"
+        when: "speech is recorded"
+        then: "a WAV lands in the configured drop-dir and the existing ASRSource path transcribes it (fake/local ASR in test) - no new Python ingest code."
+      - given: "mute engaged, and the device selector"
+        when: "exercised"
+        then: "muted capture writes NOTHING to the drop-dir; the selector lists the OS input devices and switching devices takes effect on the next capture."
+      - given: "the voice on/off toggle and the whole audio panel"
+        when: "saved / reviewed"
+        then: "the toggle round-trips through the settings API with the restart notice, and the panel contains NO control that actuates nothing (output volume is absent, per the DEC-39 exclusion)."
+    non_goals:
+      - "No output-volume control in v1 (no playback gain seam exists - flagged follow-up; no dead slider)."
+      - "No streaming/wake-word/VAD (recorded creep exclusions)."
+    depends_on:
+      - TK-199
+      - TK-225
+    files_in_scope:
+      - app/src/components/
+      - app/src/audio.ts
+      - app/electron/main.ts
+      - app/electron/preload.ts
+  - id: TK-225
+    kind: ticket
+    parent: EP-32
+    title: "Design system - tokenized BRIGHT color-theory Tailwind theme; complete theme, NO gradients, icons, very little animation; scales for the app-as-front-end trajectory; not cookie-cutter, not ai-slop"
+    intent: "Per DEC-39(4), Jim's design requirements recorded verbatim-in-spirit as BINDING constraints, with design latitude granted inside them: NOT cookie-cutter, NOT 'ai slop'; a BRIGHT color scheme guided by COLOR THEORY; ALL colors TOKENIZED for easy change (one place re-themes the app); a COMPLETE THEME (surfaces, text, interactive states, focus, spacing, typography, icon set); TAILWIND, never MUI; NO GRADIENTS anywhere; use ICONS (one coherent set); VERY LITTLE ANIMATION (functional transitions only, on a documented allowlist); think outside the box without hurting UX. The system must SCALE - 'few elements now, future features will make the UI more robust and the agent more helpful' - so tokens/components are structured for the chat pane, audio controls, and the future avatar surface to extend without redesign. A short app/DESIGN.md records the palette rationale (the color-theory basis) and the extension rules."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "Tokens + theme + a small set of base components (panel, button, field, select, indicator, icon wrapper) restyled onto the scaffold - no component library, no redesign iterations beyond one coherent system. The audits (no gradients, no hard-coded colors, animation allowlist) are cheap greps that keep the system honest as it grows."
+    acceptance_criteria:
+      - given: "the token definitions"
+        when: "one token value is changed"
+        then: "the app re-themes accordingly - a grep/lint audit proves components carry NO hard-coded color values outside the token layer."
+      - given: "the app source"
+        when: "audited"
+        then: "Tailwind is the styling system and MUI is absent; ZERO gradient utilities/CSS exist; animation usage is confined to a documented small allowlist; one coherent icon set is in use."
+      - given: "the rendered app and app/DESIGN.md"
+        when: "reviewed against DEC-39(4)"
+        then: "the theme is complete (surfaces/text/states/focus/typography), the palette is bright with its color-theory rationale written down, and DESIGN.md states the extension rules future surfaces follow."
+    non_goals:
+      - "No component library (MUI or otherwise); no gradients; no decorative animation."
+      - "No dark/light theme switcher unless it falls out of the token layer for free (flagged follow-up otherwise)."
+    depends_on:
+      - TK-198
+    files_in_scope:
+      - app/src/theme.css
+      - app/src/tokens.ts
+      - app/src/components/
+      - app/DESIGN.md
+      - app/package.json
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -5618,6 +5746,12 @@ governance:
       consequences: "(+) Growth (mood/scene/temporal/tone/intonation) lands as data + strategy, not rewrites - Jim iterates by editing a versioned file. (+) ISS-7's fix has a structural home (clause text is data). (+) The TTS path gets a typed carrier for delivery hints before anything depends on a bare string. (-) A refactor over the freshly-landed TK-207/TK-209 surface reopens the persona arc - the CR5 review pass moves to after this arc closes. (-) One more versioned data file to keep honest (mitigated by the policy-derived eval permitted-set).",
       alternatives: ["Keep the hard-coded clause algebra and bolt cues on later (rejected by Jim - hedging; the switch-statement shape is exactly where growth is expected)", "Make the whole policy live in wombat.settings.json for hot-apply (rejected for v1 - prompt-shaping custody belongs with the params discipline, versioned and fail-loud; hot-reload is a follow-up when testing friction demands it)", "Bar humor per-mouth in code forever (rejected by Jim - per-mouth behavior is policy, not structure; the default policy carries the same safety posture)"],
       links: ["FEAT-14","EP-33","TK-219","TK-220","TK-221","TK-210","TK-207","TK-209","ISS-7","DEC-33","DEC-37","CON-1","CON-6","NG-2"] }
+  - { id: DEC-39, type: decision, status: accepted, scope: EP-32, date_raised: "2026-07-10", title: "EP-32 app rescope (JIM DIRECTIVE, verbatim-in-spirit) - basic chat interface riding queue/gate/mouth, mic + audio controls, and the binding design system (bright color-theory tokens, complete Tailwind theme, no gradients, icons, minimal animation, scale, not-ai-slop); supersedes-in-part DEC-30's config-surface-only clause and DEC-31's settings-API-is-entire-backend clause",
+      context: "Jim, 2026-07-10 ~03:00, headed to bed ('keep rocking and rolling until we finish'), directed the Electron app beyond the settings-only v1: (1) a BASIC CHAT INTERFACE with the agent; (2) settings surfaces for API keys and PERSONALITY; (3) MIC AND AUDIO correctly hooked up WITH CONTROLS (device selection, mute, output volume, voice on/off); (4) DESIGN REQUIREMENTS - not cookie-cutter, not 'ai slop', must SCALE ('few elements now, future features will make the UI more robust and the agent more helpful'), BRIGHT color scheme guided by COLOR THEORY, colors TOKENIZED for easy change, a COMPLETE THEME, TAILWIND not MUI, NO GRADIENTS, use ICONS, VERY LITTLE ANIMATION, think outside the box without hurting UX; design latitude granted ('take the design anywhere you want'). Chat mechanics, audio mechanics, and honest scoping are the architect's within-frame calls under the standing delegation.",
+      decision: "(1) CHAT (scope evolution, Jim authority; mechanics architect-ruled within the frame): chat is a REAL INPUT SOURCE, never a side-channel to the model (CON-1) - a ChatSource on the TK-161 PushSource pattern registers with the source registry; an inbound message becomes a SourceEvent -> QueueItem with its own chat item kind/event class, scored by the SAME deterministic gate (the user-addressed ASR precedent), rendered by the EXISTING compose mouth, reply returned over the chat surface off the stage-name-addressed composed-output wire (SpeakSink precedent; exact reply-sink/correlation mechanics get the pre-build Q ruling). The chat surface is RUNTIME-owned - 127.0.0.1-only + per-launch token, handshake JSON written to the runtime data dir for the Electron main (the TK-197 posture; CON-7 residency). The settings API keeps its zero-runtime-imports invariant and remains the CONFIG backend; chat becomes the second, runtime-owned surface - supersedes-in-part DEC-31's entire-backend clause. Every hard invariant stands: chat items clear the gate, drafts still ride AwaitHuman, no new egress, no analytics. (2) SETTINGS: TK-199/TK-200 stand (write-only masked API keys + the five persona selects); the DEC-38 persona policy tweak surface stays FILE-based in v1 - an app policy editor is a FLAGGED FOLLOW-UP, recorded here, not silent. (3) MIC + AUDIO: renderer getUserMedia capture writes WAV into the EXISTING voice drop-dir feeding the untouched ASRSource path (zero new Python ingest); device selection + mute are renderer-local; voice on/off rides the settings surface with the DEC-32 restart notice. OUTPUT VOLUME IS EXCLUDED from v1 - the winsound playback primitive has no gain seam; a real volume control needs a Python playback-seam param (FLAGGED FOLLOW-UP) - the no-placebo bar EXTENDS TO CONTROLS: no dead slider ever ships. (4) DESIGN SYSTEM: Jim's requirements above are recorded as BINDING ticket constraints carried by TK-225 (tokens, complete bright color-theory Tailwind theme, no gradients, icons, animation allowlist, scale rules in app/DESIGN.md), with design latitude inside them. DEC-29's zero-analytics non-goal is REAFFIRMED unchanged for every new surface; DEC-30's no-accounts/no-tenancy/no-packaging substance stands - only its config-surface-ONLY sizing clause is superseded. Carried by NEW TK-222 (runtime chat seam) -> TK-223 (chat UI), TK-224 (mic/audio controls), TK-225 (design system); TK-198/TK-200/EP-32 amended (Tailwind at the scaffold; theme dependency; epic intent).",
+      consequences: "(+) The app becomes a usable face for wombat - chat + voice + settings - while the gate discipline, one-egress default, review-before-send, and zero-analytics posture all stand untouched. (+) Design requirements are binding ticket text, not lore. (-) EP-32 grows by four tickets and TK-225 precedes the form/chat UIs. (-) A second loopback surface (runtime chat) must hold the same token + loopback posture (pinned by TK-222 AC2).",
+      alternatives: ["Chat through the settings API (rejected - it is zero-runtime-imports by invariant and runs while wombat is down; chat needs the live runtime)", "Chat as a direct model call from the renderer (rejected outright - a side-channel around queue/gate/mouth, violating CON-1 and the one-egress posture)", "A fake output-volume slider pending a gain seam (rejected - the no-placebo bar extends to controls)", "MUI or another component library (rejected by Jim - Tailwind, tokenized, not cookie-cutter)"],
+      links: ["EP-32","FEAT-13","TK-222","TK-223","TK-224","TK-225","TK-197","TK-198","TK-199","TK-200","TK-201","TK-161","DEC-29","DEC-30","DEC-31","DEC-32","DEC-38","CON-1","CON-3","CON-7"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -5819,3 +5953,4 @@ changelog:
   - { date: "2026-07-10", version: "1.95", change: "TK-216 DONE (118/135) - EP-33-CLOSEOUT/CR4-DISCHARGE BATCH 4/5 (Q-107; EP-33, P2): the DEC-37(e) degrade-path persona deltas LAND - the deterministic no-model path now honors the two axes a template can honestly express, and ONLY those. TemplateComposer (compose/templates.py) gains an OPTIONAL live_persona ctor arg (default None) and reads live_persona.matrix.brevity FRESH on every render() call (hot-apply parity with the four mouths, TK-209) - None or TERSE renders TODAY'S EXACT one-line '[kind] key - value; ...' bytes (regression pin); BALANCED renders a '[kind]' header line + one sorted 'key - value' line per field; EXPANSIVE appends the fixed module-level closing constant. brief_template.py gains persona_degrade_wrap(body, matrix) wrapping render_brief_lines output at the S8 DEGRADED branch ONLY - IDENTITY at DEFAULT_MATRIX (the TK-100 single-source invariant restated as fallback = persona_degrade_wrap(body, matrix)); BALANCED prepends the fixed brief header line, EXPANSIVE also appends the fixed closing line, and warmth=WARM prepends the ONE fixed greeting line ahead of everything (RESERVED/NEUTRAL add nothing). Directness/Humor have NO degrade variant BY RULING (a template cannot honestly hedge or joke - the honest asymmetry of DEC-37) and are NEVER READ at either degrade site, pinned by the new tests/persona/test_degrade_variants.py. bootstrap.build_compose_stage threads the SAME live_persona into TemplateComposer at the ONE production construction site (the v1.91 files_in_scope normalization); stages/compose.py correctly UNTOUCHED - the model USER message still calls format_payload_fields directly, so the model path's bytes never move. INDEPENDENTLY VERIFIED PASS - all three ACs re-executed by the verifier: AC1 byte-identity at DEFAULT and live_persona=None re-derived independently (the TERSE branch returns the exact pre-ticket f-string; persona_degrade_wrap(body, DEFAULT_MATRIX) == body); AC2 BALANCED/EXPANSIVE wrapper variants + WARM greeting proven as a RENDER-TIME read - a real LivePersona.set() between two render() calls on the SAME composer flips the output to the documented constants; AC3 any directness/humor level leaves both degrade sites byte-unchanged (the model-path-only asymmetry pinned as a test). Scope exactly the briefed 6 files (5 modified + new tests/persona/test_degrade_variants.py); all other TemplateComposer constructions are tests defaulting None -> DEFAULT_MATRIX -> TERSE -> original bytes; no contract touch by the builder. QUALITY BAR (verifier own execution; architect re-ran green pre-commit) - uv run pytest -q 1225 passed / 61 documented WOMBAT_TEST_PG_DSN skips / 0 failed; ruff check src tests all-clean; mypy strict Success 275 files src+tests; targeted AC suite (persona/compose/stage tests) 120 passed. Non-goals held - zero model calls in the degrade path, no hedging/humor simulation, zero gate/queue touch (CON-3/NG-4 posture). Board 118/135. NEXT per Q-107 - TK-210 (env-gated live output-effect eval harness; CLOSES EP-33).", by: "architect (closeout on independent verifier PASS)" }
   - { date: "2026-07-10", version: "1.96", by: "architect", change: "governance: TK-210 ADJUDICATED - ISS-7 RAISED (the no-placebo trip-wire FIRED on the first armed live run and is ruled to have WORKED). Findings on the record: humor dry-vs-none does not measurably separate and brevity's BALANCED level does not order strictly on the real DeepSeek mouth at current clause strength (terse<expansive holds); the brief-half humor assertion never executed (UNKNOWN - a harness defect); the builder's silent brevity-narrowing is ruled a placebo-rule violation while humor's left-red handling was correct - the two MUST be handled symmetrically. Ruled a CLAUSE-STRENGTH problem, not a concept problem. TK-210 AMENDED (intent + AC2 symmetric fail-loud/no-silent-narrowing + NEW AC4 brief-half executes independently with explicit per-axis-per-mouth verdicts); TK-210 stays todo and re-lands next batch; the two untracked harness files stay in-tree uncommitted as the next builder's starting point. Clause-strength/measurability work routed into the persona-builder redesign (recorded next version). Board unchanged 118/135. validate PASS; gate_check analyze PASS." }
   - { date: "2026-07-10", version: "1.97", by: "architect", change: "governance: JIM'S PERSONA-BUILDER REDESIGN RECORDED (DEC-38, Jim authority, verbatim-in-spirit - be bold, the prompt algo is a switch statement where growth is expected): (1) humor unbarred structurally, per-mouth behavior becomes DATA/POLICY (supersedes-in-part DEC-37(c); default policy = today's placement exactly); (2) swappable strategy seam render(mouth, matrix, cues) -> Expression, v1 strategy = existing clause algebra with empty cues, zero regression; cues bag typed+extensible (growth axes mood/scene/temporal/tone/intonation); (3) Expression is intonation-ready - a TYPE shaped to grow TTS delivery hints, v1 instruction-text-only; (4) personal-testing tweakability first-class - one versioned operator-editable persona_policy.yaml under params custody, eval permitted-set derived from the SAME policy (no silent tweaks); (5) strategy-surviving invariants seam-enforced (purity/determinism, DEFAULT byte-identity, guard_suffix unremovable, measurable-or-flagged). NEW TK-219 (seam+Expression+Cues) -> TK-220 (policy-as-data) -> TK-221 (clause-strength calibration); TK-210 deps += TK-219/TK-221; EP-33 intent amended, done-bar unchanged (TK-210). ISS-7 RESOLVED-BY-ROUTING (enforcement moved into runnable ACs; a non-separating axis still requires a new governance record before TK-210 lands). Board 118/138. validate PASS; gate_check analyze PASS." }
+  - { date: "2026-07-10", version: "1.98", by: "architect", change: "governance: JIM'S EP-32 APP RESCOPE + DESIGN SYSTEM RECORDED (DEC-39, Jim authority, verbatim-in-spirit): (1) basic CHAT interface - ruled to ride the full queue/gate/mouth discipline (ChatSource on the TK-161 PushSource pattern, own chat item kind through the deterministic gate, compose mouth replies, runtime-owned loopback+token chat surface with a data-dir handshake; settings API keeps zero-runtime-imports; supersedes-in-part DEC-31's entire-backend clause); (2) settings surfaces stand, DEC-38 policy tweak surface stays file-based v1 (app editor = flagged follow-up); (3) mic capture -> existing voice drop-dir/ASRSource path with device-select + mute + voice on/off; OUTPUT VOLUME excluded v1 (no winsound gain seam - the no-placebo bar extends to controls, no dead slider); (4) design requirements binding - bright color-theory TOKENIZED palette, COMPLETE Tailwind theme (never MUI), NO gradients, icons, very-little-animation allowlist, scale rules, not-ai-slop, DEC-29 zero-analytics reaffirmed on every new surface; DEC-30's config-surface-ONLY sizing clause superseded-in-part (no-accounts/no-packaging substance stands). NEW TK-222 -> TK-223 (chat), TK-224 (audio controls), TK-225 (design system); TK-198 amended (Tailwind at scaffold), TK-200 amended (deps += TK-225; tweak-surface note), EP-32 intent rescoped. Board 118/142. validate PASS; gate_check analyze PASS." }
