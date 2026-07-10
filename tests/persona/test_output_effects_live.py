@@ -23,6 +23,20 @@ the briefing calls out explicitly:
     deterministic assertion that ``instruction_for`` output is byte-identical across proactivity
     levels stands in as its (non-live) proof here.
 
+PERMITTED-SET FROM POLICY (RE-LAND, DEC-38(4), Q-108(d)): the humor axis is the one axis whose
+mouth applicability is policy-governed (``persona_policy.yaml``'s ``mouth_axes`` — compose/brief
+carry humor by default, draft/reflection don't, DEC-37(c)/DEC-38(1)). Which mouths get the
+DRY-vs-NONE separation assertion and which get the DEC-37 always-absent assertion is derived here
+from ``wombat.persona.policy.default_policy()`` — the SAME loaded policy ``ClauseAlgebraStrategy``
+renders with — rather than a hardcoded ``Mouth.COMPOSE``/``Mouth.BRIEF`` literal, so a policy
+tweak (an operator granting or withholding humor for a mouth) lands inside eval coverage
+automatically, never silently outside it.
+
+HALF-INDEPENDENCE (RE-LAND AC4): each humor mouth is its OWN ``pytest.mark.parametrize`` case, not
+folded into one shared test — so an abort/failure sampling one mouth's half (e.g. compose) can
+never leave another mouth's half (e.g. brief) UNKNOWN; every axis-mouth pair yields its own
+explicit pass/loud-fail/loud-skip verdict in one run.
+
 NO automatic tuning from results (EP-35/DEF-8 non_goal) — this module only asserts; it never
 writes ``planning/contract.yaml`` or raises a governance issue itself. Any axis that fails its
 measurability bar on a live run is the architect's follow-up act, not this harness's.
@@ -67,6 +81,7 @@ from wombat.persona.matrix import (
     Proactivity,
     Warmth,
 )
+from wombat.persona.policy import default_policy
 
 _ASSISTANT_NAME = "Steward"
 
@@ -170,6 +185,44 @@ async def _sample_repeated(
     for _ in range(SAMPLES_PER_LEVEL):
         samples.append(await _sample(model, mouth, matrix, user_content))
     return tuple(samples)
+
+
+# --------------------------------------------------------------------------------------------
+# The permitted-set (RE-LAND, DEC-38(4), Q-108(d)): which mouths carry the humor axis is read
+# from the SAME loaded ``PersonaPolicy`` the builder renders with — never a hardcoded
+# ``Mouth.COMPOSE``/``Mouth.BRIEF`` literal — so an operator's ``persona_policy.yaml`` edit lands
+# inside eval coverage automatically. ``Mouth`` is the closed four-value enum (Q-106(a)); this is
+# a filter over it, not a second hardcoded mouth list.
+# --------------------------------------------------------------------------------------------
+
+_HUMOR_POLICY = default_policy()
+HUMOR_PRESENT_MOUTHS: tuple[Mouth, ...] = tuple(
+    mouth for mouth in Mouth if "humor" in _HUMOR_POLICY.mouth_axes[mouth.value]
+)
+HUMOR_ABSENT_MOUTHS: tuple[Mouth, ...] = tuple(
+    mouth for mouth in Mouth if "humor" not in _HUMOR_POLICY.mouth_axes[mouth.value]
+)
+
+
+async def _sample_mouth_for_humor(
+    model: Model, mouth: Mouth, matrix: PersonaMatrix
+) -> tuple[str, ...]:
+    """The humor-axis sample set for ``mouth``, in that mouth's OWN existing content shape:
+    COMPOSE/BRIEF sample once per non-urgent fixture (lexical breadth, N=3, unchanged since
+    TK-221); DRAFT/REFLECTION repeat their one representative fixed task text
+    ``SAMPLES_PER_LEVEL`` times. This dispatch is content-shape wiring intrinsic to the four
+    closed mouths (how each mouth is sampled at all) — NOT the present/absent policy decision,
+    which is ``HUMOR_PRESENT_MOUTHS``/``HUMOR_ABSENT_MOUTHS`` above."""
+    if mouth is Mouth.COMPOSE:
+        return await _sample_compose_fixtures(model, matrix)
+    if mouth is Mouth.BRIEF:
+        return await _sample_brief_fixtures(model, matrix)
+    if mouth is Mouth.DRAFT:
+        return await _sample_repeated(model, mouth, matrix, DRAFT_TASK_TEXT)
+    if mouth is Mouth.REFLECTION:
+        return await _sample_repeated(model, mouth, matrix, REFLECTION_TASK_TEXT)
+    msg = f"no humor sample fixture wired for mouth={mouth!r}"
+    raise AssertionError(msg)
 
 
 # --------------------------------------------------------------------------------------------
@@ -360,13 +413,16 @@ async def test_directness_hedge_lexicon_present_at_gentle_absent_at_plain_and_bl
 
 
 # --------------------------------------------------------------------------------------------
-# Humor (COMPOSE + BRIEF, non-urgent fixtures ONLY): the aside-heuristic separates DRY from NONE.
+# Humor, PRESENT mouths (policy-derived, RE-LAND DEC-38(4)): the aside-heuristic separates DRY
+# from NONE. Each mouth in ``HUMOR_PRESENT_MOUTHS`` is its OWN parametrized case (RE-LAND AC4) —
+# a failure/abort sampling one mouth's half can never leave another mouth's half UNKNOWN.
 # --------------------------------------------------------------------------------------------
 
 
 @_requires_live_persona_eval
-async def test_humor_aside_heuristic_separates_dry_from_none_compose_and_brief(
-    live_model: Model,
+@pytest.mark.parametrize("mouth", HUMOR_PRESENT_MOUTHS)
+async def test_humor_aside_heuristic_separates_dry_from_none(
+    live_model: Model, mouth: Mouth
 ) -> None:
     """CLAUSE-STRENGTH FIX (TK-221, ISS-7, DEC-38, Q-108(c)): TK-210's repair round 2 confirmed
     this assertion was genuinely RED for the compose half — majority=False at BOTH dry and none
@@ -379,87 +435,72 @@ async def test_humor_aside_heuristic_separates_dry_from_none_compose_and_brief(
     in parentheses or dashes") instead of the vaguer original phrasing. A live re-derivation with
     the strengthened clause confirmed the aside heuristic (``eval_fixtures.has_humor_aside``) now
     reliably fires on the DRY samples and stays absent on NONE, for both compose and brief — so
-    this assertion is left AS SPECIFIED (the ticket's literal separation claim), now green."""
+    this assertion is left AS SPECIFIED (the ticket's literal separation claim), now green.
+
+    RE-LAND (DEC-38(4)): ``mouth`` ranges over ``HUMOR_PRESENT_MOUTHS`` — derived from the loaded
+    ``persona_policy.yaml``, not a hardcoded ``Mouth.COMPOSE``/``Mouth.BRIEF`` literal — and each
+    mouth is its own parametrized test (RE-LAND AC4)."""
     dry_matrix = replace(DEFAULT_MATRIX, humor=Humor.DRY)
     none_matrix = DEFAULT_MATRIX  # DEFAULT_MATRIX.humor is already NONE
 
-    # Sampled FIRST (TK-210 repair round 1): the urgent fixture is sampled here ONLY to prove it
-    # never leaks into the majority computations below (kept OUT of the humor set, per
-    # eval_fixtures.py's module docstring). Ordering this ahead of the separation asserts means
-    # the exclusion proof still runs even when humor fails to separate (previously it sat after
-    # both asserts, so it never executed on a failing run — dead code exactly when it mattered).
-    urgent_kind, urgent_payload = COMPOSE_URGENT_FIXTURE
-    urgent_sample = await _sample(
-        live_model, Mouth.COMPOSE, dry_matrix, _compose_user_content(urgent_kind, urgent_payload)
-    )
-    assert_no_forbidden_terms(urgent_sample, context="humor(compose)/urgent-excluded")
+    if mouth is Mouth.COMPOSE:
+        # The urgent fixture is sampled here ONLY to prove it never leaks into the majority
+        # computation below (kept OUT of the humor set, per eval_fixtures.py's module
+        # docstring). Ordering this ahead of the separation assert means the exclusion proof
+        # still runs even when humor fails to separate.
+        urgent_kind, urgent_payload = COMPOSE_URGENT_FIXTURE
+        urgent_sample = await _sample(
+            live_model,
+            Mouth.COMPOSE,
+            dry_matrix,
+            _compose_user_content(urgent_kind, urgent_payload),
+        )
+        assert_no_forbidden_terms(urgent_sample, context="humor(compose)/urgent-excluded")
 
-    compose_dry = await _sample_compose_fixtures(live_model, dry_matrix)
-    compose_none = await _sample_compose_fixtures(live_model, none_matrix)
-    brief_dry = await _sample_brief_fixtures(live_model, dry_matrix)
-    brief_none = await _sample_brief_fixtures(live_model, none_matrix)
-    for sample in (*compose_dry, *compose_none, *brief_dry, *brief_none):
-        assert_no_forbidden_terms(sample, context="humor(compose/brief)")
+    dry_samples = await _sample_mouth_for_humor(live_model, mouth, dry_matrix)
+    none_samples = await _sample_mouth_for_humor(live_model, mouth, none_matrix)
+    for sample in (*dry_samples, *none_samples):
+        assert_no_forbidden_terms(sample, context=f"humor({mouth.value})")
 
     assert_axis_separates_by_majority(
-        axis="humor (compose)",
+        axis=f"humor ({mouth.value})",
         present_level="dry",
-        present_samples=compose_dry,
+        present_samples=dry_samples,
         absent_level="none",
-        absent_samples=compose_none,
-        predicate=has_humor_aside,
-    )
-    assert_axis_separates_by_majority(
-        axis="humor (brief)",
-        present_level="dry",
-        present_samples=brief_dry,
-        absent_level="none",
-        absent_samples=brief_none,
+        absent_samples=none_samples,
         predicate=has_humor_aside,
     )
 
 
 # --------------------------------------------------------------------------------------------
-# Humor (DEC-37): humor markers asserted ABSENT from DRAFT and REFLECTION at BOTH humor levels.
+# Humor, ABSENT mouths (policy-derived DEC-37 always-absent set, RE-LAND DEC-38(4)): humor
+# markers asserted ABSENT at both humor levels. Each mouth in ``HUMOR_ABSENT_MOUTHS`` is its OWN
+# parametrized case (RE-LAND AC4).
 # --------------------------------------------------------------------------------------------
 
 
 @_requires_live_persona_eval
-async def test_humor_markers_absent_from_draft_and_reflection_at_both_levels(
-    live_model: Model,
-) -> None:
+@pytest.mark.parametrize("mouth", HUMOR_ABSENT_MOUTHS)
+async def test_humor_markers_absent_at_both_levels(live_model: Model, mouth: Mouth) -> None:
+    """RE-LAND (DEC-37, DEC-38(4)): ``mouth`` ranges over ``HUMOR_ABSENT_MOUTHS`` — derived from
+    the loaded ``persona_policy.yaml`` (draft/reflection by the shipped default), not a hardcoded
+    literal — and each mouth is its own parametrized test (RE-LAND AC4): a compose/brief-half
+    abort in the present-mouths test above can never leave this mouth's absence verdict
+    UNKNOWN."""
     dry_matrix = replace(DEFAULT_MATRIX, humor=Humor.DRY)
     none_matrix = DEFAULT_MATRIX
 
-    draft_samples_by_level = {
-        "none": await _sample_repeated(live_model, Mouth.DRAFT, none_matrix, DRAFT_TASK_TEXT),
-        "dry": await _sample_repeated(live_model, Mouth.DRAFT, dry_matrix, DRAFT_TASK_TEXT),
+    samples_by_level = {
+        "none": await _sample_mouth_for_humor(live_model, mouth, none_matrix),
+        "dry": await _sample_mouth_for_humor(live_model, mouth, dry_matrix),
     }
-    reflection_samples_by_level = {
-        "none": await _sample_repeated(
-            live_model, Mouth.REFLECTION, none_matrix, REFLECTION_TASK_TEXT
-        ),
-        "dry": await _sample_repeated(
-            live_model, Mouth.REFLECTION, dry_matrix, REFLECTION_TASK_TEXT
-        ),
-    }
-    for samples_by_level, mouth_name in (
-        (draft_samples_by_level, "draft"),
-        (reflection_samples_by_level, "reflection"),
-    ):
-        for level, samples in samples_by_level.items():
-            for sample in samples:
-                assert_no_forbidden_terms(sample, context=f"{mouth_name}/humor={level}")
+    for level, samples in samples_by_level.items():
+        for sample in samples:
+            assert_no_forbidden_terms(sample, context=f"{mouth.value}/humor={level}")
 
     assert_majority_absent_at_every_level(
         axis="humor",
-        mouth="draft",
-        samples_by_level=draft_samples_by_level,
-        predicate=has_humor_aside,
-    )
-    assert_majority_absent_at_every_level(
-        axis="humor",
-        mouth="reflection",
-        samples_by_level=reflection_samples_by_level,
+        mouth=mouth.value,
+        samples_by_level=samples_by_level,
         predicate=has_humor_aside,
     )
