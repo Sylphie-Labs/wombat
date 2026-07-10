@@ -1,10 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { LayoutPanelLeft } from "lucide-react";
 
 import "./theme.css";
-import { Icon, Indicator, Panel } from "./components";
-import { font, ink, surface } from "./tokens";
+import { App } from "./App";
 
 /**
  * TK-198 AC3: the pinned webPreferences (contextIsolation, nodeIntegration,
@@ -30,30 +28,6 @@ function assertNoNodeGlobals(): void {
 }
 
 assertNoNodeGlobals();
-
-/**
- * TK-225: the TK-198 placeholder restyled onto the token/component system -
- * this is not new product surface, just proof the design system renders.
- * The real settings form is TK-200.
- */
-function App() {
-  return (
-    <div className={`${surface.canvas} ${font.sans} ${ink.primary} min-h-screen p-8`}>
-      <Panel className="max-w-md">
-        <div className="flex items-center gap-3">
-          <Icon icon={LayoutPanelLeft} label="Wombat" />
-          <h1 className="text-lg font-semibold">Wombat</h1>
-        </div>
-        <p className={`${ink.muted} mt-2 text-sm`}>
-          Electron shell scaffold (TK-198), restyled onto the TK-225 design system.
-        </p>
-        <div className="mt-4">
-          <Indicator configured={false} label="Settings API not yet wired (TK-199)" />
-        </div>
-      </Panel>
-    </div>
-  );
-}
 
 const container = document.getElementById("root");
 if (!container) {
