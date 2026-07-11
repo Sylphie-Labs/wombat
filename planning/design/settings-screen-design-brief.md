@@ -1,12 +1,12 @@
 # Settings screen — design brief
 
-> **Iteration 2 (2026-07-11) supersedes parts of this document.** Sections 1–6
-> below are the iteration-1 record, kept for history. Jim rejected the
-> iteration-1 mock; the binding design is now **§9 Iteration 2** (which widens
-> scope from "settings screen" to the app shell). Where §9 conflicts with
-> §§1–6, §9 wins. What §9 does NOT touch (inventory, no-placebo exclusions,
-> degraded-state semantics, auto-save model, keyring rows) carries forward
-> unchanged.
+> **Iteration 3 (2026-07-11) is the binding design.** Sections 1–6 are the
+> iteration-1 record; §9 is the iteration-2 record. §10 (Iteration 3) wins
+> over both where they conflict — in particular, **all of §9.1 point (3)
+> (the "midnight burrow" palette) is void: color is out of scope; Jim owns
+> the palette.** The structural design of §9 (shell, Today view, chat pane,
+> slim controls, degraded states) carries forward into §10 unchanged, as do
+> the §2 inventory, no-placebo exclusions, auto-save model, and keyring rows.
 
 Phase-1 deliverable (ux-designer agent, 2026-07-11). Contract with myself: the
 Lucid mock and the eventual implementation follow this document; deviations get
@@ -408,3 +408,65 @@ with sub-nav": mock shows the single grouped rail).
 - App-shell / side-panel chat: [UX Collective](https://uxdesign.cc/where-should-ai-sit-in-your-ui-1710a258390e), [Setproduct AI chat](https://www.setproduct.com/blog/ai-chat-interface-ui-design), [Design Systems Collective shell](https://www.designsystemscollective.com/component-shell-a-layout-engine-for-modern-apps-57e59d3f6951)
 - Agenda/time-bucketing: [ui-patterns event calendar](https://ui-patterns.com/patterns/EventCalendar), [Eleken calendar UI](https://www.eleken.co/blog-posts/calendar-ui)
 - Dark palette practice: [Toptal dark UI](https://www.toptal.com/designers/ui/dark-ui-design), [Zeplin dark-mode palette](https://blog.zeplin.io/dark-mode-color-palette/), [Netguru dark theme](https://www.netguru.com/blog/tips-dark-mode-ui)
+
+---
+
+## 10. Iteration 3 (2026-07-11) — Jim's rejection, and the response
+
+### 10.1 Jim's critique (verbatim-in-spirit)
+
+"I don't know what I'm looking at. It's not a design — it's a color scheme /
+token library. Just focus on designing the interface. I will work on colors.
+Just make sure the colors are pointed to a theme and not hardcoded."
+
+### 10.2 What changed
+
+1. **Color is out of scope; Jim owns the palette.** The brand/palette board
+   (iteration-2 Board 0) is deleted. §9.1 point (3) — the entire "midnight
+   burrow" palette proposal — is void. The mock is rendered in neutral grays
+   (white/gray wireframe values) so nothing on it reads as a color proposal.
+2. **The mock is now interface boards only.** Every board is an application
+   screen someone could build: real layout, regions, realistic content, and
+   interaction states. All meta-exposition is off the canvas — no legend, no
+   hierarchy-tier badges, no research citations, no token names, no design
+   commentary inside the screens. Annotations live in small captions below
+   each board.
+3. **Structure carries forward from iteration 2 unchanged** (Jim did not
+   object to it): app shell with header (mark + wordmark + runtime status)
+   and left nav (Today first, settings grouped: Persona / Voice & Audio /
+   API Keys / System); persistent collapsible chat pane (320 px) on every
+   view; Today as default landing (morning brief, time-bucketed Upcoming,
+   readonly Inbox highlights, Steward's notepad, per-card sync times); slim
+   26 px controls with the 16/24/32 px spacing rhythm; segmented chips for
+   the persona axes with the generated profile-sentence lead; auto-save per
+   control + persistent restart strip; first-class degraded/empty/loading
+   states; write-only keyring key rows with configured dots. Branding stays
+   *in* the layouts (header wordmark + mark, chat identity = assistant's
+   chosen name) with no dedicated board and no explanation — it is simply
+   part of the header and chat design.
+4. **Assumed read-API contracts (§9.2) unchanged** — the architect recorded
+   DEC-45/DEC-46 against them; the mock still designs to those shapes.
+5. **Open questions (§6) unchanged** — all four still stand.
+
+### 10.3 Color policy (the whole of it)
+
+Every color in the Phase 2 implementation references a theme token — the
+TK-225 `theme.css` / `tokens.ts` discipline: components consume token names
+only, zero hardcoded color values anywhere in component code, so Jim can
+re-theme the entire app by editing one file. That is the only color
+commitment this design makes.
+
+### 10.4 Mock (artifact of record for iteration 3)
+
+`planning/design/settings-screen-mock.html` — rewritten as five neutral-gray
+interface boards:
+
+1. Today view, full shell (header / rail / content / chat), populated.
+2. Settings · Persona.
+3. Settings · Voice & Audio (restart strip active, missing-key warning).
+4. Settings · API Keys and Settings · System (two full shells).
+5. States: Today degraded-storage, Today empty, Today loading + chat while
+   wombat is down, settings storage-unreachable read-only, failed save,
+   settings hard failure — compact small frames, each labeled.
+
+The iteration-2 HTML content and the iteration-1 Lucid link (§7) are stale.
