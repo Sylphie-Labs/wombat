@@ -23,6 +23,10 @@ wombat.settings.json
 .pytest_cache/
 .ruff_cache/
 
+# TK-238: wombat-console.ps1's default runtime log directory (timestamped
+# console logs) - local-only, never committed.
+logs/
+
 # Node (memory pipeline)
 node_modules/
 
