@@ -22,6 +22,14 @@ AC3 (structural): ``test_importing_api_never_imports_bootstrap_or_runtime``,
     chdir'd), ``test_subprocess_boots_degraded_when_dsn_absent``.
 Lock-step drift test: ``test_mirror_model_field_set_matches_app_editable_fields``,
     ``test_mirror_model_literal_vocab_matches_wombat_config``.
+
+TK-246 (DEC-45(e)): GET /external/calendar + GET /external/gmail — AC1
+    ``test_ac1_external_routes_windowed_ordered_and_tokened_over_real_pg`` (pg-gated); AC2
+    ``test_get_external_calendar_no_store_returns_empty_items_with_flag``,
+    ``test_get_external_gmail_no_store_returns_empty_items_with_flag``,
+    ``test_get_external_calendar_store_raises_degrades_to_empty_items_with_flag``,
+    ``test_get_external_gmail_store_raises_degrades_to_empty_items_with_flag``; AC3
+    ``test_no_non_get_method_is_routable_under_external``.
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ import os
 import subprocess
 import sys
 import typing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -40,6 +49,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wombat.config import APP_EDITABLE_FIELDS, WombatConfig
+from wombat.external_store import ExternalItem, ExternalItemStore
+from wombat.external_store import ensure_schema as ensure_external_items_schema
 from wombat.settings_app.api import (
     _STORAGE_UNAVAILABLE_DETAIL,
     BIND_HOST,
@@ -118,10 +129,25 @@ class _RaisingSettingsStore:
         raise RuntimeError("simulated pg unreachable")
 
 
-def _client(*, key_store: object | None = None, store: object | None = None) -> TestClient:
+class _RaisingExternalItemStore:
+    """A fake whose every read raises — proves the TK-246 read-only degrade posture (AC2)."""
+
+    def get_window(self, source: str, start: object, end: object) -> list[dict[str, object]]:
+        raise RuntimeError("simulated pg unreachable")
+
+    def get_recent(self, source: str, limit: int) -> list[dict[str, object]]:
+        raise RuntimeError("simulated pg unreachable")
+
+
+def _client(
+    *,
+    key_store: object | None = None,
+    store: object | None = None,
+    external_store: object | None = None,
+) -> TestClient:
     voice_store = key_store if key_store is not None else _FakeVoiceKeyStore()
     settings_store = store if store is not None else _FakeSettingsStore()
-    app = create_app(settings_store, voice_store, TOKEN)  # type: ignore[arg-type]
+    app = create_app(settings_store, voice_store, TOKEN, external_store)  # type: ignore[arg-type]
     return TestClient(app)
 
 
@@ -134,6 +160,8 @@ def _client(*, key_store: object | None = None, store: object | None = None) -> 
         ("GET", "/settings", None),
         ("PUT", "/settings", {}),
         ("PUT", "/keys/fish", {"key": "abc"}),
+        ("GET", "/external/calendar", None),
+        ("GET", "/external/gmail", None),
     ],
 )
 def test_missing_token_is_401(
@@ -150,6 +178,8 @@ def test_missing_token_is_401(
         ("GET", "/settings", None),
         ("PUT", "/settings", {}),
         ("PUT", "/keys/fish", {"key": "abc"}),
+        ("GET", "/external/calendar", None),
+        ("GET", "/external/gmail", None),
     ],
 )
 def test_wrong_token_is_401(method: str, path: str, json_body: dict[str, object] | None) -> None:
@@ -231,6 +261,93 @@ def test_ac1_tokened_put_then_get_round_trips_over_real_pg() -> None:
         row = cur.fetchone()
         assert row is not None
         assert row[0] == "Real PG Name"
+
+
+@_requires_pg
+def test_ac1_external_routes_windowed_ordered_and_tokened_over_real_pg() -> None:
+    """TK-246 AC1: a real store seeded with gcal rows inside/outside the window plus gmail rows —
+    GET /external/calendar returns only in-window items ordered by occurs_at, GET /external/gmail
+    returns recent items, and a missing/wrong token is 401 on both."""
+    assert _PG_DSN is not None
+    with psycopg.connect(_PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS wombat_external_items CASCADE")
+        conn.commit()
+        ensure_external_items_schema(conn)
+        conn.commit()
+
+    external_store = ExternalItemStore(_PG_DSN)
+    try:
+        now = datetime.now(UTC)
+        external_store.upsert_many(
+            "gcal",
+            [
+                ExternalItem(
+                    item_key="in-window-later",
+                    payload={"summary": "later", "event_id": "in-window-later"},
+                    occurs_at=now + timedelta(hours=2),
+                ),
+                ExternalItem(
+                    item_key="in-window-earlier",
+                    payload={"summary": "earlier", "event_id": "in-window-earlier"},
+                    occurs_at=now + timedelta(hours=1),
+                ),
+                ExternalItem(
+                    item_key="out-of-window",
+                    payload={"summary": "far future", "event_id": "out-of-window"},
+                    occurs_at=now + timedelta(hours=1000),
+                ),
+            ],
+            fetched_at=now,
+        )
+        external_store.upsert_many(
+            "gmail",
+            [
+                ExternalItem(
+                    item_key="msg-1",
+                    payload={
+                        "message_id": "msg-1",
+                        "subject": "hi",
+                        "sender": "a@example.com",
+                        "received_at": now.isoformat(),
+                        "priority_band": "NORMAL",
+                    },
+                    occurs_at=now,
+                )
+            ],
+            fetched_at=now,
+        )
+
+        app = create_app(None, _FakeVoiceKeyStore(), TOKEN, external_store)
+        client = TestClient(app)
+
+        cal_response = client.get(
+            "/external/calendar", headers={"X-Wombat-Token": TOKEN}
+        )
+        assert cal_response.status_code == 200
+        cal_body = cal_response.json()
+        assert cal_body["storage_unavailable"] is False
+        assert [item["event_id"] for item in cal_body["items"]] == [
+            "in-window-earlier",
+            "in-window-later",
+        ]
+
+        gmail_response = client.get("/external/gmail", headers={"X-Wombat-Token": TOKEN})
+        assert gmail_response.status_code == 200
+        gmail_body = gmail_response.json()
+        assert gmail_body["storage_unavailable"] is False
+        assert [item["message_id"] for item in gmail_body["items"]] == ["msg-1"]
+
+        assert client.get("/external/calendar").status_code == 401
+        assert (
+            client.get(
+                "/external/calendar", headers={"X-Wombat-Token": "wrong"}
+            ).status_code
+            == 401
+        )
+        assert client.get("/external/gmail").status_code == 401
+    finally:
+        external_store.close()
 
 
 # --- AC2: writes + validation + degrade posture ------------------------------------------------
@@ -382,7 +499,64 @@ def test_put_settings_store_raises_is_503_with_fixed_detail_never_bare_500() -> 
     assert "simulated pg unreachable" not in response.text
 
 
+def test_get_external_calendar_no_store_returns_empty_items_with_flag() -> None:
+    """TK-246: no ``external_store`` -> 200 with empty items + storage_unavailable true."""
+    client = _client(external_store=None)
+
+    response = client.get("/external/calendar", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["storage_unavailable"] is True
+
+
+def test_get_external_gmail_no_store_returns_empty_items_with_flag() -> None:
+    client = _client(external_store=None)
+
+    response = client.get("/external/gmail", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["storage_unavailable"] is True
+
+
+def test_get_external_calendar_store_raises_degrades_to_empty_items_with_flag() -> None:
+    client = _client(external_store=_RaisingExternalItemStore())
+
+    response = client.get("/external/calendar", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["storage_unavailable"] is True
+
+
+def test_get_external_gmail_store_raises_degrades_to_empty_items_with_flag() -> None:
+    client = _client(external_store=_RaisingExternalItemStore())
+
+    response = client.get("/external/gmail", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["storage_unavailable"] is True
+
+
 # --- AC3: structural ---------------------------------------------------------------------------
+
+
+def test_no_non_get_method_is_routable_under_external() -> None:
+    """TK-246 AC3: /external/ is strictly read-only — no PUT/POST/DELETE/PATCH route exists under
+    it, proven structurally by iterating every registered route."""
+    app = create_app(None, _FakeVoiceKeyStore(), TOKEN, None)
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/external/"):
+            continue
+        methods: set[str] = getattr(route, "methods", set()) or set()
+        assert methods <= {"GET", "HEAD"}, f"{path} exposes non-GET methods: {methods}"
 
 
 def test_importing_api_never_imports_bootstrap_or_runtime() -> None:

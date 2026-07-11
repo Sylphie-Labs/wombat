@@ -16,8 +16,8 @@ runs-while-``serve()``-is-down property now rides Postgres being a separate alwa
 rather than this process ever needing ``wombat.bootstrap``/``wombat.runtime``.
 
 Imports NOTHING from ``wombat.bootstrap``/``wombat.runtime`` (this process runs while ``serve()``
-is down) — ``wombat.config``, ``wombat.settings_store``, and ``wombat.voice.key_store`` are the
-only wombat modules touched, none of which reaches the runtime.
+is down) — ``wombat.config``, ``wombat.settings_store``, ``wombat.external_store`` (TK-246), and
+``wombat.voice.key_store`` are the only wombat modules touched, none of which reaches the runtime.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ import psycopg
 import uvicorn
 from dotenv import dotenv_values
 
+from wombat.external_store import ExternalItemStore
 from wombat.settings_app.api import BIND_HOST, create_app
 from wombat.settings_store import SettingsStore, ensure_schema, import_legacy_settings_file
 from wombat.voice.key_store import WOMBAT_KEYRING_SERVICE, KeyringVoiceKeyStore
@@ -59,6 +60,7 @@ def main() -> None:
 
     dsn = _resolve_pg_dsn()
     store: SettingsStore | None = None
+    external_store: ExternalItemStore | None = None
     if dsn:
         conn = psycopg.connect(dsn)
         try:
@@ -69,8 +71,12 @@ def main() -> None:
         # ``wombat.runtime.serve()``) — invoked exactly once at startup, after schema is applied.
         import_legacy_settings_file(dsn)
         store = SettingsStore(dsn)
+        # TK-246 (DEC-45(e)): the SAME resolved DSN, read-only over wombat_external_items — its
+        # schema is ensured by the runtime side (schema_preflight.ensure_all_schemas); a table
+        # that doesn't exist yet degrades a read the same as any other storage failure.
+        external_store = ExternalItemStore(dsn)
 
-    app = create_app(store, KeyringVoiceKeyStore(service=service), token)
+    app = create_app(store, KeyringVoiceKeyStore(service=service), token, external_store)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((BIND_HOST, 0))
