@@ -2,185 +2,245 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>wombat — interface mock (Phase 1, iteration 3)</title>
+<title>wombat — interface mock (Phase 1, iteration 4)</title>
 <style>
-  /* Iteration-3 mock: NEUTRAL GRAYSCALE wireframe. Color is out of scope —
-     Jim owns the palette. Implementation colors come from theme tokens only. */
+  /* Every color below is a theme token named exactly like app/src/theme.css.
+     Values are PLACEHOLDERS — re-theme by swapping this one block. No rule
+     anywhere else in this file uses a literal color. */
   :root {
-    --page:   #e4e4e4;
-    --frame:  #ffffff;
-    --panel:  #fafafa;
-    --raise:  #f0f0f0;
-    --line:   #d6d6d6;
-    --line2:  #b8b8b8;
-    --ink:    #1a1a1a;
-    --muted:  #737373;
-    --solid:  #262626;   /* selected / primary fills */
+    --color-surface-canvas:   oklch(18% 0.02 265);
+    --color-surface-panel:    oklch(22% 0.022 265);
+    --color-surface-elevated: oklch(27% 0.025 265);
+    --color-ink-primary:      oklch(93% 0.012 265);
+    --color-ink-muted:        oklch(68% 0.02 265);
+    --color-border-default:   oklch(33% 0.022 265);
+    --color-border-strong:    oklch(46% 0.03 265);
+    --color-brand:            oklch(72% 0.16 295);
+    --color-brand-hover:      oklch(66% 0.17 295);
+    --color-brand-ink:        oklch(16% 0.04 295);
+    --color-accent:           oklch(76% 0.12 200);
+    --color-danger:           oklch(70% 0.16 25);
+    --color-danger-ink:       oklch(15% 0.05 25);
+    --color-positive:         oklch(75% 0.13 155);
+    --color-focus:            var(--color-accent);
+    /* mock-page scaffold aliases (the page around the boards) */
+    --page:  oklch(14% 0.018 265);
+    --shadow: oklch(8% 0.02 265 / .5);
   }
   * { box-sizing: border-box; }
-  body { background: var(--page); color: var(--ink);
+  body { background: var(--page); color: var(--color-ink-primary);
          font: 13px/1.5 system-ui, sans-serif; margin: 0; padding: 36px 32px 64px; }
   h1 { font-size: 18px; font-weight: 650; max-width: 1200px; margin: 0 auto 4px; }
-  .intro { max-width: 1200px; margin: 0 auto 40px; color: var(--muted); font-size: 12.5px; }
+  .intro { max-width: 1200px; margin: 0 auto 40px; color: var(--color-ink-muted); font-size: 12.5px; }
   .board { max-width: 1200px; margin: 0 auto 56px; }
-  .board > h2 { font-size: 13px; font-weight: 650; color: var(--ink);
+  .board > h2 { font-size: 13px; font-weight: 650; color: var(--color-ink-primary);
                 margin: 0 0 10px; letter-spacing: .02em; }
-  .cap { font-size: 12px; color: var(--muted); margin: 10px 2px 0; max-width: 1200px; }
+  .cap { font-size: 12px; color: var(--color-ink-muted); margin: 10px 2px 0; max-width: 1200px; }
 
   /* ---------- shell regions ---------- */
-  .frame { background: var(--frame); border: 1px solid var(--line2);
+  .frame { background: var(--color-surface-canvas); border: 1px solid var(--color-border-default);
            border-radius: 10px; overflow: hidden;
-           box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+           box-shadow: 0 1px 3px var(--shadow); }
   .header { display: flex; align-items: center; gap: 10px; height: 48px;
-            padding: 0 18px; border-bottom: 1px solid var(--line);
-            background: var(--panel); flex: none; }
+            padding: 0 18px; border-bottom: 1px solid var(--color-border-default);
+            background: var(--color-surface-panel); flex: none; }
   .mark { width: 24px; height: 24px; border-radius: 999px; flex: none;
-          border: 2px solid var(--solid); position: relative; overflow: hidden; }
+          border: 2px solid var(--color-brand); position: relative; overflow: hidden; }
   .mark::before { content: ""; position: absolute; left: 5px; right: 5px;
-          bottom: 6px; height: 10px; border: 2px solid var(--solid);
+          bottom: 6px; height: 10px; border: 2px solid var(--color-brand);
           border-bottom: none; border-radius: 999px 999px 0 0; }
   .mark::after { content: ""; position: absolute; left: 3px; right: 3px;
-          bottom: 5px; height: 2px; background: var(--solid); }
+          bottom: 5px; height: 2px; background: var(--color-brand); }
   .wordmark { font-weight: 650; font-size: 14.5px; }
-  .epithet { font-size: 9px; letter-spacing: .26em; color: var(--muted);
+  .epithet { font-size: 9px; letter-spacing: .26em; color: var(--color-ink-muted);
              text-transform: uppercase; margin-left: 6px; }
   .hstatus { margin-left: auto; display: flex; align-items: center; gap: 8px;
-             color: var(--muted); font-size: 12.5px; }
-  .hstatus u { color: var(--ink); }
+             color: var(--color-ink-muted); font-size: 12.5px; }
+  .hstatus u { color: var(--color-accent); }
 
   .body3 { display: flex; min-height: 560px; align-items: stretch; }
-  .rail { width: 184px; flex: none; border-right: 1px solid var(--line);
+  .rail { width: 184px; flex: none; border-right: 1px solid var(--color-border-default);
           padding: 14px 10px; display: flex; flex-direction: column; gap: 2px;
-          background: var(--panel); }
+          background: var(--color-surface-panel); }
   .rail a { display: flex; gap: 9px; align-items: center; height: 30px;
-            padding: 0 10px; border-radius: 7px; color: var(--muted);
+            padding: 0 10px; border-radius: 7px; color: var(--color-ink-muted);
             text-decoration: none; font-size: 13px; }
-  .rail a.active { background: #e7e7e7; color: var(--ink); font-weight: 600; }
+  .rail a.active { background: var(--color-surface-elevated); color: var(--color-ink-primary); font-weight: 600; }
   .rail .ic { width: 13px; height: 13px; border: 1.5px solid currentColor;
               border-radius: 3px; flex: none; opacity: .7; }
-  .rail .grp { font-size: 9.5px; letter-spacing: .18em; color: var(--muted);
+  .rail .grp { font-size: 9.5px; letter-spacing: .18em; color: var(--color-ink-muted);
                text-transform: uppercase; margin: 16px 10px 4px; }
   .content { flex: 1; padding: 24px 32px; display: flex; flex-direction: column;
              gap: 24px; min-width: 0; }
 
   /* ---------- chat pane ---------- */
-  .chat { width: 320px; flex: none; border-left: 1px solid var(--line);
-          background: var(--panel); display: flex; flex-direction: column; }
+  .chat { width: 320px; flex: none; border-left: 1px solid var(--color-border-default);
+          background: var(--color-surface-panel); display: flex; flex-direction: column; }
   .chead { display: flex; align-items: center; gap: 8px; height: 42px;
-           padding: 0 14px; border-bottom: 1px solid var(--line);
+           padding: 0 14px; border-bottom: 1px solid var(--color-border-default);
            font-weight: 600; font-size: 13px; flex: none; }
   .chead .mark { width: 18px; height: 18px; border-width: 1.5px; }
   .chead .mark::before { left: 3px; right: 3px; bottom: 4px; height: 7px; border-width: 1.5px; }
   .chead .mark::after { left: 2px; right: 2px; bottom: 3px; height: 1.5px; }
-  .chead .hide { margin-left: auto; width: 22px; height: 22px; border: 1px solid var(--line);
+  .chead .hide { margin-left: auto; width: 22px; height: 22px; border: 1px solid var(--color-border-default);
                  border-radius: 6px; display: flex; align-items: center; justify-content: center;
-                 color: var(--muted); font-size: 13px; }
+                 color: var(--color-ink-muted); font-size: 13px; }
   .log { flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 10px;
          overflow: hidden; }
   .bub { max-width: 86%; padding: 6px 11px; border-radius: 11px; font-size: 13px; }
-  .bub.you { align-self: flex-end; background: var(--solid); color: #fff;
+  .bub.you { align-self: flex-end; background: var(--color-brand); color: var(--color-brand-ink);
              border-bottom-right-radius: 4px; }
-  .bub.wb  { align-self: flex-start; background: var(--raise); color: var(--ink);
+  .bub.wb  { align-self: flex-start; background: var(--color-surface-elevated); color: var(--color-ink-primary);
              border-bottom-left-radius: 4px; }
-  .bub.sys { align-self: flex-start; color: var(--muted); font-style: italic;
+  .bub.sys { align-self: flex-start; color: var(--color-ink-muted); font-style: italic;
              padding: 0; font-size: 12.5px; }
-  .composer { border-top: 1px solid var(--line); padding: 10px 12px;
+  .composer { border-top: 1px solid var(--color-border-default); padding: 10px 12px;
               display: flex; gap: 8px; flex: none; }
   .composer .input { flex: 1; min-width: 0; }
 
-  /* ---------- cards & controls (26 px control height) ---------- */
-  .card { border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px;
-          background: var(--frame); display: flex; flex-direction: column; gap: 16px; }
+  /* ---------- cards & controls (26 px control height for settings) ---------- */
+  .card { border: 1px solid var(--color-border-default); border-radius: 10px; padding: 16px 20px;
+          background: var(--color-surface-panel); display: flex; flex-direction: column; gap: 16px; }
   .card h3 { margin: 0; font-size: 13px; font-weight: 650;
              display: flex; align-items: baseline; gap: 8px; }
-  .card h3 .when { font-weight: 400; color: var(--muted); font-size: 11.5px; margin-left: auto; }
+  .card h3 .when { font-weight: 400; color: var(--color-ink-muted); font-size: 11.5px; margin-left: auto; }
   .lead { font-size: 14.5px; margin: 0; }
   .lead b { font-weight: 650; }
   .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-height: 26px; }
-  .row label { width: 118px; flex: none; color: var(--muted); font-size: 12.5px; }
+  .row label { width: 118px; flex: none; color: var(--color-ink-muted); font-size: 12.5px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 28px; }
   .axis { display: flex; flex-direction: column; gap: 6px; }
   .axname { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
-            color: var(--muted); display: flex; gap: 8px; align-items: center; }
+            color: var(--color-ink-muted); display: flex; gap: 8px; align-items: center; }
   .axname .st { letter-spacing: 0; text-transform: none; font-size: 11px; }
   .seg { display: inline-flex; gap: 6px; }
   .seg span { height: 26px; display: inline-flex; align-items: center;
-              padding: 0 12px; border: 1px solid var(--line2); border-radius: 999px;
-              color: var(--muted); font-size: 12.5px; background: var(--frame); }
-  .seg .on { background: var(--solid); border-color: var(--solid);
-             color: #fff; font-weight: 600; }
+              padding: 0 12px; border: 1px solid var(--color-border-strong); border-radius: 999px;
+              color: var(--color-ink-muted); font-size: 12.5px; background: var(--color-surface-panel); }
+  .seg .on { background: var(--color-brand); border-color: var(--color-brand);
+             color: var(--color-brand-ink); font-weight: 600; }
   .seg.ro span { border-style: dashed; }
-  .seg.ro .on { background: #e0e0e0; color: var(--ink); border: 1px solid var(--line2); }
+  .seg.ro .on { background: var(--color-surface-elevated); color: var(--color-ink-primary);
+                border: 1px solid var(--color-border-strong); }
   .input, select.input { height: 26px; display: inline-flex; align-items: center;
-          border: 1px solid var(--line2); border-radius: 7px; padding: 0 10px;
-          background: var(--frame); color: var(--ink); min-width: 200px; font-size: 12.5px; }
-  .input.ph { color: var(--muted); }
-  .input.ro { background: var(--panel); border-style: dashed; }
+          border: 1px solid var(--color-border-strong); border-radius: 7px; padding: 0 10px;
+          background: var(--color-surface-canvas); color: var(--color-ink-primary);
+          min-width: 200px; font-size: 12.5px; }
+  .input.ph { color: var(--color-ink-muted); }
+  .input.ro { background: var(--color-surface-panel); border-style: dashed; }
   .btn { height: 26px; display: inline-flex; align-items: center;
-         border: 1px solid var(--solid); border-radius: 999px; padding: 0 14px;
-         background: var(--solid); color: #fff; font-weight: 600; font-size: 12.5px; }
-  .btn.secondary { background: var(--frame); color: var(--ink);
-                   border-color: var(--line2); font-weight: 500; }
+         border: 1px solid var(--color-brand); border-radius: 999px; padding: 0 14px;
+         background: var(--color-brand); color: var(--color-brand-ink); font-weight: 600; font-size: 12.5px; }
+  .btn.secondary { background: var(--color-surface-panel); color: var(--color-ink-primary);
+                   border-color: var(--color-border-strong); font-weight: 500; }
   .btn.disabled { opacity: .4; }
-  .muted { color: var(--muted); font-size: 12px; }
-  .tag { font-size: 10px; border: 1px solid var(--line2); border-radius: 999px;
+  .muted { color: var(--color-ink-muted); font-size: 12px; }
+  .tag { font-size: 10px; border: 1px solid var(--color-border-strong); border-radius: 999px;
          height: 16px; display: inline-flex; align-items: center;
-         padding: 0 7px; color: var(--muted); }
+         padding: 0 7px; color: var(--color-ink-muted); }
   .pill { font-size: 10.5px; border-radius: 999px; height: 18px; padding: 0 8px;
-          font-weight: 600; display: inline-flex; align-items: center; }
-  .pill.reply { background: var(--solid); color: #fff; }
-  .pill.fyi { background: var(--raise); color: var(--muted); border: 1px solid var(--line); }
+          font-weight: 600; display: inline-flex; align-items: center; flex: none; }
+  .pill.reply { background: var(--color-brand); color: var(--color-brand-ink); }
+  .pill.fyi { background: transparent; color: var(--color-ink-muted); border: 1px solid var(--color-border-strong); }
+  .pill.next { background: transparent; color: var(--color-brand); border: 1px solid var(--color-brand);
+               font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; }
   .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; flex: none; }
-  .dot.ok { background: var(--solid); }
-  .dot.no { background: transparent; border: 1.5px solid var(--line2); }
-  .dot.hollow { background: transparent; border: 1.5px solid var(--muted); }
-  .banner { border: 1.5px solid var(--solid); background: var(--raise);
+  .dot.ok { background: var(--color-positive); }
+  .dot.no { background: transparent; border: 1.5px solid var(--color-border-strong); }
+  .dot.hollow { background: transparent; border: 1.5px solid var(--color-ink-muted); }
+  .banner { border: 1.5px solid var(--color-danger); background: var(--color-surface-panel);
             border-radius: 10px; padding: 10px 16px; display: flex; gap: 14px;
             align-items: flex-start; }
   .banner .btn { flex: none; margin-left: auto; }
-  .strip { border: 1px solid var(--line2); background: var(--raise);
+  .strip { border: 1px solid var(--color-border-strong); background: var(--color-surface-elevated);
            border-radius: 10px; padding: 7px 16px; display: flex; gap: 14px;
            align-items: center; }
   .strip .btn { margin-left: auto; }
-  .inlerr { color: var(--ink); font-size: 12px; font-weight: 600;
-            border-bottom: 2px solid var(--solid); }
-  details { border: 1px dashed var(--line2); border-radius: 8px; padding: 7px 12px; }
-  summary { cursor: default; color: var(--muted); font-size: 12.5px; }
+  .inlerr { color: var(--color-danger); font-size: 12px; font-weight: 600;
+            border-bottom: 2px solid var(--color-danger); }
+  details { border: 1px dashed var(--color-border-strong); border-radius: 8px; padding: 7px 12px; }
+  summary { cursor: default; color: var(--color-ink-muted); font-size: 12.5px; }
 
-  /* ---------- agenda / inbox rows ---------- */
+  /* ---------- EVENT CARDS (agenda) ---------- */
   .bucket { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
-            color: var(--muted); font-weight: 650; margin: 2px 0 0; }
-  .evt { display: flex; gap: 12px; align-items: baseline; padding: 5px 0;
-         border-bottom: 1px solid var(--line); }
-  .evt:last-child { border-bottom: none; }
-  .evt .time { width: 92px; flex: none; color: var(--muted); font-size: 12px;
-               font-variant-numeric: tabular-nums; }
-  .evt .title { font-size: 13px; }
-  .evt .meta { color: var(--muted); font-size: 11.5px; margin-left: auto; }
-  .mail { display: flex; gap: 10px; align-items: baseline; padding: 5px 0;
-          border-bottom: 1px solid var(--line); }
-  .mail:last-child { border-bottom: none; }
-  .mail .from { width: 118px; flex: none; color: var(--muted); font-size: 12px;
-                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mail .subj { font-size: 13px; overflow: hidden; text-overflow: ellipsis;
-                white-space: nowrap; min-width: 0; }
-  .mail .pill { margin-left: auto; }
+            color: var(--color-ink-muted); font-weight: 650; margin: 2px 0 0; }
+  .elist { display: flex; flex-direction: column; gap: 8px; }
+  .ecard { display: flex; align-items: center; gap: 14px; padding: 9px 14px 9px 0;
+           background: var(--color-surface-elevated); border: 1px solid var(--color-border-default);
+           border-radius: 8px; overflow: hidden; }
+  .ecard .edge { align-self: stretch; width: 3px; flex: none;
+                 background: var(--color-border-strong); border-radius: 0; }
+  .ecard.next { border-color: var(--color-brand); }
+  .ecard.next .edge { background: var(--color-brand); }
+  .ecard.allday { border-style: dashed; }
+  .ecard.allday .edge { background: transparent; border-left: 3px dashed var(--color-border-strong); width: 0; }
+  .ecard .tblock { width: 62px; flex: none; display: flex; flex-direction: column;
+                   line-height: 1.25; font-variant-numeric: tabular-nums; }
+  .ecard .tblock .start { font-size: 15px; font-weight: 600; }
+  .ecard .tblock .end { font-size: 11px; color: var(--color-ink-muted); }
+  .ecard .tblock .day { font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+                        color: var(--color-ink-muted); }
+  .ecard .ebody { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ecard .etitle { font-size: 13px; font-weight: 600; overflow: hidden;
+                   text-overflow: ellipsis; white-space: nowrap; }
+  .ecard .emeta { display: flex; gap: 12px; align-items: center;
+                  color: var(--color-ink-muted); font-size: 11.5px; }
+  .ecard .emeta i { font-style: normal; display: inline-flex; gap: 4px; align-items: center; }
+  .ecard .emeta i::before { content: ""; width: 9px; height: 9px; flex: none;
+                  border: 1.2px solid currentColor; border-radius: 999px 999px 999px 2px;
+                  opacity: .8; }
+  .ecard .emeta i.ppl::before { border-radius: 999px; }
+  .ecard .pill.next { margin-left: auto; }
+
+  /* ---------- INBOX CARDS ---------- */
+  .mlist { display: flex; flex-direction: column; gap: 8px; }
+  .mcard { display: flex; align-items: center; gap: 11px; padding: 8px 12px;
+           background: var(--color-surface-elevated); border: 1px solid var(--color-border-default);
+           border-radius: 8px; }
+  .mcard .avatar { width: 28px; height: 28px; border-radius: 7px; flex: none;
+           background: var(--color-brand); color: var(--color-brand-ink);
+           display: flex; align-items: center; justify-content: center;
+           font-weight: 650; font-size: 13px; }
+  .mcard .avatar.dim { background: var(--color-surface-panel);
+           color: var(--color-ink-muted); border: 1px solid var(--color-border-strong); }
+  .mcard .mbody { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .mcard .subj { font-size: 13px; font-weight: 600; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+  .mcard .mmeta { color: var(--color-ink-muted); font-size: 11.5px; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .mcard .mside { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .mcard .mtime { color: var(--color-ink-muted); font-size: 10.5px;
+                  font-variant-numeric: tabular-nums; }
+
+  /* ---------- NOTEPAD ENTRIES ---------- */
+  .nlist { display: flex; flex-direction: column; }
+  .note { display: flex; gap: 11px; padding: 7px 2px; align-items: baseline;
+          border-bottom: 1px solid var(--color-border-default); }
+  .note:last-child { border-bottom: none; }
+  .note .nmark { width: 7px; height: 7px; border-radius: 999px; flex: none;
+                 background: var(--color-accent); position: relative; top: -1px; }
+  .note .ntext { flex: 1; min-width: 0; font-size: 12.5px; }
+  .note .ntime { flex: none; color: var(--color-ink-muted); font-size: 10.5px;
+                 font-variant-numeric: tabular-nums; }
+
   .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
 
   /* ---------- states board ---------- */
   .stategrid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-  .sframe { background: var(--frame); border: 1px solid var(--line2);
+  .sframe { background: var(--color-surface-canvas); border: 1px solid var(--color-border-default);
             border-radius: 10px; padding: 16px 18px; display: flex;
-            flex-direction: column; gap: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+            flex-direction: column; gap: 14px; box-shadow: 0 1px 3px var(--shadow); }
   .sframe > .slabel { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
-            color: var(--muted); font-weight: 650; }
+            color: var(--color-ink-muted); font-weight: 650; }
+  .skel { height: 46px; border-radius: 8px; border: 1px dashed var(--color-border-strong);
+          background: var(--color-surface-elevated); display: flex; align-items: center;
+          padding: 0 14px; color: var(--color-ink-muted); font-size: 11.5px; }
 </style>
 </head>
 <body>
 
-<h1>wombat — interface mock (Phase 1, iteration 3)</h1>
-<p class="intro">Neutral-grayscale wireframes — layout, hierarchy, and states only.
-Palette is Jim's; every color in the implementation references a theme token.</p>
+<h1>wombat — interface mock (Phase 1, iteration 4)</h1>
+<p class="intro">Placeholder colors — all values are theme tokens; swap the token file to re-theme.</p>
 
 <!-- ============ BOARD 1: TODAY (default landing) ============ -->
 <div class="board">
@@ -211,35 +271,64 @@ Palette is Jim's; every color in the implementation references a theme token.</p
           <div class="card">
             <h3>Upcoming <span class="when">synced 08:42</span></h3>
             <p class="bucket">Today</p>
-            <div>
-              <div class="evt"><span class="time">10:00–10:45</span><span class="title">Call with Mom</span><span class="meta">Phone</span></div>
-              <div class="evt"><span class="time">15:00–16:00</span><span class="title">Pick up bike from shop</span><span class="meta">Main St Cycles</span></div>
+            <div class="elist">
+              <div class="ecard next"><span class="edge"></span>
+                <span class="tblock"><span class="start">10:00</span><span class="end">– 10:45</span></span>
+                <span class="ebody"><span class="etitle">Call with Mom</span>
+                  <span class="emeta"><i>Phone</i></span></span>
+                <span class="pill next">next</span></div>
+              <div class="ecard"><span class="edge"></span>
+                <span class="tblock"><span class="start">15:00</span><span class="end">– 16:00</span></span>
+                <span class="ebody"><span class="etitle">Pick up bike from shop</span>
+                  <span class="emeta"><i>Main St Cycles</i></span></span></div>
             </div>
             <p class="bucket">Tomorrow</p>
-            <div>
-              <div class="evt"><span class="time">All day</span><span class="title">Laundry + meal prep</span></div>
+            <div class="elist">
+              <div class="ecard allday"><span class="edge"></span>
+                <span class="tblock"><span class="pill fyi">All day</span></span>
+                <span class="ebody"><span class="etitle">Laundry + meal prep</span></span></div>
             </div>
             <p class="bucket">Later this week</p>
-            <div>
-              <div class="evt"><span class="time">Mon 09:00</span><span class="title">Standup — platform team</span><span class="meta">Meet · 6 people</span></div>
-              <div class="evt"><span class="time">Tue 14:30</span><span class="title">Dentist — Dr. Okafor</span></div>
-              <div class="evt"><span class="time">Thu 12:00</span><span class="title">Lunch w/ Marcus</span></div>
+            <div class="elist">
+              <div class="ecard"><span class="edge"></span>
+                <span class="tblock"><span class="day">Mon</span><span class="start">09:00</span></span>
+                <span class="ebody"><span class="etitle">Standup — platform team</span>
+                  <span class="emeta"><i>Meet</i><i class="ppl">6 people</i></span></span></div>
+              <div class="ecard"><span class="edge"></span>
+                <span class="tblock"><span class="day">Tue</span><span class="start">14:30</span></span>
+                <span class="ebody"><span class="etitle">Dentist — Dr. Okafor</span></span></div>
+              <div class="ecard"><span class="edge"></span>
+                <span class="tblock"><span class="day">Thu</span><span class="start">12:00</span></span>
+                <span class="ebody"><span class="etitle">Lunch w/ Marcus</span></span></div>
             </div>
           </div>
           <div style="display:flex; flex-direction:column; gap:24px">
             <div class="card">
               <h3>Inbox highlights <span class="when">synced 08:42</span></h3>
-              <div>
-                <div class="mail"><span class="from">Sarah Lin</span><span class="subj">Re: July invoice — can you confirm the hours?</span><span class="pill reply">needs reply</span></div>
-                <div class="mail"><span class="from">Dr. Okafor's office</span><span class="subj">Appointment confirmed: Tue Jul 14, 2:30 PM</span><span class="pill fyi">FYI</span></div>
-                <div class="mail"><span class="from">Anthropic billing</span><span class="subj">Your receipt for July</span><span class="pill fyi">FYI</span></div>
+              <div class="mlist">
+                <div class="mcard"><span class="avatar">S</span>
+                  <span class="mbody"><span class="subj">Re: July invoice — can you confirm the hours?</span>
+                    <span class="mmeta">Sarah Lin</span></span>
+                  <span class="mside"><span class="mtime">08:12</span><span class="pill reply">needs reply</span></span></div>
+                <div class="mcard"><span class="avatar dim">D</span>
+                  <span class="mbody"><span class="subj">Appointment confirmed: Tue Jul 14, 2:30 PM</span>
+                    <span class="mmeta">Dr. Okafor's office</span></span>
+                  <span class="mside"><span class="mtime">07:48</span><span class="pill fyi">FYI</span></span></div>
+                <div class="mcard"><span class="avatar dim">A</span>
+                  <span class="mbody"><span class="subj">Your receipt for July</span>
+                    <span class="mmeta">Anthropic billing</span></span>
+                  <span class="mside"><span class="mtime">Yesterday</span><span class="pill fyi">FYI</span></span></div>
               </div>
             </div>
             <div class="card">
               <h3>Steward's notepad</h3>
-              <div style="display:flex; flex-direction:column; gap:6px">
-                <span>· Waiting on Sarah's reply to close out the July invoice.</span>
-                <span>· Bike shop closes at 17:00 Saturdays.</span>
+              <div class="nlist">
+                <div class="note"><span class="nmark"></span>
+                  <span class="ntext">Waiting on Sarah's reply to close out the July invoice.</span>
+                  <span class="ntime">noted 08:15</span></div>
+                <div class="note"><span class="nmark"></span>
+                  <span class="ntext">Bike shop closes at 17:00 Saturdays.</span>
+                  <span class="ntime">noted 07:02</span></div>
               </div>
             </div>
           </div>
@@ -257,10 +346,14 @@ Palette is Jim's; every color in the implementation references a theme token.</p
       </div>
     </div>
   </div>
-  <p class="cap">Regions: header 48px · nav rail 184px · content column fluid (32px side
-  padding, 24px card gap, 16px row gap inside cards) · chat pane 320px, persistent on every
-  view, collapsible to an edge tab. Inbox rows are readonly; row click opens snippet +
-  "Open in Gmail". Event row click opens details. Notepad is readonly.</p>
+  <p class="cap">Regions unchanged from the approved iteration-3 layout: header 48px · nav rail
+  184px · content column fluid (32px side padding, 24px card gap) · chat pane 320px, persistent,
+  collapsible. Event cards: 3px accent edge, time block (start prominent, end muted; weekday atop
+  time in later buckets), title + icon meta; today's next event gets the brand edge + "next" chip;
+  all-day events swap the time block for a pill and a dashed edge. Inbox cards (readonly): sender
+  initial block, subject over sender, timestamp + priority chip — no preview line (the store keeps
+  five fields per message: id, subject, sender, received-at, priority band); row click = Open in
+  Gmail. Notepad entries: marker + text + noted-at time, readonly.</p>
 </div>
 
 <!-- ============ BOARD 2: SETTINGS — PERSONA ============ -->
@@ -508,9 +601,11 @@ Palette is Jim's; every color in the implementation references a theme token.</p
 
     <div class="sframe">
       <span class="slabel">Today — loading · and chat while wombat is down</span>
-      <div class="card"><h3>Upcoming</h3><p class="muted" style="margin:0">Loading…</p></div>
-      <div class="card"><h3>Inbox highlights</h3><p class="muted" style="margin:0">Loading…</p></div>
-      <div class="chat" style="width:auto; border:1px solid var(--line); border-radius:10px; min-height:130px">
+      <div class="card"><h3>Upcoming</h3>
+        <div class="elist"><div class="skel">Loading events…</div><div class="skel"></div></div></div>
+      <div class="card"><h3>Inbox highlights</h3>
+        <div class="mlist"><div class="skel">Loading inbox…</div></div></div>
+      <div class="chat" style="width:auto; border:1px solid var(--color-border-default); border-radius:10px; min-height:130px">
         <div class="chead"><span class="mark"></span>John <span class="muted" style="font-weight:400">· The Steward</span><span class="dot hollow" style="margin-left:auto"></span></div>
         <div class="log"><div class="bub sys">Wombat is not running — start it to chat.</div></div>
         <div class="composer"><span class="input ph disabled" style="min-width:0; opacity:.5">Message John…</span><span class="btn disabled">Send</span></div>
@@ -562,11 +657,11 @@ Palette is Jim's; every color in the implementation references a theme token.</p
   </div>
   <p class="cap">Degraded values stay legible (dashed borders mark read-only, not grayed-out).
   Cards degrade independently — the brief keeps rendering if its own source is readable.
-  Empty is not an error: steward-voiced lines, no banner. Loading is a plain "Loading…" line,
-  no spinner. A failed save reverts the control and re-raises the storage banner. A hard
-  settings failure replaces only the content column — header, rail, and chat never blank.
-  Voice controls with no drop-dir configured disable with an explanation line (not shown:
-  identical layout to Board 3's Microphone card with the three controls disabled).</p>
+  Empty is not an error: steward-voiced lines, no banner. Loading renders card-shaped skeleton
+  frames at the event/inbox card height — plain, no shimmer. A failed save reverts the control
+  and re-raises the storage banner. A hard settings failure replaces only the content column —
+  header, rail, and chat never blank. Voice controls with no drop-dir configured disable with
+  an explanation line (identical layout to Board 3's Microphone card, controls disabled).</p>
 </div>
 
 </body>

@@ -1,12 +1,11 @@
 # Settings screen — design brief
 
-> **Iteration 3 (2026-07-11) is the binding design.** Sections 1–6 are the
-> iteration-1 record; §9 is the iteration-2 record. §10 (Iteration 3) wins
-> over both where they conflict — in particular, **all of §9.1 point (3)
-> (the "midnight burrow" palette) is void: color is out of scope; Jim owns
-> the palette.** The structural design of §9 (shell, Today view, chat pane,
-> slim controls, degraded states) carries forward into §10 unchanged, as do
-> the §2 inventory, no-placebo exclusions, auto-save model, and keyring rows.
+> **Iteration 4 (2026-07-11) is the binding design; the iteration-3 LAYOUT is
+> Jim-approved.** Sections 1–6 are the iteration-1 record; §9 iteration 2;
+> §10 iteration 3; §11 (Iteration 4) wins where they conflict. Iteration 4
+> changes exactly two things — placeholder colors routed through theme-token
+> variables, and richer event/inbox/notepad card components — and moves
+> nothing else. Jim still owns the final palette (token-file swap).
 
 Phase-1 deliverable (ux-designer agent, 2026-07-11). Contract with myself: the
 Lucid mock and the eventual implementation follow this document; deviations get
@@ -470,3 +469,82 @@ interface boards:
    settings hard failure — compact small frames, each labeled.
 
 The iteration-2 HTML content and the iteration-1 Lucid link (§7) are stale.
+
+---
+
+## 11. Iteration 4 (2026-07-11) — targeted revision on an approved layout
+
+### 11.1 Jim's feedback (verbatim-in-spirit)
+
+**The layout is APPROVED as of iteration 3:** "this is a much better layout.
+I like the side panel chat. Keep that. The layout in general feels right."
+Two revisions only:
+
+1. "We just want to use any color as placeholders and let me change the token
+   file when I'm ready. If you do everything black and white now, it will be
+   a pain in the ass to go back and manually find all the places to change."
+2. "The individual components for rendering events and such is extremely
+   bare. We need event cards or something like it."
+
+Nothing else moves: shell (header / rail / content / 320 px chat pane),
+Today-as-landing, four settings categories, 26 px slim controls with the
+16/24/32 spacing rhythm, segmented persona chips + profile sentence,
+auto-save + restart strip, write-only key rows, all degraded/empty/loading
+states, and all §2/§6 exclusions and open questions carry forward verbatim.
+
+### 11.2 Change 1 — placeholder colors through token variables
+
+The mock's CSS defines every color as a `:root` custom property named
+**exactly like the implementation's `theme.css` tokens** (`--color-surface-
+canvas/panel/elevated`, `--color-ink-primary/muted`, `--color-border-
+default/strong`, `--color-brand`/`-hover`/`-ink`, `--color-accent`,
+`--color-danger`/`-ink`, `--color-positive`, `--color-focus`) and no rule
+uses a literal color — the mock itself demonstrates the swap-one-file
+re-theme. The applied values are placeholders (the iteration-2 midnight-
+burrow set, which I still stand behind as a placeholder); they are
+deliberately unexplained and unpresented — no swatch board, no rationale on
+canvas, one caption line total. §10.3's color policy stands as the whole
+color commitment.
+
+### 11.3 Change 2 — event / inbox / notepad data-display components
+
+Settings keep the 26 px control slimness; DATA DISPLAY gets more generous
+card components. Pattern grounding: agenda lists put a time block left with
+a vertical separator/accent edge before the detail, start time prominent,
+distinct all-day treatment ([ServiceNow Horizon — events list](https://horizon.servicenow.com/native-mobile/components/mobile-component-events-list),
+[ui-patterns — event calendar](https://ui-patterns.com/patterns/EventCalendar),
+[Setproduct — schedule/events template](https://www.setproduct.com/freebies/schedule-events-template)).
+
+- **Event card** (contained card per event, scales 1→~10): left **accent
+  edge** (3 px) + a fixed-width **time block** — start time prominent
+  (15 px semibold, tabular nums), end time beneath it muted; then title
+  (600 weight) with a **meta line** of small icons (location pin,
+  attendee count, source). **Today's next event** is emphasized: brand
+  accent edge, elevated surface, a "next" chip; other events carry a
+  neutral edge. **All-day events** drop the time block for an "All day"
+  pill and a dashed edge. Later-bucket events put the weekday atop the
+  time block ("Mon" / "09:00") with detail decreasing with distance.
+- **Inbox card** (honest to the DEC-45 five-field gmail projection:
+  `message_id, subject, sender, received_at, priority_band` — **no
+  snippet exists in the store**): sender **initial block** (28 px rounded
+  square, brand-tinted, first letter), **subject** as the primary line,
+  sender name + received-at as the meta line, **priority chip** right
+  (needs-reply = filled, FYI = outline; labels map from `priority_band`
+  pending the recorded follow-up amendment). Row click = "Open in Gmail"
+  only. *Recorded follow-up:* a stored snippet field would enable a
+  preview line; the design works without it and iteration-3's "row click
+  opens snippet" caption is retracted as unhonest to the store.
+- **Notepad entry**: timeline treatment — marker dot + entry text, with
+  a muted "noted HH:MM" timestamp per entry; readonly, transparency
+  surface unchanged.
+- Board 5 keeps the same states but its loading state now shows
+  card-shaped skeleton frames matching the new component heights (still
+  plain, no shimmer), and degraded/empty bodies render inside the card
+  shells so the components' off states are designed too.
+
+### 11.4 Mock (artifact of record for iteration 4)
+
+`planning/design/settings-screen-mock.html` — rewritten: same five boards
+as iteration 3, all colors via the token variables above, Boards 1 and 5
+carrying the new event/inbox/notepad components. Everything else is a
+faithful carry-forward of the approved iteration-3 layout.
