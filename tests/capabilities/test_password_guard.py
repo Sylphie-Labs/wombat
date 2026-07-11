@@ -2,6 +2,14 @@
 (f)-(j)): before ANY fill, the shared ``_checked_fill`` helper reads the LIVE element's ``type``
 attribute; ``type == "password"`` blocks the fill unconditionally.
 
+TK-234 (CRF-1) extends this file: ``_checked_fill`` now lowercases ``type`` before comparing, so
+page-controlled casing (``type=PASSWORD``, ``type=Password``) can never defeat the guard. AC1
+proves both fill call sites (the ``type`` action and ``submit_form``) block on mixed-case password
+fields with real Chromium. AC2 proves the existing lowercase-blocks / non-password-fills / no-
+type-attribute-fills behavior is byte-unchanged. AC3 is a hermetic unit twin (no real browser)
+that drives ``_checked_fill`` directly with a fake ``Locator`` to prove the compare is
+case-insensitive even where the real-browser tests below would skip for lack of Chromium.
+
 ``playwright`` rides the optional ``browser`` extra — this whole module SKIPS LOUDLY when it is
 absent (module-level ``pytest.importorskip``) and again when Chromium itself cannot launch, the
 same gating as ``tests/capabilities/test_playwright_actions.py`` (Q-113(b)).
@@ -105,6 +113,112 @@ async def opened_capability(local_login_form_url: str) -> Any:
     await page.goto(local_login_form_url)
     try:
         yield cap, session, local_login_form_url
+    finally:
+        await session.close()
+
+
+# ---------------------------------------------------------------------------
+# TK-234 (CRF-1) fixtures — a mixed-case-``type`` login form (AC1) and a
+# no-``type``-attribute form (AC2's "absent attribute still fills" case)
+# ---------------------------------------------------------------------------
+
+
+def _login_form_html(password_type: str) -> bytes:
+    """Same shape as ``_LOGIN_FORM_HTML`` but with a caller-chosen ``type`` casing on the
+    password field — proves page-controlled casing can't defeat the guard (CRF-1)."""
+    return (
+        b"<html><body>"
+        b'<form action="/thanks" method="get">'
+        b'<label for="nm">Your name</label>'
+        b'<input id="nm" name="name" type="text" />'
+        b'<label for="pw">Password</label>'
+        b'<input id="pw" name="password" type="' + password_type.encode() + b'" />'
+        b'<button type="submit">Send</button>'
+        b"</form>"
+        b"</body></html>"
+    )
+
+
+_NOTYPE_FORM_HTML = (
+    b"<html><body>"
+    b'<form action="/thanks" method="get">'
+    b'<label for="nm">Your name</label>'
+    b'<input id="nm" name="name" />'
+    b'<button type="submit">Send</button>'
+    b"</form>"
+    b"</body></html>"
+)
+
+
+def _make_form_handler(html: bytes) -> type[http.server.BaseHTTPRequestHandler]:
+    """Bind ``html`` (served for every path except ``/thanks``) into a fresh handler class —
+    mirrors ``_LoginFormHandler`` but parameterized over the form markup (CRF-1 AC1/AC2)."""
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            if self.path.startswith("/thanks"):
+                self.wfile.write(_THANKS_HTML)
+            else:
+                self.wfile.write(html)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass  # silence default stderr request logging
+
+    return _Handler
+
+
+@pytest.fixture(params=["PASSWORD", "Password"], ids=["upper", "titlecase"])
+def mixed_case_login_form_url(request: pytest.FixtureRequest) -> Iterator[str]:
+    """Serve a login form whose password field's ``type`` is ``PASSWORD`` or ``Password`` — the
+    page-controlled casing CRF-1 fixes ``_checked_fill`` to see through."""
+    handler = _make_form_handler(_login_form_html(request.param))
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+async def mixed_case_capability(mixed_case_login_form_url: str) -> Any:
+    session = BrowserSession()
+    cap = PlaywrightCapability(session=session)
+    page = await session.ensure_open()
+    await page.goto(mixed_case_login_form_url)
+    try:
+        yield cap, session, mixed_case_login_form_url
+    finally:
+        await session.close()
+
+
+@pytest.fixture
+def notype_login_form_url() -> Iterator[str]:
+    """Serve a form whose only field has NO ``type`` attribute at all — proves the ``(x or
+    "").lower()`` default still fills on an absent attribute (CRF-1 AC2)."""
+    server = http.server.HTTPServer(("127.0.0.1", 0), _make_form_handler(_NOTYPE_FORM_HTML))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+async def notype_capability(notype_login_form_url: str) -> Any:
+    session = BrowserSession()
+    cap = PlaywrightCapability(session=session)
+    page = await session.ensure_open()
+    await page.goto(notype_login_form_url)
+    try:
+        yield cap, session, notype_login_form_url
     finally:
         await session.close()
 
@@ -246,3 +360,143 @@ def test_ac3iii_no_bypass_argument_exists_anywhere_in_the_schema() -> None:
             },
             BROWSER_INPUT_SCHEMA,
         )
+
+
+# ---------------------------------------------------------------------------
+# CRF-1 (TK-234) AC1 — mixed-case ``type`` (``PASSWORD``/``Password``) still blocks both
+# fill call sites, with the field staying empty and, for submit_form, no submit click
+# ---------------------------------------------------------------------------
+
+
+async def test_ac1_type_action_on_mixed_case_password_field_is_blocked_and_value_never_lands(
+    mixed_case_capability: tuple[PlaywrightCapability, BrowserSession, str],
+) -> None:
+    cap, session, _url = mixed_case_capability
+
+    result = await cap.invoke(
+        {"action": "type", "role": "textbox", "name": "Password", "value": "hunter2"}
+    )
+
+    assert result == {
+        "ok": False,
+        "error": "password_field_blocked",
+        "role": "textbox",
+        "name": "Password",
+    }
+
+    page = await session.ensure_open()
+    live_value = await page.eval_on_selector("#pw", "el => el.value")
+    assert live_value == "", "page-controlled type casing must not defeat the guard"
+
+
+async def test_ac1_submit_form_with_mixed_case_password_field_is_blocked_no_submit_click(
+    mixed_case_capability: tuple[PlaywrightCapability, BrowserSession, str],
+) -> None:
+    cap, session, url = mixed_case_capability
+
+    result = await cap.invoke(
+        {
+            "action": "submit_form",
+            "url": url,
+            "fields": [
+                {"role": "textbox", "name": "Your name", "value": "Wombat"},
+                {"role": "textbox", "name": "Password", "value": "hunter2"},
+            ],
+            "submit": {"role": "button", "name": "Send"},
+        }
+    )
+
+    assert result == {
+        "ok": False,
+        "error": "password_field_blocked",
+        "role": "textbox",
+        "name": "Password",
+    }
+
+    page = await session.ensure_open()
+    assert not page.url.startswith(f"{url}thanks"), "no submit click must mean no navigation"
+    live_value = await page.eval_on_selector("#pw", "el => el.value")
+    assert live_value == "", "page-controlled type casing must not defeat the guard"
+
+
+# ---------------------------------------------------------------------------
+# CRF-1 (TK-234) AC2 — byte-unchanged behavior: lowercase still blocks (proven by the
+# unchanged test_ac3i/test_ac3ii above), ordinary non-password fields still fill, and an
+# element with NO ``type`` attribute still fills
+# ---------------------------------------------------------------------------
+
+
+async def test_ac2_non_password_field_still_fills(
+    opened_capability: tuple[PlaywrightCapability, BrowserSession, str],
+) -> None:
+    cap, session, _url = opened_capability
+
+    result = await cap.invoke(
+        {"action": "type", "role": "textbox", "name": "Your name", "value": "Wombat"}
+    )
+
+    assert result["ok"] is True
+    page = await session.ensure_open()
+    live_value = await page.eval_on_selector("#nm", "el => el.value")
+    assert live_value == "Wombat"
+
+
+async def test_ac2_field_with_no_type_attribute_still_fills(
+    notype_capability: tuple[PlaywrightCapability, BrowserSession, str],
+) -> None:
+    cap, session, _url = notype_capability
+
+    result = await cap.invoke(
+        {"action": "type", "role": "textbox", "name": "Your name", "value": "Wombat"}
+    )
+
+    assert result["ok"] is True
+    page = await session.ensure_open()
+    live_value = await page.eval_on_selector("#nm", "el => el.value")
+    assert live_value == "Wombat", "absent type attribute must still fill (None never blocks)"
+
+
+# ---------------------------------------------------------------------------
+# CRF-1 (TK-234) AC3 — hermetic unit twin: drive ``_checked_fill`` directly with a fake
+# Locator, no browser at all, proving the compare is case-insensitive
+# ---------------------------------------------------------------------------
+
+
+class _FakeLocator:
+    """A minimal async stand-in for a Playwright ``Locator`` — just enough surface for
+    ``_checked_fill`` (``get_attribute`` and ``fill``), records every ``fill`` call."""
+
+    def __init__(self, type_attr: str | None) -> None:
+        self._type_attr = type_attr
+        self.fill_calls: list[str] = []
+
+    async def get_attribute(self, name: str, timeout: int) -> str | None:
+        assert name == "type"
+        return self._type_attr
+
+    async def fill(self, value: str, timeout: int) -> None:
+        self.fill_calls.append(value)
+
+
+@pytest.mark.parametrize("type_attr", ["PASSWORD", "Password", "password"])
+async def test_ac3_checked_fill_blocks_password_case_insensitively(type_attr: str) -> None:
+    locator = _FakeLocator(type_attr)
+
+    result = await playwright_capability._checked_fill(locator, "textbox", "Password", "hunter2")  # type: ignore[arg-type]
+
+    assert result == {
+        "ok": False,
+        "error": "password_field_blocked",
+        "role": "textbox",
+        "name": "Password",
+    }
+    assert locator.fill_calls == [], "a blocked fill must never reach the fake locator's fill"
+
+
+async def test_ac3_checked_fill_fills_when_type_attribute_is_absent() -> None:
+    locator = _FakeLocator(None)
+
+    result = await playwright_capability._checked_fill(locator, "textbox", "Comment", "hello")  # type: ignore[arg-type]
+
+    assert result is None
+    assert locator.fill_calls == ["hello"]

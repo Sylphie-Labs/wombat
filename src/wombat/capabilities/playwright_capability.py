@@ -68,6 +68,11 @@ every level already rejects any extra argument a caller might invent to try. Det
 LOGIN PAGE (as opposed to this deny-always fill guard) is a separate, best-effort concern living
 in ``wombat.stages.login_handoff`` — this guard is the strong guarantee; that detector is only
 the courtesy handoff.
+
+TK-234 (CRF-1): the ``type`` comparison in ``_checked_fill`` is lowercased before comparing
+(``(field_type or "").lower() == "password"``) so page-controlled attribute casing (e.g.
+``type=PASSWORD`` or ``type=Password``) can never defeat the deny-always guard — the empty-string
+default keeps the absent-attribute (``None``) case byte-identical to before.
 """
 
 from __future__ import annotations
@@ -244,15 +249,17 @@ async def _checked_fill(
     """The ONE shared checked-fill helper (TK-136, Q-114 rulings f-j) — every fill in this module
     (the ``type`` action, via ``_type_action``, and ``submit_form``'s field loop) routes through
     this and only this. Reads the LIVE, ALREADY-RESOLVED element's ``type`` attribute BEFORE any
-    fill; ``type == "password"`` returns the structured deny-always block below (logging a
-    warning) and the fill NEVER happens. UNCONDITIONAL — no parameter anywhere disables this.
+    fill; a case-insensitive ``type == "password"`` (TK-234: lowercased before comparing, so
+    page-controlled casing like ``PASSWORD``/``Password`` cannot bypass this) returns the
+    structured deny-always block below (logging a warning) and the fill NEVER happens.
+    UNCONDITIONAL — no parameter anywhere disables this.
 
     Returns ``None`` on an ordinary (non-blocked) fill so callers can distinguish "filled" from
     "blocked"; the caller is responsible for its own ``element_not_found`` handling around the
     locator resolution and this call (mirrors ``_act_role``'s timeout-catching shape).
     """
     field_type = await locator.get_attribute("type", timeout=ELEMENT_TIMEOUT_MS)
-    if field_type == "password":
+    if (field_type or "").lower() == "password":
         logger.warning(
             "password_field_blocked: refused to fill role=%r name=%r — password fields are "
             "deny-always (Q-114 ruling h); no code path may ever bypass this",
