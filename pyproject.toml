@@ -47,7 +47,7 @@ settings-app = ["fastapi>=0.115", "uvicorn>=0.30"]
 browser = ["playwright>=1.49"]
 
 [project.scripts]
-wombat = "wombat:main"
+wombat = "wombat.__main__:main"
 
 # --- Local development: import cog-worx straight from the sibling checkout ---
 # Editable directory source so changes in ../cog_worx/cog-worx are picked up live.

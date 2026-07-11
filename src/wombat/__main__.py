@@ -6,5 +6,11 @@ import asyncio
 
 from wombat.runtime import serve
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Console-script entry point (TK-237) — same boot as ``python -m wombat``."""
     asyncio.run(serve())
+
+
+if __name__ == "__main__":
+    main()
