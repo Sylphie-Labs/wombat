@@ -162,6 +162,72 @@ def test_put_settings_updates_only_sent_fields_and_preserves_the_rest(tmp_path: 
     assert on_disk["unrelated_key"] == "kept-verbatim"
 
 
+def test_put_settings_torn_write_leaves_original_file_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-235 AC1: a crash at the ``os.replace`` atomic-swap instant must leave the ORIGINAL
+    settings bytes on disk untouched — a subsequent GET still returns the previously-saved
+    values, never a truncated/discarded file."""
+    settings_path = tmp_path / "wombat.settings.json"
+    original_bytes = json.dumps({"wombat_assistant_name": "Old Name"}).encode("utf-8")
+    settings_path.write_bytes(original_bytes)
+    app = create_app(settings_path, _FakeVoiceKeyStore(), TOKEN)
+    client = TestClient(app)
+
+    def _boom(_src: object, _dst: object) -> None:
+        raise OSError("simulated crash mid-write")
+
+    monkeypatch.setattr("wombat.settings_app.api.os.replace", _boom)
+
+    with pytest.raises(OSError):
+        client.put(
+            "/settings",
+            json={"wombat_assistant_name": "New Name"},
+            headers={"X-Wombat-Token": TOKEN},
+        )
+
+    assert settings_path.read_bytes() == original_bytes
+    monkeypatch.undo()
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_assistant_name"] == "Old Name"
+
+
+def test_put_settings_writes_via_temp_file_then_os_replace_same_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-235 AC2: a normal PUT writes through a temp file in the SAME directory as the target,
+    then ``os.replace``s it into place — and leaves no temp file behind afterward."""
+    settings_path = tmp_path / "wombat.settings.json"
+    app = create_app(settings_path, _FakeVoiceKeyStore(), TOKEN)
+    client = TestClient(app)
+
+    replace_calls: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def _recording_replace(src: str, dst: str) -> None:
+        replace_calls.append((str(src), str(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("wombat.settings_app.api.os.replace", _recording_replace)
+
+    response = client.put(
+        "/settings",
+        json={"wombat_assistant_name": "New Name"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+
+    assert response.status_code == 200
+    assert len(replace_calls) == 1
+    src, dst = replace_calls[0]
+    assert dst == str(settings_path)
+    assert Path(src).parent == settings_path.parent
+    assert Path(src) != settings_path
+
+    remaining = [p for p in tmp_path.iterdir() if p != settings_path]
+    assert remaining == []
+
+
 def test_put_key_lands_in_the_store(tmp_path: Path) -> None:
     store = _FakeVoiceKeyStore()
     app = create_app(tmp_path / "wombat.settings.json", store, TOKEN)

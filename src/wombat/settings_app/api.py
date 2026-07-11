@@ -23,6 +23,8 @@ STRUCTURAL: this module (and the ``wombat.settings_app`` package as a whole) imp
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -106,6 +108,27 @@ def _read_settings(settings_path: Path) -> dict[str, Any]:
     return loaded
 
 
+def _write_settings(settings_path: Path, settings: dict[str, Any]) -> None:
+    """Persist ``settings`` ATOMICALLY (TK-235): write to a temp file in the SAME directory as
+    ``settings_path``, then ``os.replace`` it into place. A crash mid-write leaves either the OLD
+    settings file (or none, on the very first save) behind — never a truncated, half-written one
+    — because ``os.replace`` is a single atomic filesystem rename (the ``wombat.trail.renderer``
+    ``_save_sidecar`` precedent).
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=settings_path.parent,
+        prefix=settings_path.name + ".",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2)
+        os.replace(tmp_name, settings_path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
 def _settings_view(existing: dict[str, Any]) -> dict[str, Any]:
     """The admitted-field-only view of ``existing`` — every ``APP_EDITABLE_FIELDS`` key, ``null``
     when absent from the file."""
@@ -145,7 +168,7 @@ def create_app(settings_path: Path, key_store: VoiceKeyStore, token: str) -> Fas
     def put_settings(body: SettingsUpdate) -> dict[str, Any]:
         existing = _read_settings(settings_path)
         existing.update(body.model_dump(exclude_unset=True))
-        settings_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        _write_settings(settings_path, existing)
         return {"settings": _settings_view(existing)}
 
     @app.put("/keys/{provider}", dependencies=[Depends(_require_token)])
