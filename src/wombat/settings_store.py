@@ -37,7 +37,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 from pydantic import SecretStr
 
-from .config import APP_EDITABLE_FIELDS, WOMBAT_SETTINGS_FILE, WombatConfig
+from .config import APP_EDITABLE_FIELDS, WombatConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,12 @@ _MIGRATION_PACKAGE = "wombat.migrations"
 _MIGRATION_FILENAME = "007_wombat_settings.sql"
 
 TABLE = "wombat_settings"
+
+# The gitignored, app-editable, CWD-relative legacy settings file (TK-196). Canonical home moved
+# here from ``config.py`` by TK-241/R1 (DEC-43): ``config.py`` no longer reads this file at all —
+# WombatConfig's app-editable tier now sources from ``wombat_settings`` directly — so the file's
+# ONLY remaining reader is this module's one-time ``import_legacy_settings_file``.
+WOMBAT_SETTINGS_FILE = "wombat.settings.json"
 
 # The TK-214 persona-pin key (persona/live.py's _PERSONA_PINS_KEY) — carried through the legacy
 # import alongside APP_EDITABLE_FIELDS, though it is not itself a WombatConfig field.
@@ -76,7 +82,7 @@ def ensure_schema(conn: psycopg.Connection[Any]) -> None:
 
 def _secret_field_names() -> set[str]:
     """The ``WombatConfig`` field names typed ``SecretStr`` (or ``SecretStr | None``) — mirrors
-    ``config._AppEditableJsonSettingsSource.__call__``'s own secret-field detection exactly."""
+    ``config._SettingsTableSource.__call__``'s own secret-field detection exactly."""
     return {
         name
         for name, field in WombatConfig.model_fields.items()
@@ -212,7 +218,18 @@ def import_legacy_settings_file(dsn: str) -> None:
                     )
             conn.commit()
 
-        path.rename(path.with_name(path.name + _MIGRATED_SUFFIX))
+        try:
+            path.rename(path.with_name(path.name + _MIGRATED_SUFFIX))
+        except FileNotFoundError:
+            # TK-241/R2: serve() and settings_app can both reach this function on a simultaneous
+            # boot; the empty-table guard above lets both past it when the table is still empty
+            # at the time each checks, but only one process wins the rename. The other process's
+            # rename target is already gone (not lost — the winner already migrated it) — log and
+            # continue, never crash boot over losing this race (CON-3).
+            logger.info(
+                "%s was already migrated by another process during this import; continuing",
+                WOMBAT_SETTINGS_FILE,
+            )
     finally:
         conn.close()
 

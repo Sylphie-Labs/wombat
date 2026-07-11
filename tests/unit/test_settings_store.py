@@ -220,6 +220,41 @@ def test_ac2_second_run_recreated_file_non_empty_table_imports_nothing(
     )
 
 
+@_requires_pg
+def test_r2_rename_race_file_not_found_is_logged_and_swallowed_not_raised(
+    fresh_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """TK-241/R2: a serve()+settings_app simultaneous-boot race can let both processes pass the
+    empty-table guard before either writes; the LOSER's ``path.rename`` then targets a file the
+    WINNER already renamed away. Simulating that race directly (patch ``Path.rename`` to raise
+    ``FileNotFoundError`` once) must log-and-continue, never propagate."""
+    assert _DSN is not None
+    with psycopg.connect(_DSN) as conn:
+        ensure_schema(conn)
+        conn.commit()
+
+    monkeypatch.chdir(tmp_path)
+    settings_path = tmp_path / "wombat.settings.json"
+    settings_path.write_text(json.dumps({"wombat_assistant_name": "John"}), encoding="utf-8")
+
+    def _raise_file_not_found(self: Path, target: Path) -> None:
+        raise FileNotFoundError("simulated: another process already renamed this file")
+
+    monkeypatch.setattr(Path, "rename", _raise_file_not_found, raising=True)
+
+    with caplog.at_level(logging.INFO):
+        import_legacy_settings_file(_DSN)  # must not raise
+
+    store = SettingsStore(_DSN)
+    try:
+        rows = store.get_all()
+    finally:
+        store.close()
+    assert rows == {"wombat_assistant_name": "John"}  # the row-write half still landed
+    assert any("already migrated" in r.message for r in caplog.records)
+
+
 # --------------------------------------------------------------------------------------- AC3
 
 

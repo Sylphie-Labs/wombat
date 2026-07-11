@@ -6,26 +6,27 @@ silently broken. Reads the model egress credentials only; everything determinist
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
+import os
 from typing import Any, Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import tzlocal
+from dotenv import dotenv_values
 from pydantic import SecretStr, TypeAdapter, ValidationError
+from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
-    JsonConfigSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
 
 logger = logging.getLogger(__name__)
 
-# Per-field pydantic TypeAdapters used to validate wombat.settings.json values before they
-# reach WombatConfig (TK-226/CR5-2) — cached so repeated __call__ invocations (e.g. multiple
-# load_config() calls in a process) don't rebuild one per field per call.
+# Per-field pydantic TypeAdapters used to validate wombat_settings table values before they
+# reach WombatConfig (TK-226/CR5-2, ported to the table by TK-241) — cached so repeated __call__
+# invocations (e.g. multiple load_config() calls in a process) don't rebuild one per field per
+# call.
 _FIELD_TYPE_ADAPTERS: dict[str, TypeAdapter[Any]] = {}
 
 
@@ -44,13 +45,9 @@ class ConfigurationError(RuntimeError):
 # Declared in the order they are reported as missing (AC2 names the FIRST missing one).
 REQUIRED_ENV: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
 
-# The gitignored, app-editable, CWD-relative settings file (TK-196, EP-32, DEC-32). NOTHING
-# writes this file yet — TK-197 owns the write path; this ticket only wires it in as a read
-# source under the pinned precedence: env > .env > wombat.settings.json > defaults.
-WOMBAT_SETTINGS_FILE = "wombat.settings.json"
-
-# The documented admitted-field schema for wombat.settings.json (TK-196, Q-106(b)): keys named
-# here are the ONLY ones the app-editable file may populate. TK-197 validates PUTs against it.
+# The documented admitted-field schema for the app-editable settings tier (TK-196, Q-106(b),
+# ported to the DEC-43 wombat_settings table by TK-241): keys named here are the ONLY ones the
+# app-editable tier may populate. TK-197/settings_app validates PUTs against it.
 APP_EDITABLE_FIELDS: tuple[str, ...] = (
     "wombat_stt_provider",
     "wombat_tts_provider",
@@ -72,59 +69,54 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
 )
 
 
-class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
-    """Reads ``wombat.settings.json`` (TK-196) for ``WombatConfig``.
+# The boot-read half of DEC-43 (TK-241): load_config() populates this holder from the DEC-43
+# wombat_settings table (TK-240's SettingsStore) BEFORE constructing WombatConfig(), and clears
+# it in a finally, ALWAYS — so a bare WombatConfig() construction (any call site that isn't
+# load_config()) sees an empty holder, hence _SettingsTableSource below never performs any I/O
+# of its own: zero DB I/O at construction, by construction (AC4).
+_TABLE_SETTINGS_HOLDER: dict[str, Any] = {}
 
-    Structural guards, all loud-not-silent:
-      * no secrets load from this file — a loaded key naming a ``SecretStr``-typed
-        ``WombatConfig`` field (the ``*_api_key`` fields, ``deepseek_api_key``,
-        ``google_oauth_client_secret``) is dropped with exactly one ``logger.warning`` naming
-        the field; the value never reaches the model.
-      * a malformed or unreadable file can never fail boot (CON-3) — a ``json.JSONDecodeError``,
-        ``UnicodeDecodeError`` (e.g. undecodable bytes, or bytes invalid for the pinned UTF-8
-        encoding), or ``OSError`` while reading is caught, one ``logger.warning`` is logged, and
-        the file is treated as absent. A genuinely-missing file is already a silent no-op
-        (inherited from the base class).
-      * a syntactically-valid file whose top level isn't a JSON object (an array, string,
-        number, bool, or ``null``) is the same treated-as-absent posture: one ``logger.warning``
-        is logged and the file is treated as empty, rather than letting the base class's
-        ``dict``-only merge raise ``TypeError``/``ValueError`` and brick boot.
+
+class _SettingsTableSource(PydanticBaseSettingsSource):
+    """Reads the DEC-43 ``wombat_settings`` table (TK-241) for ``WombatConfig`` — occupies the
+    EXACT precedence slot the removed legacy JSON-file settings source (TK-196/TK-226) used
+    to occupy: env > .env > table > defaults.
+
+    Never touches the database itself — ``__call__`` only reads ``_TABLE_SETTINGS_HOLDER``, which
+    ``load_config()`` populates (one ``SettingsStore.get_all()``) before constructing
+    ``WombatConfig()`` and clears afterwards regardless of outcome. A bare ``WombatConfig(...)``
+    call site never populates the holder, so this source always sees it empty (AC4).
+
+    Structural guards, ported verbatim from the removed JSON file source (CR5-2), all
+    loud-not-silent:
+      * no secrets load from the table — a row naming a ``SecretStr``-typed ``WombatConfig``
+        field (the ``*_api_key`` fields, ``deepseek_api_key``, ``google_oauth_client_secret``) is
+        dropped with exactly one ``logger.warning`` naming the field; the value never reaches the
+        model. (``SettingsStore.put`` already refuses to write these — this is defense in depth
+        against a row landing by some other path, e.g. a manual INSERT.)
       * an admitted field's value that fails validation against its ``WombatConfig`` annotation
         (e.g. an out-of-vocab ``Literal`` like ``wombat_persona_humor``) is DROPPED with one
         ``logger.warning`` naming the field and the offending value, falling back to that
-        field's default instead of bricking the entire process at ``load_config()`` (CR5-2).
+        field's default instead of bricking the entire process at ``load_config()``.
 
-    The file is always read as UTF-8 (``json_file_encoding="utf-8"`` at the construction site
-    in ``settings_customise_sources``), matching every writer of this file (``persona/live.py``
-    ``_persist``, TK-197's PUT path) — CR5-1.
-
-    Any other loaded key that isn't in ``APP_EDITABLE_FIELDS`` (and isn't a secret field) is
-    dropped silently — only the admitted-field schema may come from this file.
+    Any other row key that isn't in ``APP_EDITABLE_FIELDS`` (and isn't a secret field, e.g. the
+    ``wombat_persona_pins`` bookkeeping row) is dropped silently — only the admitted-field schema
+    may reach ``WombatConfig``.
     """
 
-    def _read_file(self, file_path: Path) -> dict[str, Any]:
-        try:
-            loaded = super()._read_file(file_path)
-        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
-            logger.warning("%s is unreadable (%s); ignoring it", WOMBAT_SETTINGS_FILE, exc)
-            return {}
-        if not isinstance(loaded, dict):
-            logger.warning(
-                "%s does not contain a JSON object at the top level; ignoring it",
-                WOMBAT_SETTINGS_FILE,
-            )
-            return {}
-        return loaded
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        # Nothing to do here — __call__ is fully overridden below (the pydantic-settings
+        # InitSettingsSource precedent for a source that doesn't do per-field lookups).
+        return None, "", False
 
     def __call__(self) -> dict[str, Any]:
-        loaded = super().__call__()
         secret_fields = {
             name
             for name, field in self.settings_cls.model_fields.items()
             if field.annotation is SecretStr or SecretStr in get_args(field.annotation)
         }
         filtered: dict[str, Any] = {}
-        for key, value in loaded.items():
+        for key, value in _TABLE_SETTINGS_HOLDER.items():
             if key in APP_EDITABLE_FIELDS:
                 annotation = self.settings_cls.model_fields[key].annotation
                 adapter = _type_adapter_for(key, annotation)
@@ -132,9 +124,8 @@ class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
                     adapter.validate_python(value)
                 except ValidationError:
                     logger.warning(
-                        "%s contains an invalid value for %s: %r; ignoring it "
+                        "wombat_settings contains an invalid value for %s: %r; ignoring it "
                         "(falling back to the field default)",
-                        WOMBAT_SETTINGS_FILE,
                         key,
                         value,
                     )
@@ -142,9 +133,8 @@ class _AppEditableJsonSettingsSource(JsonConfigSettingsSource):
                 filtered[key] = value
             elif key in secret_fields:
                 logger.warning(
-                    "%s contains %r, a secret field; ignoring it "
-                    "(secrets never load from the app-editable settings file)",
-                    WOMBAT_SETTINGS_FILE,
+                    "wombat_settings contains %r, a secret field; ignoring it "
+                    "(secrets never load from the app-editable settings table)",
                     key,
                 )
             # else: not an admitted field — dropped silently.
@@ -262,17 +252,42 @@ class WombatConfig(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Pin precedence (TK-196): init kwargs > env > .env > wombat.settings.json > defaults.
+        """Pin precedence (TK-196, table-sourced by TK-241/DEC-43): init kwargs > env > .env >
+        wombat_settings table > defaults.
 
         Sources are consulted in the returned order — earlier wins. Direct-construction kwargs
         (``init_settings``, used by many existing tests calling ``WombatConfig(...)`` directly)
         stay highest, so this addition is behavior-preserving for every caller that doesn't touch
-        ``wombat.settings.json``.
+        ``wombat_settings``.
         """
-        json_settings = _AppEditableJsonSettingsSource(
-            settings_cls, json_file=WOMBAT_SETTINGS_FILE, json_file_encoding="utf-8"
-        )
-        return init_settings, env_settings, dotenv_settings, json_settings, file_secret_settings
+        table_settings = _SettingsTableSource(settings_cls)
+        return init_settings, env_settings, dotenv_settings, table_settings, file_secret_settings
+
+
+_PG_DSN_ENV_VAR = "WOMBAT_PG_DSN"
+
+# A short, fail-fast connect timeout (seconds) for the ONE settings-table read load_config() ever
+# attempts — an unreachable host must degrade in bounded time, never hang boot (AC2).
+_TABLE_SOURCE_CONNECT_TIMEOUT_SECONDS = 3
+
+
+def _resolve_pg_dsn() -> str | None:
+    """``WOMBAT_PG_DSN`` from the process environment, else the same var in a cwd-relative
+    ``.env`` — mirrors ``settings_app.__main__._resolve_pg_dsn`` (TK-242) exactly. Deliberately
+    NEVER resolves the DSN from ``wombat_settings`` itself — the DSN is operator-tier (TK-241)."""
+    from_env = os.environ.get(_PG_DSN_ENV_VAR)
+    if from_env:
+        return from_env
+    return dotenv_values(".env").get(_PG_DSN_ENV_VAR) or None
+
+
+def _dsn_with_short_connect_timeout(dsn: str) -> str:
+    """Append a short libpq ``connect_timeout`` to ``dsn`` so an unreachable settings-table host
+    degrades fast (AC2) instead of hanging boot."""
+    if dsn.startswith(("postgres://", "postgresql://")):
+        separator = "&" if "?" in dsn else "?"
+        return f"{dsn}{separator}connect_timeout={_TABLE_SOURCE_CONNECT_TIMEOUT_SECONDS}"
+    return f"{dsn} connect_timeout={_TABLE_SOURCE_CONNECT_TIMEOUT_SECONDS}"
 
 
 def load_config() -> WombatConfig:
@@ -282,25 +297,58 @@ def load_config() -> WombatConfig:
     with explicit env vars taking precedence over ``.env`` values (TK-186: the pre-pydantic
     ``os.environ`` check used to short-circuit before ``.env`` was ever consulted).
 
+    TK-241 (DEC-43): if ``WOMBAT_PG_DSN`` resolves (env, else cwd-relative ``.env`` — never the
+    settings table itself), ONE ``SettingsStore.get_all()`` populates ``_TABLE_SETTINGS_HOLDER``
+    before ``WombatConfig()`` is constructed; the holder is cleared in a ``finally`` regardless of
+    outcome, so a bare ``WombatConfig(...)`` call site never performs any settings-table I/O
+    (AC4). A missing DSN is a silent no-op (byte-unchanged boot). An unreachable host, a query
+    failure, or a missing table is caught, logged with exactly one ``logger.warning``, and
+    treated as absent — this function NEVER raises for settings-store reasons (CON-3).
+
     A non-missing validation failure (e.g. a ``WOMBAT_STT_PROVIDER`` value outside its closed
     vocabulary) also fails loud, naming the offending variable (TK-187).
     """
+    dsn = _resolve_pg_dsn()
+    if dsn:
+        # Deferred import: settings_store.py imports APP_EDITABLE_FIELDS/WombatConfig from this
+        # module at its own top level, so importing SettingsStore at config.py's top level would
+        # be circular. Deferring to here (only reached when a DSN is actually configured) breaks
+        # the cycle without weakening either module's public surface.
+        from wombat.settings_store import SettingsStore
+
+        store = SettingsStore(_dsn_with_short_connect_timeout(dsn))
+        try:
+            _TABLE_SETTINGS_HOLDER.update(store.get_all())
+        except Exception as exc:  # unreachable host, query/table failure, ... — CON-3
+            logger.warning(
+                "could not read wombat_settings from the configured WOMBAT_PG_DSN; treating "
+                "the app-editable settings table as absent (%s)",
+                exc,
+            )
+        finally:
+            store.close()
     try:
-        return WombatConfig()  # populated from the environment (and/or .env) by pydantic-settings
-    except ValidationError as exc:
-        missing = {str(error["loc"][0]) for error in exc.errors() if error["loc"]}
-        for var in REQUIRED_ENV:
-            if var.lower() in missing:
-                raise ConfigurationError(
-                    f"missing required environment variable {var}; wombat will not start"
-                ) from exc
-        for error in exc.errors():
-            if error["loc"]:
-                field = str(error["loc"][0]).upper()
-                raise ConfigurationError(
-                    f"invalid environment variable {field}; wombat will not start"
-                ) from exc
-        raise
+        try:
+            return WombatConfig()  # populated from env/.env/table by pydantic-settings
+        except ValidationError as exc:
+            missing = {str(error["loc"][0]) for error in exc.errors() if error["loc"]}
+            for var in REQUIRED_ENV:
+                if var.lower() in missing:
+                    raise ConfigurationError(
+                        f"missing required environment variable {var}; wombat will not start"
+                    ) from exc
+            for error in exc.errors():
+                if error["loc"]:
+                    field = str(error["loc"][0]).upper()
+                    raise ConfigurationError(
+                        f"invalid environment variable {field}; wombat will not start"
+                    ) from exc
+            raise
+    finally:
+        # ALWAYS clear, on every exit path (success, ConfigurationError, or a re-raised
+        # ValidationError) — the next bare WombatConfig() construction, from any call site, must
+        # never see a stale holder (AC4).
+        _TABLE_SETTINGS_HOLDER.clear()
 
 
 def resolve_wombat_zone(config: WombatConfig) -> ZoneInfo:

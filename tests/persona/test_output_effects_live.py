@@ -93,13 +93,20 @@ _LIVE_ENV = "WOMBAT_TEST_PERSONA_EVAL_LIVE"
 
 
 def _missing_live_requirements() -> tuple[str, ...]:
-    """What's missing to arm the live eval, resolved once at collection time. Creds are resolved
-    via ``load_config()`` (env or repo-root ``.env``, TK-1's precedence) rather than a raw
+    """What's missing to arm the live eval, resolved LAZILY (v2.64/TK-241 R3) at each test's
+    SETUP time via the ``skipif`` STRING condition below — never at import/collection time. Since
+    TK-241 wired ``load_config()`` to a real ``WOMBAT_PG_DSN`` settings-table read, a collection-
+    time call here (the original defect: a module-level ``_MISSING_LIVE_REQUIREMENTS =
+    _missing_live_requirements()`` assignment) could dial the operator's REAL, live Postgres on
+    every bare ``pytest`` collection. Short-circuits before ever calling ``load_config()`` when
+    the live-eval env var itself is unset (the default, unarmed case) — the overwhelmingly common
+    path never performs config/DB I/O at all, armed or not. Creds are resolved via
+    ``load_config()`` (env or repo-root ``.env``, TK-1's precedence) rather than a raw
     ``os.environ`` probe — mirroring ``ComposeStage``'s AC3 construction-time check, this also
     catches a blank-string value pydantic-settings would otherwise accept."""
-    missing: list[str] = []
     if not os.environ.get(_LIVE_ENV):
-        missing.append(_LIVE_ENV)
+        return (_LIVE_ENV,)
+    missing: list[str] = []
     try:
         config = load_config()
     except ConfigurationError:
@@ -112,14 +119,20 @@ def _missing_live_requirements() -> tuple[str, ...]:
     return tuple(missing)
 
 
-_MISSING_LIVE_REQUIREMENTS = _missing_live_requirements()
+def _live_persona_eval_unarmed() -> bool:
+    """The ``skipif`` condition, evaluated by pytest as a STRING at each item's SETUP time (pytest
+    ``eval``s a string ``skipif`` condition against this module's globals then, never at
+    import) — this is what makes the gate lazy: no fixture-ordering to reason about, and it runs
+    strictly BEFORE any fixture (incl. the session-scoped ``live_model``) is ever instantiated."""
+    return bool(_missing_live_requirements())
+
 
 _requires_live_persona_eval = pytest.mark.skipif(
-    bool(_MISSING_LIVE_REQUIREMENTS),
+    "_live_persona_eval_unarmed()",
     reason=(
-        f"missing: {', '.join(_MISSING_LIVE_REQUIREMENTS)} — skipping the live persona "
-        f"output-effect eval (TK-210). Export {_LIVE_ENV}=1 plus real DEEPSEEK_API_KEY/"
-        "DEEPSEEK_BASE_URL creds (env or repo-root .env) to arm this harness."
+        f"missing {_LIVE_ENV} and/or DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL — skipping the live "
+        f"persona output-effect eval (TK-210). Export {_LIVE_ENV}=1 plus real creds (env or "
+        "repo-root .env) to arm this harness."
     ),
 )
 

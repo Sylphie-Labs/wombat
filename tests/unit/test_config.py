@@ -9,14 +9,18 @@ unchanged.
 
 from __future__ import annotations
 
-import json
+import inspect
 import logging
+import os
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import psycopg
 import pytest
 from pydantic import SecretStr
 
+from wombat import config as config_module
 from wombat.config import (
     APP_EDITABLE_FIELDS,
     REQUIRED_ENV,
@@ -26,6 +30,30 @@ from wombat.config import (
     resolve_wombat_zone,
 )
 from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Humor, matrix_from_config
+from wombat.settings_store import SettingsStore, ensure_schema
+
+_PG_DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
+
+_requires_pg = pytest.mark.skipif(
+    not _PG_DSN,
+    reason=(
+        "WOMBAT_TEST_PG_DSN is not set — skipping settings-table-backed config tests. Start a "
+        "throwaway pg with:\n"
+        "  docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=wombat postgres:16\n"
+        "then export WOMBAT_TEST_PG_DSN=postgresql://postgres:wombat@localhost:5433/postgres"
+    ),
+)
+
+
+@pytest.fixture
+def fresh_settings_table() -> None:
+    """Drop + recreate ``wombat_settings`` on the throwaway pg, empty, for one test."""
+    assert _PG_DSN is not None
+    with psycopg.connect(_PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS wombat_settings CASCADE")
+        conn.commit()
+        ensure_schema(conn)
 
 
 def _write_env_file(tmp_path: Path, *, api_key: str | None, base_url: str | None) -> None:
@@ -180,30 +208,40 @@ def test_load_config_rejects_unknown_stt_provider_naming_the_var(
     assert "WOMBAT_STT_PROVIDER" in str(exc_info.value)
 
 
-# --- TK-196: wombat.settings.json — app-editable, non-secret, pinned precedence -------------
+# --- TK-241 (DEC-43): wombat_settings TABLE — app-editable, non-secret, pinned precedence ---
 
 
-def _write_settings_file(tmp_path: Path, data: dict[str, object]) -> None:
-    (tmp_path / "wombat.settings.json").write_text(json.dumps(data), encoding="utf-8")
+def _set_dsn(monkeypatch: pytest.MonkeyPatch, dsn: str | None) -> None:
+    if dsn is None:
+        monkeypatch.delenv("WOMBAT_PG_DSN", raising=False)
+    else:
+        monkeypatch.setenv("WOMBAT_PG_DSN", dsn)
 
 
-# --- AC1: settings.json < .env < explicit env var, all CWD-relative and chdir-isolated ------
+# --- AC1: table < .env < explicit env var, all CWD-relative and chdir-isolated (DSN-gated) ---
 
 
-def test_load_config_settings_json_is_lowest_of_the_three_live_sources(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@_requires_pg
+def test_load_config_table_is_lowest_of_the_three_live_sources(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    assert _PG_DSN is not None
     monkeypatch.chdir(tmp_path)
     _set_required_env(monkeypatch)
-    _write_settings_file(tmp_path, {"wombat_assistant_name": "Marvin"})
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_assistant_name": "Marvin"})
+    finally:
+        store.close()
 
     config = load_config()
     assert config.wombat_assistant_name == "Marvin"
 
-    # A .env value in the same tmp cwd wins over the settings file.
+    # A .env value in the same tmp cwd wins over the table.
     (tmp_path / ".env").write_text(
-        "DEEPSEEK_API_KEY=sk-test\nDEEPSEEK_BASE_URL=https://example.com\n"
-        "WOMBAT_ASSISTANT_NAME=Env\n",
+        f"DEEPSEEK_API_KEY=sk-test\nDEEPSEEK_BASE_URL=https://example.com\n"
+        f"WOMBAT_PG_DSN={_PG_DSN}\nWOMBAT_ASSISTANT_NAME=Env\n",
         encoding="utf-8",
     )
     config = load_config()
@@ -215,77 +253,125 @@ def test_load_config_settings_json_is_lowest_of_the_three_live_sources(
     assert config.wombat_assistant_name == "FromProcessEnv"
 
 
-# --- AC2: a secret field named in the file is dropped, loudly, and never loads --------------
+# --- AC2(a): no WOMBAT_PG_DSN anywhere -> no pg connection attempted, defaults/env only ------
 
 
-def test_load_config_settings_json_drops_secret_field_with_one_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _set_required_env(monkeypatch)
-    _write_settings_file(tmp_path, {"wombat_fish_api_key": "sekrit"})
-
-    with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()
-
-    assert config.wombat_fish_api_key is None
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "wombat_fish_api_key" in warnings[0].message
-
-
-# --- AC3: absent file is byte-unchanged behavior; malformed file is one loud warning + absent
-
-
-def test_load_config_no_settings_file_is_a_silent_no_op(
+def test_load_config_no_dsn_never_connects_and_uses_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)  # no .env in tmp_path -> nothing but process env applies
     _set_required_env(monkeypatch)
-    # No wombat.settings.json in tmp_path at all.
+    _set_dsn(monkeypatch, None)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "wombat.settings_store.psycopg.connect", lambda *a, **kw: calls.append((a, kw))
+    )
 
     config = load_config()
 
+    assert calls == []  # structurally: zero connection attempts
     assert config.wombat_assistant_name == "Steward"
 
 
-def test_load_config_malformed_settings_file_warns_once_and_is_treated_as_absent(
+# --- AC2(b): unreachable host -> exactly one WARNING, boots on defaults, bounded time --------
+
+
+def test_load_config_unreachable_dsn_warns_once_and_boots_on_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _set_required_env(monkeypatch)
-    (tmp_path / "wombat.settings.json").write_text("{not valid json", encoding="utf-8")
+    # Port 1 on localhost refuses immediately (no listener) — bounded without waiting out the
+    # connect_timeout, and never touches any real service.
+    _set_dsn(monkeypatch, "postgresql://nope:nope@127.0.0.1:1/nope")
 
+    started = time.monotonic()
     with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()
+        config = load_config()  # must not raise
+    elapsed = time.monotonic() - started
 
+    assert elapsed < 5.0  # bounded — never hangs boot
     assert config.wombat_assistant_name == "Steward"
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
-    assert "wombat.settings.json" in warnings[0].message
 
 
-@pytest.mark.parametrize("raw", ["[1, 2, 3]", "null"])
-def test_load_config_non_object_settings_file_warns_once_and_is_treated_as_absent(
-    raw: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+# --- AC3: a secret-tier row and an invalid admitted-value row are each dropped, one WARNING each,
+# --- naming the field; the valid sibling still loads; load_config never raises (DSN-gated) ---
+
+
+@_requires_pg
+def test_load_config_table_drops_secret_row_and_invalid_admitted_value(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A secret-field row can never land via ``SettingsStore.put`` (it refuses loudly) — this
+    seeds one directly via SQL to prove the ``_SettingsTableSource`` guard is defense in depth
+    against a row landing by some other path (e.g. a stray manual INSERT)."""
+    assert _PG_DSN is not None
     monkeypatch.chdir(tmp_path)
     _set_required_env(monkeypatch)
-    (tmp_path / "wombat.settings.json").write_text(raw, encoding="utf-8")
+    _set_dsn(monkeypatch, _PG_DSN)
+    with psycopg.connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO wombat_settings (key, value) VALUES (%s, %s)",
+            ("deepseek_api_key", '"sk-must-never-land"'),
+        )
+        conn.commit()
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_persona_humor": "playful", "wombat_assistant_name": "Kip"})
+    finally:
+        store.close()
 
     with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()
+        config = load_config()  # must not raise
 
-    assert config.wombat_assistant_name == "Steward"
+    assert config.deepseek_api_key.get_secret_value() == "sk-test"  # untouched by the row
+    assert config.wombat_persona_humor == "none"  # falls back to the field default
+    assert config.wombat_assistant_name == "Kip"  # the valid sibling value still loads
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "wombat.settings.json" in warnings[0].message
+    assert len(warnings) == 2
+    assert any("deepseek_api_key" in w.message for w in warnings)
+    assert any(
+        "wombat_persona_humor" in w.message and "playful" in w.message for w in warnings
+    )
+
+
+# --- AC3 (removal): no wombat.settings.json read path remains in config.py -------------------
+
+
+def test_config_module_no_longer_reads_the_json_settings_file() -> None:
+    source = inspect.getsource(config_module)
+    assert "wombat.settings.json" not in source
+    assert "JsonConfigSettingsSource" not in source
+    assert "WOMBAT_SETTINGS_FILE" not in source
 
 
 def test_gitignore_excludes_wombat_settings_json() -> None:
+    """The legacy file is gone from config.py's read path (TK-241), but it's still the one-time
+    migration source ``settings_store.import_legacy_settings_file`` reads — still gitignored."""
     gitignore = Path(__file__).resolve().parents[2] / ".gitignore"
     lines = {line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()}
     assert "wombat.settings.json" in lines
+
+
+# --- AC4: bare WombatConfig() construction performs ZERO database I/O, even with a DSN set ----
+
+
+def test_bare_wombat_config_construction_performs_zero_db_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WOMBAT_PG_DSN", "postgresql://nope:nope@127.0.0.1:1/nope")
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "wombat.settings_store.psycopg.connect", lambda *a, **kw: calls.append((a, kw))
+    )
+
+    config = WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://example.com")
+
+    assert calls == []  # structurally: zero connection attempts at bare construction
+    assert config.wombat_assistant_name == "Steward"
 
 
 # --- TK-208: persona matrix config surface ---------------------------------------------------
@@ -339,14 +425,21 @@ def test_load_config_rejects_unknown_persona_warmth_naming_the_var(
     assert "WOMBAT_PERSONA_WARMTH" in str(exc_info.value)
 
 
-def test_settings_json_persona_field_is_app_editable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@_requires_pg
+def test_settings_table_persona_field_is_app_editable(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC4: a settings.json carrying a persona field loads, riding the TK-196 app-editable tier."""
-
+    """AC4: a wombat_settings row carrying a persona field loads, riding the TK-196 app-editable
+    tier (table-sourced by TK-241)."""
+    assert _PG_DSN is not None
     monkeypatch.chdir(tmp_path)
     _set_required_env(monkeypatch)
-    _write_settings_file(tmp_path, {"wombat_persona_humor": "dry"})
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_persona_humor": "dry"})
+    finally:
+        store.close()
 
     config = load_config()
 
@@ -364,128 +457,25 @@ def test_settings_json_persona_field_is_app_editable(
 # --- TK-224: wombat_voice_enabled joins the app-editable tier -------------------------------
 
 
-def test_load_config_settings_json_accepts_voice_enabled_bool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@_requires_pg
+def test_load_config_table_accepts_voice_enabled_bool(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC (Q-111(b)): a bool value for the newly-admitted field loads."""
-
+    """AC (Q-111(b)): a bool value for the newly-admitted field loads (table-sourced)."""
+    assert _PG_DSN is not None
     monkeypatch.chdir(tmp_path)
     _set_required_env(monkeypatch)
-    _write_settings_file(tmp_path, {"wombat_voice_enabled": True})
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_voice_enabled": True})
+    finally:
+        store.close()
 
     config = load_config()
 
     assert config.wombat_voice_enabled is True
     assert "wombat_voice_enabled" in APP_EDITABLE_FIELDS
-
-
-def test_load_config_settings_json_drops_non_bool_voice_enabled_with_one_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """AC (Q-111(b)): a non-bool value is dropped loudly by the existing per-value guard."""
-
-    monkeypatch.chdir(tmp_path)
-    _set_required_env(monkeypatch)
-    _write_settings_file(
-        tmp_path, {"wombat_voice_enabled": ["nope"], "wombat_assistant_name": "Kip"}
-    )
-
-    with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()  # must not raise
-
-    assert config.wombat_voice_enabled is False  # falls back to the field default
-    assert config.wombat_assistant_name == "Kip"  # the valid sibling value still loads
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "wombat_voice_enabled" in warnings[0].message
-
-
-# --- TK-226 (CR5-1/CR5-2): UTF-8 pin, decode-guard widening, per-value validate-or-drop ------
-
-
-# --- AC1: a non-ASCII value undefined in cp1252 round-trips exactly, no mojibake, no crash --
-
-
-def test_load_config_settings_json_round_trips_utf8_value_undefined_in_cp1252(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _set_required_env(monkeypatch)
-    # 'Ё' encodes to UTF-8 byte 0x81, which is UNDEFINED in cp1252 — reading this file with the
-    # locale default (the CR5-1 bug) raises UnicodeDecodeError; reading it as UTF-8 must not.
-    (tmp_path / "wombat.settings.json").write_text(
-        json.dumps({"wombat_assistant_name": "Ёncins"}, ensure_ascii=False), encoding="utf-8"
-    )
-
-    config = load_config()
-
-    assert config.wombat_assistant_name == "Ёncins"
-
-
-# --- AC2: undecodable bytes, and a raw OSError on read, each warn once and fall back to defaults
-
-
-def test_load_config_settings_json_undecodable_bytes_warns_once_and_is_treated_as_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _set_required_env(monkeypatch)
-    (tmp_path / "wombat.settings.json").write_bytes(b"\xff\xfe garbage")
-
-    with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()
-
-    assert config.wombat_assistant_name == "Steward"
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "wombat.settings.json" in warnings[0].message
-
-
-def test_load_config_settings_json_os_error_warns_once_and_is_treated_as_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _set_required_env(monkeypatch)
-    _write_settings_file(tmp_path, {"wombat_assistant_name": "Marvin"})
-
-    def _raise_os_error(self: object, file_path: Path) -> dict[str, object]:
-        raise OSError("simulated unreadable file")
-
-    monkeypatch.setattr(
-        "wombat.config.JsonConfigSettingsSource._read_file", _raise_os_error, raising=True
-    )
-
-    with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()
-
-    assert config.wombat_assistant_name == "Steward"
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "wombat.settings.json" in warnings[0].message
-
-
-# --- AC3: an out-of-vocab admitted value is dropped (one warning naming field + value); the
-# --- rest of the file still loads, and load_config does not raise -------------------------
-
-
-def test_load_config_settings_json_drops_invalid_admitted_value_with_one_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _set_required_env(monkeypatch)
-    _write_settings_file(
-        tmp_path, {"wombat_persona_humor": "playful", "wombat_assistant_name": "Kip"}
-    )
-
-    with caplog.at_level(logging.WARNING, logger="wombat.config"):
-        config = load_config()  # must not raise
-
-    assert config.wombat_persona_humor == "none"  # falls back to the field default
-    assert config.wombat_assistant_name == "Kip"  # the valid sibling value still loads
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    assert "wombat_persona_humor" in warnings[0].message
-    assert "playful" in warnings[0].message
 
 
 # --- AC4: the identical out-of-vocab value via the ENV tier still fails loud, naming the var
@@ -577,3 +567,34 @@ def test_resolve_wombat_zone_tzlocal_failure_raises_naming_the_var(
 def test_wombat_timezone_is_not_app_editable_and_not_required() -> None:
     assert "wombat_timezone" not in APP_EDITABLE_FIELDS
     assert "WOMBAT_TIMEZONE" not in REQUIRED_ENV
+
+
+# --- TK-241 AC5 (v2.64): suite hermeticity — closes the CLASS of collection-time DB hazards ---
+
+
+def test_persona_live_eval_module_reimport_performs_zero_db_connections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact TK-210 line-115 defect this pins: ``tests/persona/test_output_effects_live.py``
+    used to compute ``_MISSING_LIVE_REQUIREMENTS = _missing_live_requirements()`` at MODULE
+    level, calling ``load_config()`` (hence, post-TK-241, a real settings-table read) at
+    import/collection time — regardless of whether the live eval was armed. Reimporting that
+    module here, with ``WOMBAT_PG_DSN`` pointed at a DSN and ``psycopg.connect`` replaced by a
+    call-recording stub, proves import performs ZERO connection attempts. Against the OLD eager
+    code this would record a call (``load_config()`` reads the table whenever a DSN resolves,
+    unconditionally) and this test would fail — proving the check would have caught the defect.
+    """
+    import importlib
+
+    monkeypatch.setenv("WOMBAT_PG_DSN", "postgresql://nope:nope@127.0.0.1:1/nope")
+    monkeypatch.delenv("WOMBAT_TEST_PERSONA_EVAL_LIVE", raising=False)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "wombat.settings_store.psycopg.connect", lambda *a, **kw: calls.append((a, kw))
+    )
+
+    import tests.persona.test_output_effects_live as live_mod
+
+    importlib.reload(live_mod)
+
+    assert calls == []
