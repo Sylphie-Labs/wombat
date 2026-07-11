@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wombat — The Steward · app shell mock (Phase 1, iteration 2)</title>
+<style>
+  /* Mock-only stylesheet. Iteration-2 "midnight burrow" palette: dark
+     analogous-cool base (indigo-slate ~265), bright violet brand (~295),
+     cyan accent (~200), coral danger (~25), mint positive (~155).
+     NOT the implementation CSS; Phase 2 re-derives exact OKLCH in theme.css. */
+  :root {
+    --canvas:   oklch(18% 0.018 265);
+    --panel:    oklch(22% 0.02  265);
+    --elevated: oklch(26% 0.022 265);
+    --ink:      oklch(93% 0.01  265);
+    --muted:    oklch(66% 0.02  265);
+    --line:     oklch(32% 0.02  265);
+    --line-strong: oklch(42% 0.025 265);
+    --brand:    oklch(72% 0.16  295);
+    --brand-ink:oklch(20% 0.05  295);
+    --brand-soft: oklch(30% 0.06 295);
+    --accent:   oklch(78% 0.13  200);
+    --danger:   oklch(68% 0.19  25);
+    --danger-soft: oklch(26% 0.05 25);
+    --positive: oklch(75% 0.15  155);
+  }
+  body { background: oklch(14% 0.015 265); color: var(--ink);
+         font: 13.5px/1.5 system-ui, sans-serif; margin: 0; padding: 32px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  .board { max-width: 1180px; margin: 0 auto 64px; }
+  .board > h2 { font-size: 14px; color: var(--muted); text-transform: uppercase;
+                letter-spacing: .07em; border-bottom: 1px solid var(--line);
+                padding-bottom: 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 8px 0 32px;
+            color: var(--muted); font-size: 12.5px; max-width: 1180px;
+            margin-left: auto; margin-right: auto; }
+  .legend b { color: var(--ink); }
+  .tier { font-size: 10px; font-weight: 700; color: var(--canvas); border-radius: 4px;
+          padding: 0 5px; margin-left: 6px; vertical-align: middle; }
+  .t1 { background: var(--brand); } .t2 { background: var(--accent); }
+  .t3 { background: var(--muted); }
+  .note { font-size: 12.5px; color: var(--muted); font-style: italic; margin-top: 8px; }
+
+  /* ---------- shell ---------- */
+  .frame { background: var(--canvas); border: 1px solid var(--line);
+           border-radius: 12px; overflow: hidden; }
+  .header { display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+            border-bottom: 1px solid var(--line); background: var(--panel); }
+  .mark { width: 26px; height: 26px; border-radius: 999px; flex: none;
+          border: 2px solid var(--brand); position: relative; overflow: hidden; }
+  .mark::before { /* burrow arch */ content: ""; position: absolute; left: 5px; right: 5px;
+          bottom: 7px; height: 11px; border: 2px solid var(--brand);
+          border-bottom: none; border-radius: 999px 999px 0 0; }
+  .mark::after { /* baseline */ content: ""; position: absolute; left: 3px; right: 3px;
+          bottom: 6px; height: 2px; background: var(--brand); }
+  .wordmark { font-weight: 650; font-size: 15px; letter-spacing: .01em; }
+  .epithet { font-size: 9.5px; letter-spacing: .28em; color: var(--muted);
+             text-transform: uppercase; margin-left: 8px; }
+  .header .status { margin-left: auto; display: flex; align-items: center; gap: 8px;
+                    color: var(--muted); font-size: 12.5px; }
+  .body3 { display: flex; min-height: 520px; }
+  .rail { width: 180px; flex: none; border-right: 1px solid var(--line);
+          padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .rail a { display: flex; gap: 9px; align-items: center; padding: 6px 10px;
+            border-radius: 8px; color: var(--muted); text-decoration: none; font-size: 13px; }
+  .rail a.active { background: var(--brand-soft); color: var(--ink); font-weight: 600; }
+  .rail .ic { width: 14px; height: 14px; border: 1.5px solid var(--muted);
+              border-radius: 4px; flex: none; }
+  .rail .grp { font-size: 10px; letter-spacing: .18em; color: var(--muted);
+               text-transform: uppercase; margin: 16px 10px 4px; }
+  .content { flex: 1; padding: 24px 32px; display: flex; flex-direction: column;
+             gap: 24px; min-width: 0; }
+
+  /* ---------- chat pane ---------- */
+  .chat { width: 300px; flex: none; border-left: 1px solid var(--line);
+          background: var(--panel); display: flex; flex-direction: column; }
+  .chat .chead { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+                 border-bottom: 1px solid var(--line); font-weight: 600; font-size: 13px; }
+  .chat .chead .mark { width: 18px; height: 18px; border-width: 1.5px; }
+  .chat .chead .mark::before { left: 3px; right: 3px; bottom: 5px; height: 7px; border-width: 1.5px; }
+  .chat .chead .mark::after { left: 2px; right: 2px; bottom: 4px; height: 1.5px; }
+  .chat .log { flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .bub { max-width: 85%; padding: 7px 11px; border-radius: 12px; font-size: 13px; }
+  .bub.you { align-self: flex-end; background: var(--brand); color: var(--brand-ink);
+             border-bottom-right-radius: 4px; }
+  .bub.wb  { align-self: flex-start; background: var(--elevated); color: var(--ink);
+             border-bottom-left-radius: 4px; }
+  .bub.sys { align-self: flex-start; color: var(--muted); font-style: italic;
+             padding-left: 0; }
+  .composer { border-top: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px; }
+  .composer .input { flex: 1; min-width: 0; }
+  .collapse { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  /* ---------- cards & controls (SLIM, iteration-2 heights) ---------- */
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px;
+          background: var(--panel); display: flex; flex-direction: column; gap: 16px; }
+  .card h3 { margin: 0; font-size: 13.5px; display: flex; align-items: baseline; gap: 8px; }
+  .card h3 .when { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: auto; }
+  .lead { color: var(--ink); font-size: 14.5px; margin: 0; }
+  .lead b { color: var(--brand); }
+  .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .row label { width: 118px; flex: none; color: var(--muted); font-size: 12.5px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 28px; }
+  .axis { display: flex; flex-direction: column; gap: 6px; }
+  .axis .axname { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+                  color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .seg { display: inline-flex; gap: 6px; }
+  .seg span { padding: 3px 11px; border: 1px solid var(--line); border-radius: 999px;
+              color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+  .seg .on { background: var(--brand); border-color: var(--brand);
+             color: var(--brand-ink); font-weight: 600; }
+  .seg.ro span { opacity: .75; } .seg.ro .on { background: var(--brand-soft);
+             color: var(--ink); border-color: var(--brand-soft); }
+  .input, select.input { border: 1px solid var(--line); border-radius: 8px;
+          padding: 3px 10px; background: var(--elevated); color: var(--ink);
+          min-width: 190px; font-size: 12.5px; line-height: 1.5; }
+  .input.ph { color: var(--muted); }
+  .btn { border: 1px solid var(--brand); border-radius: 999px; padding: 3px 13px;
+         background: var(--brand); color: var(--brand-ink); font-weight: 600;
+         display: inline-block; font-size: 12.5px; }
+  .btn.secondary { background: transparent; color: var(--ink);
+                   border-color: var(--line-strong); font-weight: 500; }
+  .btn.disabled { opacity: .45; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .tag { font-size: 10.5px; border: 1px solid var(--line); border-radius: 999px;
+         padding: 0 7px; color: var(--muted); }
+  .pill { font-size: 10.5px; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
+  .pill.reply { background: var(--danger-soft); color: var(--danger); }
+  .pill.fyi { background: var(--elevated); color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; flex: none; }
+  .dot.ok { background: var(--positive); } .dot.no { background: var(--line-strong); }
+  .dot.hollow { background: transparent; border: 1.5px solid var(--muted); }
+  .banner { border: 1px solid var(--danger); background: var(--danger-soft);
+            border-radius: 12px; padding: 10px 16px; display: flex; gap: 12px;
+            align-items: flex-start; }
+  .strip { border: 1px solid var(--brand); background: var(--brand-soft);
+           border-radius: 12px; padding: 8px 16px; display: flex; gap: 12px;
+           align-items: center; }
+  .warn { color: var(--danger); font-size: 12px; }
+  details { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 12px; }
+  summary { cursor: default; color: var(--muted); font-size: 12.5px; }
+
+  /* ---------- agenda ---------- */
+  .bucket { font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+            color: var(--accent); margin: 2px 0 0; }
+  .evt { display: flex; gap: 12px; align-items: baseline; padding: 5px 0;
+         border-bottom: 1px solid var(--line); }
+  .evt:last-child { border-bottom: none; }
+  .evt .time { width: 92px; flex: none; color: var(--muted); font-size: 12px;
+               font-variant-numeric: tabular-nums; }
+  .evt .title { font-size: 13px; }
+  .evt .meta { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+  .mail { display: flex; gap: 10px; align-items: baseline; padding: 5px 0;
+          border-bottom: 1px solid var(--line); }
+  .mail:last-child { border-bottom: none; }
+  .mail .from { width: 120px; flex: none; color: var(--muted); font-size: 12px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail .subj { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mail .pill { margin-left: auto; flex: none; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+
+  /* ---------- brand board ---------- */
+  .swatches { display: flex; flex-wrap: wrap; gap: 14px; }
+  .sw { width: 132px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .sw .chip { height: 52px; } .sw .lbl { padding: 6px 9px; font-size: 11px; color: var(--muted); }
+  .sw .lbl b { display: block; color: var(--ink); font-size: 11.5px; }
+  .markzoom { width: 84px; height: 84px; border-width: 5px; }
+  .markzoom::before { left: 16px; right: 16px; bottom: 22px; height: 34px; border-width: 5px; }
+  .markzoom::after { left: 9px; right: 9px; bottom: 17px; height: 5px; }
+</style>
+</head>
+<body>
+
+<h1>wombat — The Steward · app shell mock (Phase 1, iteration 2)</h1>
+<div class="legend">
+  <span><b>Legend:</b></span>
+  <span><span class="tier t1">P</span> primary — visible at a glance</span>
+  <span><span class="tier t2">S</span> secondary — one interaction away</span>
+  <span><span class="tier t3">T</span> tertiary — behind “Advanced”</span>
+  <span>Save model: auto-save per control · Scope: whole app shell (Today + chat + settings)</span>
+</div>
+
+<!-- ============ BOARD 0: BRAND + PALETTE ============ -->
+<div class="board">
+  <h2>Board 0 — Brand: “wombat — The Steward” + midnight-burrow palette</h2>
+  <div class="frame" style="padding:24px 28px; display:flex; flex-direction:column; gap:24px">
+    <div class="row" style="gap:28px">
+      <span class="mark markzoom"></span>
+      <div>
+        <div class="wordmark" style="font-size:26px">wombat</div>
+        <div class="epithet" style="margin-left:0; font-size:12px">The Steward</div>
+      </div>
+      <div class="muted" style="max-width:420px">
+        The mark is a <b style="color:var(--ink)">burrow arch</b>: a semicircular arch on a
+        baseline, inside a circle — shelter, quiet competence. Two geometric shapes; draws
+        in Lucid; legible at 16&nbsp;px. Wordmark: lowercase <i>wombat</i> semibold, epithet
+        in letterspaced small caps. Presence is shell-level: header bar, chat identity
+        (the assistant’s chosen name + mark), brand hue on every interactive fill,
+        steward-voiced empty states.
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:var(--canvas)"></div><div class="lbl"><b>surface-canvas</b>oklch(18% .018 265)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--panel)"></div><div class="lbl"><b>surface-panel</b>oklch(22% .02 265)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--elevated)"></div><div class="lbl"><b>surface-elevated</b>oklch(26% .022 265)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--ink)"></div><div class="lbl"><b>ink-primary</b>oklch(93% .01 265)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--brand)"></div><div class="lbl"><b>brand (violet)</b>oklch(72% .16 295)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="lbl"><b>accent / focus (cyan)</b>oklch(78% .13 200)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--danger)"></div><div class="lbl"><b>danger (coral)</b>oklch(68% .19 25)</div></div>
+      <div class="sw"><div class="chip" style="background:var(--positive)"></div><div class="lbl"><b>positive (mint)</b>oklch(75% .15 155)</div></div>
+    </div>
+    <p class="note">Color theory: analogous-cool dark base (indigo-slate 265) with the violet
+    brand (295) adjacent for cohesion; cyan accent (200) as the cool counterpoint for focus;
+    danger/positive off both axes. Bright = luminous accents (L 70–78%) on deep surfaces; no
+    pure black, no pure white, elevation via lighter surfaces, NO gradients. Same token names
+    as theme.css — a one-file re-theme (TK-225 discipline).</p>
+  </div>
+</div>
+
+<!-- ============ BOARD 1: SHELL + TODAY (default landing) ============ -->
+<div class="board">
+  <h2>Board 1 — App shell: Today view (default landing) + persistent chat pane</h2>
+  <div class="frame">
+    <div class="header">
+      <span class="mark"></span><span class="wordmark">wombat</span><span class="epithet">The Steward</span>
+      <span class="status"><span class="dot ok"></span> running · <u>Restart</u> <span class="tier t1">P</span></span>
+    </div>
+    <div class="body3">
+      <nav class="rail">
+        <a class="active" href="#"><span class="ic"></span>Today</a>
+        <div class="grp">Settings</div>
+        <a href="#"><span class="ic"></span>Persona</a>
+        <a href="#"><span class="ic"></span>Voice &amp; Audio</a>
+        <a href="#"><span class="ic"></span>API Keys</a>
+        <a href="#"><span class="ic"></span>System</a>
+      </nav>
+      <div class="content">
+        <p class="lead">Good morning, Jim — Saturday, July 11. <b>Two things need you today.</b> <span class="tier t1">P</span></p>
+        <div class="card">
+          <h3>Morning brief <span class="tier t1">P</span><span class="when">delivered 07:00</span></h3>
+          <p style="margin:0; font-size:13px">Quiet weekend ahead. Two calendar items today, one
+          email from Sarah needs a reply before Monday, and the dentist confirmed Tuesday 14:30…</p>
+          <div class="row"><span class="btn secondary">Open full brief</span> <span class="tier t2">S</span></div>
+        </div>
+        <div class="twocol">
+          <div class="card">
+            <h3>Upcoming <span class="tier t1">P</span><span class="when">synced 08:42</span></h3>
+            <p class="bucket">Today</p>
+            <div>
+              <div class="evt"><span class="time">10:00–10:45</span><span class="title">Call with Mom</span><span class="meta">Phone</span></div>
+              <div class="evt"><span class="time">15:00–16:00</span><span class="title">Pick up bike from shop</span><span class="meta">Main St Cycles</span></div>
+            </div>
+            <p class="bucket">Tomorrow</p>
+            <div>
+              <div class="evt"><span class="time">All day</span><span class="title">Laundry + meal prep</span></div>
+            </div>
+            <p class="bucket">Later this week</p>
+            <div>
+              <div class="evt"><span class="time">Mon 09:00</span><span class="title">Standup — platform team</span><span class="meta">Meet · 6 people</span></div>
+              <div class="evt"><span class="time">Tue 14:30</span><span class="title">Dentist — Dr. Okafor</span></div>
+              <div class="evt"><span class="time">Thu 12:00</span><span class="title">Lunch w/ Marcus</span></div>
+            </div>
+            <p class="note">Time-bucketed agenda list (Today / Tomorrow / Later this week);
+            detail thins with distance. Click a row for details <span class="tier t2">S</span>.
+            Data: GET /events?window=7d (assumed contract — architect to confirm).</p>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:24px">
+            <div class="card">
+              <h3>Inbox highlights <span class="tier t1">P</span><span class="when">synced 08:42</span></h3>
+              <div>
+                <div class="mail"><span class="from">Sarah Lin</span><span class="subj">Re: July invoice — can you confirm the hours?</span><span class="pill reply">needs reply</span></div>
+                <div class="mail"><span class="from">Dr. Okafor’s office</span><span class="subj">Appointment confirmed: Tue Jul 14, 2:30 PM</span><span class="pill fyi">FYI</span></div>
+                <div class="mail"><span class="from">Anthropic billing</span><span class="subj">Your receipt for July</span><span class="pill fyi">FYI</span></div>
+              </div>
+              <p class="note">Readonly (wombat’s gmail scope is readonly — no send/reply
+              affordance, ever). Row click → snippet + “Open in Gmail” <span class="tier t2">S</span>.
+              Data: GET /inbox/items?window=48h (assumed).</p>
+            </div>
+            <div class="card">
+              <h3>Steward’s notepad <span class="tier t1">P</span></h3>
+              <div style="font-size:13px; display:flex; flex-direction:column; gap:6px">
+                <span>· Waiting on Sarah’s reply to close out the July invoice.</span>
+                <span>· Bike shop closes at 17:00 Saturdays.</span>
+              </div>
+              <p class="note">Wombat’s scratch / working memory, readonly — a transparency
+              surface, not an editor. Data: GET /scratch (assumed).</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="chat">
+        <div class="chead"><span class="mark"></span>John <span class="muted" style="font-weight:400">· The Steward</span><span class="collapse">⟩⟩ <span class="tier t1">P</span></span></div>
+        <div class="log">
+          <div class="bub you">What time does the bike shop close?</div>
+          <div class="bub wb">17:00 today — your pickup at 15:00 leaves plenty of room.</div>
+          <div class="bub you">Remind me about Sarah’s email tonight.</div>
+          <div class="bub sys">No reply within 30s — wombat is holding this or still working.</div>
+        </div>
+        <div class="composer"><span class="input ph" style="min-width:0">Message John…</span><span class="btn">Send</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="note">Chat pane is persistent across ALL views (collapsible to an edge tab ⟩⟩) — the
+  existing TK-223 pane restyled as bubbles with the mark as the steward’s avatar; honest “held”
+  state kept verbatim. Chat header shows the assistant’s CHOSEN name (renaming in Persona renames
+  this header). Nav rail: Today first (daily), settings grouped beneath (episodic).</p>
+</div>
+
+<!-- ============ BOARD 2: TODAY — DEGRADED / EMPTY / LOADING ============ -->
+<div class="board">
+  <h2>Board 2 — Today: storage-unavailable, empty, and loading states</h2>
+  <div class="frame">
+    <div class="header">
+      <span class="mark"></span><span class="wordmark">wombat</span><span class="epithet">The Steward</span>
+      <span class="status"><span class="dot ok"></span> running · <u>Restart</u></span>
+    </div>
+    <div class="body3" style="min-height:300px">
+      <nav class="rail">
+        <a class="active" href="#"><span class="ic"></span>Today</a>
+        <div class="grp">Settings</div>
+        <a href="#"><span class="ic"></span>Persona</a>
+        <a href="#"><span class="ic"></span>Voice &amp; Audio</a>
+        <a href="#"><span class="ic"></span>API Keys</a>
+        <a href="#"><span class="ic"></span>System</a>
+      </nav>
+      <div class="content">
+        <div class="banner"><span style="font-weight:700">⚠</span>
+          <span><b>Wombat’s memory store is unreachable.</b> Today can’t show calendar, inbox,
+          or notes right now.<br><span class="muted">Chat and settings navigation still work.</span></span>
+          <span class="btn secondary">Retry</span></div>
+        <div class="twocol">
+          <div class="card"><h3>Upcoming</h3><p class="muted" style="margin:0">Unavailable — storage offline.</p></div>
+          <div class="card"><h3>Inbox highlights</h3><p class="muted" style="margin:0">Unavailable — storage offline.</p></div>
+        </div>
+        <div class="card">
+          <h3>Morning brief <span class="when">delivered 07:00</span></h3>
+          <p style="margin:0; font-size:13px">Quiet weekend ahead. Two calendar items today…</p>
+          <p class="note">Brief keeps rendering if its own source is readable — cards degrade
+          independently; the banner names what’s actually down.</p>
+        </div>
+      </div>
+      <div class="chat">
+        <div class="chead"><span class="mark"></span>John <span class="muted" style="font-weight:400">· The Steward</span></div>
+        <div class="log"><div class="bub sys">Chat unaffected by the storage outage.</div></div>
+        <div class="composer"><span class="input ph" style="min-width:0">Message John…</span><span class="btn">Send</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="height:20px"></div>
+  <div class="twocol" style="max-width:1180px">
+    <div class="frame" style="padding:20px">
+      <p class="bucket" style="margin-top:0">Empty (healthy)</p>
+      <div class="card"><h3>Upcoming</h3><p class="muted" style="margin:0">No meetings in the next 7 days.</p></div>
+      <div style="height:12px"></div>
+      <div class="card"><h3>Inbox highlights</h3><p class="muted" style="margin:0">Nothing in the inbox needs you.</p></div>
+      <p class="note">Steward-voiced empty states; empty ≠ error, no banner.</p>
+    </div>
+    <div class="frame" style="padding:20px">
+      <p class="bucket" style="margin-top:0">Loading / chat degraded</p>
+      <div class="card"><h3>Upcoming</h3><p class="muted" style="margin:0">Loading…</p></div>
+      <div style="height:12px"></div>
+      <div class="card">
+        <h3><span class="dot hollow"></span>&nbsp;Chat — wombat not running</h3>
+        <p class="muted" style="margin:0">“Wombat is not running — start it to chat.” Composer
+        disabled; header status dot goes hollow; pane stays visible (TK-223 posture).</p>
+      </div>
+      <p class="note">Plain “Loading…” lines — no shimmer/spinner (animation allowlist).</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOARD 3: SETTINGS — PERSONA ============ -->
+<div class="board">
+  <h2>Board 3 — Settings · Persona (slim chips, two-column axis grid, profile lead)</h2>
+  <div class="frame">
+    <div class="header">
+      <span class="mark"></span><span class="wordmark">wombat</span><span class="epithet">The Steward</span>
+      <span class="status"><span class="dot ok"></span> running · <u>Restart</u></span>
+    </div>
+    <div class="body3" style="min-height:420px">
+      <nav class="rail">
+        <a href="#"><span class="ic"></span>Today</a>
+        <div class="grp">Settings</div>
+        <a class="active" href="#"><span class="ic"></span>Persona</a>
+        <a href="#"><span class="ic"></span>Voice &amp; Audio</a>
+        <a href="#"><span class="ic"></span>API Keys</a>
+        <a href="#"><span class="ic"></span>System</a>
+      </nav>
+      <div class="content">
+        <p class="lead"><b>John</b> is terse, neutral, and plain — no humor, balanced proactivity. <span class="tier t1">P</span></p>
+        <div class="card">
+          <h3>Assistant <span class="tier t1">P</span></h3>
+          <div class="row"><label>Name</label>
+            <span class="input">John</span>
+            <span class="muted">Saved · applies after restart</span></div>
+        </div>
+        <div class="card">
+          <h3>Personality <span class="tier t1">P</span> <span class="when">changes apply on the next turn</span></h3>
+          <div class="grid2">
+            <div class="axis"><span class="axname">Brevity</span>
+              <span class="seg"><span class="on">Terse</span><span>Balanced</span><span>Expansive</span></span></div>
+            <div class="axis"><span class="axname">Warmth <span class="muted" style="letter-spacing:0; text-transform:none">Saved — next turn</span></span>
+              <span class="seg"><span>Reserved</span><span class="on">Neutral</span><span>Warm</span></span></div>
+            <div class="axis"><span class="axname">Directness <span class="tag">default</span></span>
+              <span class="seg"><span>Gentle</span><span class="on">Plain</span><span>Blunt</span></span></div>
+            <div class="axis"><span class="axname">Humor <span class="tag">default</span></span>
+              <span class="seg"><span class="on">None</span><span>Dry</span></span></div>
+            <div class="axis"><span class="axname">Proactivity <span class="tag">default</span></span>
+              <span class="seg"><span>Minimal</span><span class="on">Balanced</span><span>Forward</span></span></div>
+          </div>
+        </div>
+        <p class="note">Anti-form measures: 26px chip controls, label-above two-column grid,
+        the generated profile sentence as a non-control lead, 16px row / 24px card rhythm.
+        “default” tag = field is null upstream (DEFAULT_MATRIX honesty). Auto-save per chip click.</p>
+      </div>
+      <div class="chat">
+        <div class="chead"><span class="mark"></span>John <span class="muted" style="font-weight:400">· The Steward</span></div>
+        <div class="log"><div class="bub sys">Chat pane persists on settings views too.</div></div>
+        <div class="composer"><span class="input ph" style="min-width:0">Message John…</span><span class="btn">Send</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOARD 4: SETTINGS — VOICE & AUDIO ============ -->
+<div class="board">
+  <h2>Board 4 — Settings · Voice &amp; Audio (restart strip active + missing-key warning)</h2>
+  <div class="frame">
+    <div class="header">
+      <span class="mark"></span><span class="wordmark">wombat</span><span class="epithet">The Steward</span>
+      <span class="status"><span class="dot ok"></span> running · <u>Restart</u></span>
+    </div>
+    <div class="body3" style="min-height:460px">
+      <nav class="rail">
+        <a href="#"><span class="ic"></span>Today</a>
+        <div class="grp">Settings</div>
+        <a href="#"><span class="ic"></span>Persona</a>
+        <a class="active" href="#"><span class="ic"></span>Voice &amp; Audio</a>
+        <a href="#"><span class="ic"></span>API Keys</a>
+        <a href="#"><span class="ic"></span>System</a>
+      </nav>
+      <div class="content">
+        <div class="strip"><span class="tier t1">P</span>
+          <span><b>Changes pending restart.</b> Provider and key changes apply after wombat restarts.</span>
+          <span class="btn secondary">⟳ Restart wombat</span></div>
+        <p class="lead">Mic → <b>Deepgram</b> STT → gate → <b>ElevenLabs</b> voice. <span class="tier t1">P</span></p>
+        <div class="card">
+          <h3>Voice <span class="tier t1">P</span></h3>
+          <div class="row"><label>Voice replies</label>
+            <span class="seg"><span class="on">On</span><span>Off</span></span>
+            <span class="muted">restart-tier</span></div>
+        </div>
+        <div class="card">
+          <h3>Providers <span class="tier t1">P</span></h3>
+          <div class="row"><label>Speech-to-text</label>
+            <select class="input"><option>Deepgram</option></select>
+            <span class="warn">⚠ Deepgram key not configured — <u>add key</u></span></div>
+          <div class="row"><label>Text-to-speech</label>
+            <select class="input"><option>ElevenLabs</option></select>
+            <span class="dot ok"></span><span class="muted">key configured</span></div>
+          <div class="row"><label>TTS voice ID <span class="tier t2">S</span></label>
+            <span class="input">EXAVITQu4vr4xnSDxMaL</span>
+            <span class="muted">shown only when TTS ≠ Local</span></div>
+          <details><summary>Advanced <span class="tier t3">T</span></summary>
+            <div class="row" style="margin-top:10px"><label>STT model</label>
+              <span class="input">whisper-small</span>
+              <span class="muted">open question #3 — API admits it; include?</span></div>
+          </details>
+        </div>
+        <div class="card">
+          <h3>Microphone <span class="tier t1">P</span></h3>
+          <div class="row"><label>Input device</label>
+            <select class="input"><option>Headset Microphone (USB Audio)</option></select></div>
+          <div class="row"><span class="btn">● Record</span>
+            <span class="btn secondary">Mute</span>
+            <span class="muted">records into wombat’s voice drop-dir — doubles as a mic test</span></div>
+          <p class="note">Degraded: drop-dir unconfigured → these three controls disable WITH
+          “voice drop-dir not configured — set WOMBAT_ASR_DROP_DIR” (TK-224). No output-volume
+          slider anywhere — winsound has no gain seam (DEC-39 no-placebo).</p>
+        </div>
+      </div>
+      <div class="chat">
+        <div class="chead"><span class="mark"></span>John <span class="muted" style="font-weight:400">· The Steward</span></div>
+        <div class="log"></div>
+        <div class="composer"><span class="input ph" style="min-width:0">Message John…</span><span class="btn">Send</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOARD 5: SETTINGS — API KEYS + SYSTEM ============ -->
+<div class="board">
+  <h2>Board 5 — Settings · API Keys and System</h2>
+  <div class="twocol" style="max-width:1180px">
+    <div class="frame" style="padding:20px; display:flex; flex-direction:column; gap:20px">
+      <p class="bucket" style="margin:0">API Keys view (content column only)</p>
+      <div class="row" style="gap:18px">
+        <span class="dot ok"></span><span class="muted">ElevenLabs</span>
+        <span class="dot no"></span><span class="muted">Deepgram</span>
+        <span class="dot no"></span><span class="muted">Fish Audio</span>
+        <span class="tier t1">P</span>
+      </div>
+      <div class="card">
+        <h3>Cloud voice-provider keys <span class="tier t1">P</span></h3>
+        <p class="muted" style="margin:0">Stored in the system keyring, write-only — wombat can
+        tell you a key is set but never shows it back.</p>
+        <div class="row"><label>ElevenLabs</label>
+          <span class="input ph">Enter new key…</span>
+          <span class="dot ok"></span><span class="muted">Configured</span>
+          <span class="btn secondary">Save key</span></div>
+        <div class="row"><label>Deepgram</label>
+          <span class="input ph">Enter new key…</span>
+          <span class="dot no"></span><span class="muted">Not configured</span>
+          <span class="btn secondary disabled">Save key</span></div>
+        <div class="row"><label>Fish Audio</label>
+          <span class="input ph">Enter new key…</span>
+          <span class="dot no"></span><span class="muted">Not configured</span>
+          <span class="btn secondary disabled">Save key</span></div>
+      </div>
+      <p class="note">Glance row of configured dots as the non-control lead; per-row Save;
+      “Key stored” flips the dot; key changes feed the restart strip. Keys keep working during
+      a storage outage (keyring, not Postgres).</p>
+    </div>
+    <div class="frame" style="padding:20px; display:flex; flex-direction:column; gap:20px">
+      <p class="bucket" style="margin:0">System view (content column only)</p>
+      <div class="card">
+        <h3>Runtime <span class="tier t1">P</span></h3>
+        <div class="row"><span class="btn secondary">⟳ Restart wombat</span></div>
+        <p class="muted" style="margin:0">Wombat restarted. <i>(alt: “Restarting…” disabled /
+        loud “Restart failed: &lt;detail&gt;” <span class="tier t2">S</span>)</i></p>
+      </div>
+      <div class="card">
+        <h3>Status <span class="tier t2">S</span></h3>
+        <div class="row"><span class="dot ok"></span><span style="font-size:13px">Settings storage: connected</span></div>
+        <div class="row"><span class="dot ok"></span><span style="font-size:13px">Calendar/inbox store: connected · last sync 08:42</span></div>
+        <p class="note">Second status line is new with the Today surfaces (same assumed
+        storage). Timezone still deliberately absent — operator .env tier (TK-228 non-goal);
+        open question #4.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOARD 6: SETTINGS — DEGRADED + HARD FAILURE ============ -->
+<div class="board">
+  <h2>Board 6 — Settings degraded: <code>storage_unavailable = true</code>, and settings-service-unreachable</h2>
+  <div class="frame">
+    <div class="header">
+      <span class="mark"></span><span class="wordmark">wombat</span><span class="epithet">The Steward</span>
+      <span class="status"><span class="dot ok"></span> running · <u>Restart</u></span>
+    </div>
+    <div class="body3" style="min-height:340px">
+      <nav class="rail">
+        <a href="#"><span class="ic"></span>Today</a>
+        <div class="grp">Settings</div>
+        <a class="active" href="#"><span class="ic"></span>Persona</a>
+        <a href="#"><span class="ic"></span>Voice &amp; Audio</a>
+        <a href="#"><span class="ic"></span>API Keys</a>
+        <a href="#"><span class="ic"></span>System</a>
+      </nav>
+      <div class="content">
+        <div class="banner"><span style="font-weight:700">⚠</span>
+          <span><b>Settings storage is unreachable.</b> Showing defaults, not your saved values —
+          settings are read-only until it’s back.<br>
+          <span class="muted">API keys are stored separately and still work. Restart is still available.</span></span>
+          <span class="btn secondary">Retry</span></div>
+        <div class="card">
+          <h3>Assistant</h3>
+          <div class="row"><label>Name</label>
+            <span class="input" style="background:var(--canvas)">Wombat</span>
+            <span class="tag">default</span><span class="muted">read-only</span></div>
+        </div>
+        <div class="card">
+          <h3>Personality</h3>
+          <div class="grid2">
+            <div class="axis"><span class="axname">Brevity <span class="tag">default</span></span>
+              <span class="seg ro"><span class="on">Terse</span><span>Balanced</span><span>Expansive</span></span></div>
+            <div class="axis"><span class="axname">Warmth <span class="tag">default</span></span>
+              <span class="seg ro"><span class="on">Reserved</span><span>Neutral</span><span>Warm</span></span></div>
+          </div>
+          <p class="note">Read-only treatment (Carbon pattern): values legible, chips
+          non-interactive with muted fill — not disabled-gray soup. A PUT racing the outage →
+          inline “Couldn’t save — settings storage unavailable”, field reverts, banner raises.</p>
+        </div>
+      </div>
+      <div class="chat">
+        <div class="chead"><span class="mark"></span>John <span class="muted" style="font-weight:400">· The Steward</span></div>
+        <div class="log"><div class="bub sys">Chat unaffected.</div></div>
+        <div class="composer"><span class="input ph" style="min-width:0">Message John…</span><span class="btn">Send</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="height:20px"></div>
+  <div class="frame" style="padding:20px; max-width:720px">
+    <p class="bucket" style="margin-top:0">Hard failure — settings service unreachable</p>
+    <div class="banner"><span style="font-weight:700">⚠</span>
+      <span><b>Can’t reach wombat’s settings service.</b><br>
+      <span class="muted">GET /settings failed: fetch rejected (is the settings app running?)</span></span>
+      <span class="btn secondary">Retry</span></div>
+    <p class="note">Hard failure = no half-rendered form; the whole content column is the error.
+    Rail, header, and chat pane still render (the shell never blanks).</p>
+  </div>
+</div>
+
+</body>
+</html>
