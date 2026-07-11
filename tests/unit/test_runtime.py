@@ -1354,3 +1354,48 @@ async def test_sweeper_clock_no_settings_file_never_raises_and_returns_a_datetim
     clock = runtime._sweeper_clock(bundle)
 
     assert isinstance(clock(), datetime)
+
+
+# --- TK-240 (DEC-44): serve() wires import_legacy_settings_file after assemble_runtime, before
+# _drive_and_serve ---------------------------------------------------------------------------
+
+
+async def test_serve_calls_import_legacy_settings_file_after_assemble_before_drive(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    """Proves the DEC-44 call ORDER purely via monkeypatched seams — never a real Postgres
+    connection, and (per the v2.58(a) ruling) chdir'd off the repo root via ``_no_env_file`` since
+    this exercises the serve() wiring path."""
+    calls: list[str] = []
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        calls.append("assemble_runtime")
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        calls.append("_drive_and_serve")
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        calls.append("import_legacy_settings_file")
+        assert dsn == _FAKE_DSN
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()
+
+    assert calls == ["assemble_runtime", "import_legacy_settings_file", "_drive_and_serve"]

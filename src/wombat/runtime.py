@@ -72,6 +72,7 @@ from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
 from wombat.safety.local_residency import check_config
+from wombat.settings_store import import_legacy_settings_file
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +302,14 @@ async def serve() -> None:
     explicitly into ``assemble_runtime`` — the ONE place a real wall-clock zone enters the
     composition, so the brief timer, the daily/dream civil-day boundary, and every other tz
     consumer downstream agree on the SAME zone (never a caller independently defaulting to UTC).
+
+    ``settings_store.import_legacy_settings_file(dsn)`` (TK-240, DEC-44) runs immediately AFTER
+    ``assemble_runtime`` (whose schema pre-flight already created ``wombat_settings``) and BEFORE
+    ``_drive_and_serve`` — this is one of exactly TWO production call sites ever (DEC-44), the
+    other being the ``settings_app`` ``__main__`` entry point (TK-242). ``load_config()`` above has
+    already run, so a fresh legacy import's non-persona fields ride defaults/env until the next
+    restart (v2.58 ruling (b), deliberately ACCEPTED — this call is never moved ahead of
+    ``load_config``); persona rows heal on the first Sweeper beat (TK-243).
     """
     config = load_config()
     check_config(config)
@@ -312,6 +321,7 @@ async def serve() -> None:
     tz = resolve_wombat_zone(config)
     params = load_operating_params()
     bundle = assemble_runtime(config=config, dsn=dsn, params=params, tz=tz)
+    import_legacy_settings_file(dsn)
     await _drive_and_serve(bundle, params=params)
 
 

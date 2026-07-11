@@ -7,7 +7,7 @@ test_serve_boot.py``): absent it, tests are skipped LOUDLY. Spin up a throwaway 
     docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=wombat postgres:16
     WOMBAT_TEST_PG_DSN=postgresql://postgres:wombat@localhost:5433/postgres
 
-  AC1 a brand-new empty database: ``ensure_all_schemas(dsn)`` creates all five packaged tables,
+  AC1 a brand-new empty database: ``ensure_all_schemas(dsn)`` creates all six packaged tables,
       a second call is idempotent, AND the 2026-07-09 incident itself is fixed —
       ``assemble_runtime(replay_pending=True)`` against a fresh throwaway database no longer
       raises ``UndefinedTable`` at the eager pending-journal replay.
@@ -44,13 +44,15 @@ _requires_pg = pytest.mark.skipif(
     ),
 )
 
-# The five packaged tables this pre-flight must create (Q-104-verified module homes).
+# The six packaged tables this pre-flight must create (Q-104-verified module homes; TK-240 added
+# the sixth, wombat_settings).
 _PACKAGED_TABLES = (
     "wombat_queue",
     "daily_ledger",
     "pending_journal",
     "wombat_behavior_events",
     "action_trail_projection",
+    "wombat_settings",
 )
 
 
@@ -88,7 +90,7 @@ def _existing_tables(dsn: str) -> set[str]:
 
 
 @_requires_pg
-def test_ac1_ensure_all_schemas_creates_all_five_packaged_tables(fresh_database: None) -> None:
+def test_ac1_ensure_all_schemas_creates_all_six_packaged_tables(fresh_database: None) -> None:
     assert _DSN is not None
     ensure_all_schemas(_DSN)
 
