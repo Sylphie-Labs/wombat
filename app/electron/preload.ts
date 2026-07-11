@@ -36,3 +36,13 @@ contextBridge.exposeInMainWorld("wombatChat", {
 contextBridge.exposeInMainWorld("wombatAudio", {
   saveCapture: (buffer: ArrayBuffer) => ipcRenderer.invoke("wombat:save-capture", buffer),
 });
+
+/**
+ * TK-239 (DEC-42 second half, Q-116): the restart-server button's bridge -
+ * the SAME `contextBridge`-only pattern as the three channels above. The
+ * renderer surface (`window.wombatRuntime.restart()`) is pinned -
+ * `RuntimeControls.tsx` binds against this exact name.
+ */
+contextBridge.exposeInMainWorld("wombatRuntime", {
+  restart: () => ipcRenderer.invoke("wombat:restart-runtime"),
+});

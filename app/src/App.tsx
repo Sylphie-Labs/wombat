@@ -7,6 +7,7 @@ import {
   Field,
   Indicator,
   Panel,
+  RuntimeControls,
   Select,
   type SelectOption,
 } from "./components";
@@ -265,6 +266,8 @@ export function App() {
         <ChatPane />
 
         <AudioPanel />
+
+        <RuntimeControls />
 
         {loadError && (
           <Panel>

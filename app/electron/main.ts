@@ -5,6 +5,7 @@ import { describeFailure, startApiProcess, type ApiProcessHandle } from "./api-p
 import { readChatInfo } from "./chat-info";
 import { resolveBackendRoot } from "./env-config";
 import { isAllowedPermission } from "./permissions";
+import { restartRuntime } from "./runtime-control";
 import { saveCapture } from "./save-capture";
 import { WEB_PREFERENCES } from "./window-options";
 
@@ -85,6 +86,13 @@ app.whenReady().then(async () => {
   // operator-tier drop-dir and performs the write.
   ipcMain.handle("wombat:save-capture", (_event, buffer: ArrayBuffer) =>
     saveCapture(buffer, process.env, app.getAppPath()),
+  );
+
+  // TK-239 (DEC-42 second half, Q-116): the restart-server button's IPC seam
+  // - spawns TK-238's restart script detached; the in-flight latch lives in
+  // `runtime-control.ts` itself, single-flight process-wide.
+  ipcMain.handle("wombat:restart-runtime", () =>
+    restartRuntime(process.env, app.getAppPath()),
   );
 
   createWindow();

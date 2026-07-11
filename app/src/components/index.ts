@@ -19,3 +19,5 @@ export type { IconProps } from "./Icon";
 export { ChatPane } from "./ChatPane";
 
 export { AudioPanel } from "./AudioPanel";
+
+export { RuntimeControls } from "./RuntimeControls";
