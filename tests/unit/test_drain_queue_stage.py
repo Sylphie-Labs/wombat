@@ -1,8 +1,9 @@
 """TK-5 — DrainQueueStage acceptance criteria (Q-47, first cog-worx Stage integration).
 
 PURE stage tests (no Postgres) inject a tiny FAKE queue + the reusable ``StageContextFake``
-(``tests/support/stage_context_fake.py``) and assert the Transition/Wait shapes, the Artifact
-kind/produced_by/data round-trip, and that the stage touches ONLY ``ctx.clock()``.
+(``tests/support/stage_context_fake.py``) and assert the Transition/Done shapes (TK-230, DEC-41:
+an empty drain is ``Done``, never ``Wait`` — see below), the Artifact kind/produced_by/data
+round-trip, and that the stage touches ONLY ``ctx.clock()``.
 
 ONE gated integration test runs a real ``WombatQueue`` against a throwaway Postgres (gated on
 ``WOMBAT_TEST_PG_DSN`` — absent it, this single test SKIPS while the pure tests above still run):
@@ -18,12 +19,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import psycopg
 import pytest
 from cogworx.loop.graph import StageGraph
-from cogworx.loop.result import StageResult, Transition, Wait
+from cogworx.loop.result import Done, StageResult, Transition
 from cogworx.loop.stage import StageContext
 
 # tests/support is a sibling package of tests/unit under the tests/ package root (TK-15).
@@ -97,16 +98,17 @@ async def test_items_present_yields_transition_to_gate_with_drained_batch_artifa
     assert queue_items_from_artifact_data(result.output.data) == items
 
 
-async def test_empty_queue_yields_wait_heartbeat_reparked_on_self() -> None:
+async def test_empty_queue_yields_done_with_drain_heartbeat_artifact() -> None:
+    """TK-230 (DEC-41, CRF-2): an empty drain returns ``Done``, NEVER ``Wait`` — the stage never
+    self-parks any more (idling-on-empty is now the runtime pump's job, ``wombat.runtime``)."""
     queue = _FakeQueue(canned=[])
     stage = DrainQueueStage(queue, batch_size=5, poll_interval_seconds=30.0)
     ctx = StageContextFake(now_fn=lambda: _FIXED_NOW)
 
     result = await stage.run(ctx)
 
-    assert isinstance(result, Wait)
-    assert result.to == "drain_queue"  # re-parks on itself (DEC-8 idles-on-empty)
-    assert result.wake_at == _FIXED_NOW + timedelta(seconds=30.0)  # derived from ctx.clock()
+    assert isinstance(result, Done)
+    assert result.kind == "done"
     assert result.output.kind == DRAIN_HEARTBEAT
     assert result.output.produced_by == "drain_queue"
     assert result.output.data == {}
@@ -160,7 +162,7 @@ def test_build_drain_pathway_wires_drain_queue_stage_to_its_declared_transition(
 
     assert isinstance(graph, StageGraph)
     assert graph.entry == "drain_queue"
-    assert graph.transitions_from("drain_queue") == ("gate", "drain_queue")
+    assert graph.transitions_from("drain_queue") == ("gate",)
     assert graph.is_terminal("gate")
 
 

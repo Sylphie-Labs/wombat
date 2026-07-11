@@ -17,6 +17,9 @@ Postgres is safe to reuse.
   AC4 empty queue -> drain() returns [] immediately.
   AC4 (TK-173, CR-16) a duplicate key enqueued at capacity is a no-op (ALREADY_QUEUED, no
       raise); a NEW key at capacity still raises QueueFullError.
+
+TK-230 (DEC-41): ``pending_count()`` mirrors ``drain()``'s eligibility predicate exactly (a
+read-only count, no lease taken) — the runtime pump's peek.
 """
 
 from __future__ import annotations
@@ -181,6 +184,52 @@ def test_ac4_empty_queue_drain_returns_empty_list_immediately(clean_table: None)
     queue = WombatQueue(_DSN, max_size=10)
     try:
         assert queue.drain() == []
+    finally:
+        queue.close()
+
+
+def test_pending_count_mirrors_drains_own_eligibility_predicate(clean_table: None) -> None:
+    """TK-230 (DEC-41): ``pending_count()`` reads EXACTLY ``drain()``'s own eligibility predicate
+    — a plain count, no lease taken. Rows leased by THIS epoch (already in-flight/parked) are
+    excluded, so a run this instance already holds never re-fires the runtime pump."""
+    assert _DSN is not None
+    queue = WombatQueue(_DSN, max_size=10)
+    try:
+        assert queue.pending_count() == 0  # empty queue
+
+        for i in range(3):
+            queue.enqueue(QueueItem(idempotency_key=f"pending-{i}", payload={"i": i}))
+        assert queue.pending_count() == 3
+
+        # draining leases all 3 under THIS epoch -> they are now excluded from pending_count.
+        drained = queue.drain()
+        assert len(drained) == 3
+        assert queue.pending_count() == 0
+
+        # a fresh, unleased row is pending again.
+        queue.enqueue(QueueItem(idempotency_key="pending-new", payload={}))
+        assert queue.pending_count() == 1
+    finally:
+        queue.close()
+
+
+def test_pending_count_counts_a_foreign_epochs_leased_rows_as_pending(
+    clean_table: None,
+) -> None:
+    """A row leased by a DIFFERENT (dead, single-host v1) epoch still counts as pending — mirrors
+    ``drain()`` reclaiming it, so a restarted pump keeps draining orphaned leases too."""
+    assert _DSN is not None
+    queue = WombatQueue(_DSN, max_size=10)
+    try:
+        queue.enqueue(QueueItem(idempotency_key="foreign-lease", payload={}))
+        queue.drain()  # leases the row under `queue`'s epoch, never acked (simulated crash)
+
+        restarted = WombatQueue(_DSN, max_size=10)
+        try:
+            assert restarted.epoch != queue.epoch
+            assert restarted.pending_count() == 1  # the foreign lease is still eligible
+        finally:
+            restarted.close()
     finally:
         queue.close()
 

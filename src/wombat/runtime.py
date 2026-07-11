@@ -2,25 +2,37 @@
 
 ``serve()`` starts/drives/stops the composition ``bootstrap.assemble_runtime`` already built —
 it registers NOTHING here (no pathways, no sources; that is composition-root work per the
-ticket's own non_goal). The standing loop is genuinely just two shipped cog-worx primitives
-wired end to end (DEC-12 — wombat authors no loop of its own):
+ticket's own non_goal). The standing loop is genuinely just two primitives wired end to end
+(DEC-12 — wombat authors no loop of its own beyond the TK-230 pump below):
 
-  1. ONE initial drive (``engine.run`` on the registered drain pathway with a fresh run_id and a
-     heartbeat ``Artifact``) — this drains whatever is already queued, then self-parks on a
-     durable ``Wait`` (TK-5's idle heartbeat) once the queue runs dry.
+  1. ``_run_drain_pump`` (TK-230, DEC-41): a wombat-owned pump, NOT a cog-worx primitive. Each
+     beat it peeks ``bundle.queue.pending_count()`` (a plain read-only SELECT, never journaled)
+     and, while it reports work, fires fresh sequential ``engine.run`` drives — each a fresh
+     run_id on the registered drain pathway with a heartbeat ``Artifact`` — chained back-to-back
+     until the peek reports empty, then sleeps one beat and re-peeks. This REPLACES the old "one
+     initial drive that self-parks on empty" shape: a cog-worx ``Done`` run cancels its own
+     timers and the Sweeper never re-drives a terminal run, so a stage-owned idle-heartbeat-Wait
+     could never actually be woken again once Done — every item enqueued after the first was
+     stranded until a restart. DEC-8's idles-on-empty guarantee now lives here: an idle beat
+     starts ZERO runs.
   2. ``cogworx.runtime.sweeper.Sweeper.run_forever`` — the shipped poller that leases due timers
-     off the journal and calls ``engine.fire_timer`` to re-drive them. This IS the standing
+     off the journal and calls ``engine.fire_timer`` to re-drive them (e.g. a run parked
+     AwaitHuman mid-pathway, or any other durable ``Wait``). This IS cog-worx's own standing
      loop; nothing here re-implements it. TK-209 (DEC-37(g)): its injected ``clock`` (built by
      ``_sweeper_clock`` below) ALSO polls ``bundle.live_persona``'s cheap settings-file mtime
      check on every interval beat — the existing beat, not a new scheduler — so an app edit to
      the persona keys hot-applies without a restart.
 
+The pump and the Sweeper run CONCURRENTLY (``asyncio.gather``), but each is internally
+sequential — ASMP-2 (exactly one draining process-wide) holds because the pump never starts a
+second ``engine.run`` before the previous one returns.
+
 RESTART (v1, Q-36/TK-14 cold-boot in-memory substrate): a restart is a clean slate — the journal
-is empty, so ``serve()`` always starts exactly ONE fresh drain run. This is safe because the
-Postgres queue (TK-2) is at-least-once: anything left un-acked before a crash redelivers on the
-next drain. Real-substrate resume interplay (a durable parked run surviving a restart ALONGSIDE
-a freshly-started one) is explicitly OUT of v1 scope — revisit once a real (non-cold-boot)
-journal adapter is first wired.
+is empty, so ``serve()``'s pump starts draining from its very first beat. This is safe because
+the Postgres queue (TK-2) is at-least-once: anything left un-acked before a crash redelivers on
+the next drain. Real-substrate resume interplay (a durable parked run surviving a restart
+ALONGSIDE a freshly-started one) is explicitly OUT of v1 scope — revisit once a real
+(non-cold-boot) journal adapter is first wired.
 
 TK-222 (EP-32, Q-110(d) ruling 5): when ``bundle.chat_surface`` is wired (``config.wombat_chat_
 handshake_file`` non-blank), ``_drive_and_serve`` starts it right after the source registry and
@@ -41,17 +53,19 @@ given Postgres at a time.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.runtime.sweeper import Sweeper
 
-from wombat.bootstrap import RuntimeBundle, assemble_runtime
+from wombat.bootstrap import _DRAIN_POLL_INTERVAL_SECONDS, RuntimeBundle, assemble_runtime
 from wombat.chat.surface import ChatSurface
 from wombat.config import ConfigurationError, load_config, resolve_wombat_zone
 from wombat.params import OperatingParams, load_operating_params
@@ -143,8 +157,63 @@ async def _stop_chat_surface(surface: ChatSurface | None) -> None:
         logger.warning("serve: chat surface failed to stop cleanly", exc_info=True)
 
 
+class _PendingCountableQueue(Protocol):
+    """The one queue method the drain pump needs — a structural seam so tests can inject a bare
+    stub instead of the real ``WombatQueue`` (mirrors ``DrainQueueStage``'s own ``_DrainableQueue``
+    seam, TK-230/DEC-41)."""
+
+    def pending_count(self) -> int: ...
+
+
+class _DrivableEngine(Protocol):
+    """The one engine method the drain pump needs — mirrors ``cogworx.runtime.engine.Engine.run``'s
+    keyword-only signature so a real ``Engine`` satisfies this structurally with no cast, while
+    tests can inject a bare spy instead."""
+
+    async def run(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        pathway_id: str,
+        initial: Artifact,
+        pathway_version: int = 1,
+    ) -> object: ...
+
+
+async def _run_drain_pump(
+    *,
+    queue: _PendingCountableQueue,
+    engine: _DrivableEngine,
+    drain_pathway_id: str,
+    beat: float,
+) -> None:
+    """The ONE process-wide draining pump (TK-230, DEC-41, ASMP-2).
+
+    Each beat: while ``queue.pending_count()`` (peeked fresh each check) reports work, fire a
+    fresh ``engine.run`` drive — a fresh ``wombat-drain-<uuid>`` run_id on the drain pathway with
+    a heartbeat ``Artifact`` — and await it before starting the next. Runs are chained strictly
+    sequentially (never concurrent), which is what holds ASMP-2 (exactly one draining process-
+    wide). Once the peek reports empty, sleep ``beat`` seconds and re-peek — an idle beat starts
+    ZERO runs and (since ``pending_count`` is a plain SELECT) writes ZERO journal records; this is
+    where DEC-8's idles-on-empty guarantee now lives, replacing the old stage-owned idle Wait that
+    a Done run could never be woken back out of (see the module docstring).
+    """
+    while True:
+        while queue.pending_count() > 0:
+            run_id = f"{_RUNTIME_RUN_ID_PREFIX}-{uuid4()}"
+            await engine.run(
+                run_id=run_id,
+                session_id=run_id,
+                pathway_id=drain_pathway_id,
+                initial=_heartbeat_artifact(),
+            )
+        await asyncio.sleep(beat)
+
+
 async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) -> None:
-    """Start the source registry, fire the ONE initial drive, then run the Sweeper forever.
+    """Start the source registry, fire the schedule pathways' initial drives, then run the drain
+    pump and the Sweeper forever (TK-230, DEC-41).
 
     Stops the registry and closes the queue/daily-ledger/pending-journal connections in a
     ``finally`` so both a cooperative cancellation and a ``KeyboardInterrupt`` land the same
@@ -153,13 +222,6 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
     await bundle.source_registry.start()
     await _start_chat_surface(bundle.chat_surface)
     try:
-        run_id = f"{_RUNTIME_RUN_ID_PREFIX}-{uuid4()}"
-        await bundle.engine.run(
-            run_id=run_id,
-            session_id=run_id,
-            pathway_id=bundle.drain_pathway_id,
-            initial=_heartbeat_artifact(),
-        )
         # TK-97: a SECOND initial drive arms the once-daily brief timer (and catches a brief missed
         # while the process was down: a boot past this morning's brief_time fires it once). Only
         # when the schedule pathway was registered — a brief-path-less boot skips it, never crashes.
@@ -189,9 +251,22 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
             fire=bundle.engine.fire_timer,
             clock=_sweeper_clock(bundle),
         )
-        await sweeper.run_forever(
-            interval=timedelta(seconds=params.sweeper_interval_seconds),
-            lease_ttl=timedelta(seconds=params.sweeper_lease_ttl_seconds),
+        # TK-230 (DEC-41): the drain pump SUBSUMES the old "one initial drive" — its first beat
+        # drains whatever is already queued, exactly like the initial drive used to, but every
+        # later beat keeps draining too (the bug this ticket fixes: a Done run's cancelled timers
+        # meant nothing ever re-drove it after the first item).
+        pump = _run_drain_pump(
+            queue=bundle.queue,
+            engine=bundle.engine,
+            drain_pathway_id=bundle.drain_pathway_id,
+            beat=_DRAIN_POLL_INTERVAL_SECONDS,
+        )
+        await asyncio.gather(
+            pump,
+            sweeper.run_forever(
+                interval=timedelta(seconds=params.sweeper_interval_seconds),
+                lease_ttl=timedelta(seconds=params.sweeper_lease_ttl_seconds),
+            ),
         )
     finally:
         await bundle.source_registry.stop()

@@ -200,6 +200,28 @@ class WombatQueue:
             for row in rows
         ]
 
+    def pending_count(self) -> int:
+        """Count rows eligible for THIS epoch's next ``drain()`` — read-only, no lease taken.
+
+        Mirrors ``drain()``'s own eligibility predicate EXACTLY (``leased_by IS DISTINCT FROM``
+        this epoch): a row already leased BY THIS epoch (in-flight in a run this instance is
+        driving, or parked mid-pathway e.g. AwaitHuman) is excluded, so it never re-fires the
+        runtime pump (TK-230, DEC-41) while a drain run already holds it. A row leased by a
+        DIFFERENT (necessarily dead, single-host v1) epoch counts as eligible, same as ``drain()``
+        would reclaim it.
+        """
+        conn = self._connection()
+        epoch_str = str(self.epoch)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM wombat_queue WHERE leased_by IS DISTINCT FROM %s",
+                (epoch_str,),
+            )
+            row = cur.fetchone()
+            count = row[0] if row is not None else 0
+        conn.commit()
+        return int(count)
+
     def ack(self, item_id: int) -> None:
         """Delete the leased row for ``item_id`` exactly once. A second ack is a no-op."""
         conn = self._connection()

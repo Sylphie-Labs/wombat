@@ -38,10 +38,9 @@ from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.loop.graph import StageGraph
 from cogworx.loop.pathway import PathwayError, PathwayRegistry
-from cogworx.loop.result import Done, StageResult, Wait
+from cogworx.loop.result import Done, StageResult, Transition, Wait
 from cogworx.loop.stage import StageContext
 from cogworx.loop.state import RunStatus
-from cogworx.model.base import ModelResponse
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 from cogworx.runtime.sweeper import Sweeper
@@ -62,32 +61,18 @@ from wombat.bootstrap import RuntimeBundle
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
-from wombat.gate.models import ItemKind
 from wombat.gate.pending_journal_pg import PgPendingJournal
 from wombat.integrations.gmail.draft_composer import DraftComposer
 from wombat.params import load_operating_params
-from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.persona.builder import Mouth
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Directness, Humor
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
-from wombat.sinks.speak import SpeakSink
-from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.brief_compose_stage import BriefComposeStage
-from wombat.stages.chat_reply import ChatReplyStage
 from wombat.stages.compose import ComposeStage
-from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
-from wombat.stages.drain_queue import DrainQueueStage
-from wombat.stages.gate_stage import GateStage, make_stub_evaluator
-from wombat.stages.review_or_speak import ReviewOrSpeakStage
 from wombat.trail.writer import ActionTrailWriter
 from wombat.user_model.observation_writer import ObservationWriter
-
-_PATHWAY_ID = "wombat.drain"
-_URGENCY_THRESHOLD = 0.5
-_STALENESS_CEILING_S = 300.0
-_CONFIDENCE_FLOOR = 0.5
 
 # A fake Postgres DSN — every adapter TK-53 wires (WombatQueue/DailyLedger/PgPendingJournal) is
 # lazy (no connection at construction), so these unit tests never touch a real Postgres.
@@ -148,11 +133,9 @@ def _reset_singleton() -> Iterator[None]:
 
 @dataclass
 class _FakeQueue:
-    """A minimal in-memory stand-in for ``WombatQueue``: one queued batch per ``drain()`` call.
-
-    Satisfies both ``DrainQueueStage``'s ``_DrainableQueue`` and ``ReviewOrSpeakStage``'s
-    ``_AckableQueue`` structural Protocols.
-    """
+    """A minimal in-memory stand-in for ``WombatQueue``: one queued batch per ``drain()`` call,
+    plus ``pending_count()`` (TK-230, DEC-41) — the drain pump's peek — computed straight off the
+    still-queued batches so it tracks ``drain()`` precisely without a real Postgres."""
 
     batches: list[list[QueueItem]]
     acked: list[int] = field(default_factory=list)
@@ -163,63 +146,24 @@ class _FakeQueue:
     def ack(self, item_id: int) -> None:
         self.acked.append(item_id)
 
+    def pending_count(self) -> int:
+        return sum(len(batch) for batch in self.batches)
 
-def _build_in_memory_stack(
-    queue: _FakeQueue, *, model_factory: object
-) -> tuple[Engine, InMemoryJournal]:
-    """Assemble a REAL cog-worx Engine over the full drain pathway (stub gate — AC1/AC2 are
-    about the Sweeper waking a parked run, not the production gate's scoring), entirely
-    in-memory. Mirrors ``tests/integration/test_drain_pathway_e2e.py``'s own construction."""
-    drain_queue_stage = DrainQueueStage(queue, batch_size=1, poll_interval_seconds=5.0)
-    gate_stage = GateStage(
-        evaluate=make_stub_evaluator(
-            urgency_threshold=_URGENCY_THRESHOLD,
-            staleness_ceiling_s=_STALENESS_CEILING_S,
-            confidence_floor=_CONFIDENCE_FLOOR,
-        ),
-        presence_provider=lambda: PresenceSnapshot(
-            state=PresenceState.ACTIVE,
-            confidence=1.0,
-            idle_ms=0,
-            taken_at=datetime.now(UTC).timestamp(),
-        ),
-    )
-    review_or_speak_stage = ReviewOrSpeakStage(queue=queue)
-    compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
-    compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
-    # TK-164 (Q-96): compose transitions onward to "chat_reply" (TK-222) -- voice-off (no
-    # adapter) here, this module isn't testing voice, only that the Sweeper/pathway wiring
-    # reaches the terminal. chat_reply is wired with broker=None (chat-disabled shape, pure
-    # pass-through) -- this module isn't testing chat either.
-    chat_reply_stage = ChatReplyStage(broker=None)
-    speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
-    graph = build_drain_pathway(
-        drain_queue_stage,
-        gate_stage,
-        review_or_speak_stage,
-        compose_dispatch_router,
-        compose_stage,
-        chat_reply_stage,
-        speak_stage,
-    )
-    journal = InMemoryJournal()
-    pathways = PathwayRegistry()
-    pathways.register(_PATHWAY_ID, graph)
+class _NeverPendingQueue(WombatQueue):
+    """A genuine ``WombatQueue`` subclass (not a mock — mirrors ``_RecordingSourceRegistry``
+    below) whose ``pending_count()`` is overridden to always report empty WITHOUT ever opening a
+    real connection.
 
-    models = ModelRegistry()
-    models.register_factory("deepseek", model_factory)  # type: ignore[arg-type]
+    Every shutdown/lifecycle test below points ``RuntimeBundle.queue`` at ``_FAKE_DSN``
+    (unreachable) and previously only ever called ``.close()`` on it (a lazy no-op, since
+    ``_drive_and_serve`` never otherwise touched the queue). TK-230's drain pump now calls
+    ``pending_count()`` every beat too — this override keeps those tests genuinely network-free
+    while ``RuntimeBundle.queue``'s typed field (``WombatQueue``) stays honest.
+    """
 
-    engine = Engine(
-        models=models,
-        journal=journal,
-        graph_store=InMemoryGraphStore(),
-        latent=InMemoryLatentStore(),
-        pathways=pathways,
-        model_profile="deepseek",
-        clock=lambda: datetime.now(UTC),
-    )
-    return engine, journal
+    def pending_count(self) -> int:
+        return 0
 
 
 def _initial_artifact() -> Artifact:
@@ -234,48 +178,178 @@ def _initial_artifact() -> Artifact:
 # --- AC1: the Sweeper wakes a parked pathway and it resumes -----------------------------------
 
 
+@dataclass
+class _OnceWaitingStage:
+    """Self-parks on a ``Wait`` exactly once, then advances onward on redrive — the generic AC1
+    vehicle for "the Sweeper wakes a parked pathway and it resumes" now that ``DrainQueueStage``
+    itself never self-parks any more (TK-230, DEC-41 retired the old self-park-on-empty pattern
+    this test used to ride — see ``tests/unit/test_drain_queue_stage.py``)."""
+
+    name: str = "waiter"
+    transitions: tuple[str, ...] = ("waiter", "sink")
+    calls: int = 0
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        self.calls += 1
+        artifact = Artifact(
+            kind="noop",
+            produced_by=self.name,
+            provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+            data={},
+        )
+        if self.calls == 1:
+            return Wait(to="waiter", wake_at=ctx.clock() + timedelta(seconds=5), output=artifact)
+        return Transition(to="sink", output=artifact)
+
+
+@dataclass
+class _WaiterSinkStage:
+    name: str = "sink"
+    transitions: tuple[str, ...] = ()
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Done(
+            output=Artifact(
+                kind="noop",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            )
+        )
+
+
 async def test_ac1_sweeper_wakes_parked_pathway_and_it_resumes() -> None:
-    # A genuine SUCCESS model: proves the resumed drive really reaches compose and completes,
-    # not merely that the timer flipped a status.
-    success_model = lambda guard: FakeModel(  # noqa: E731
-        response=ModelResponse(text="You have a new alert.", model_id="fake", finish_reason="stop")
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    waiter = _OnceWaitingStage()
+    pathways.register("waits", StageGraph([waiter, _WaiterSinkStage()], entry="waiter"))
+
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
     )
-    queue = _FakeQueue(batches=[[]])  # first drive sees an empty queue -> self-parks WAITING
-    engine, journal = _build_in_memory_stack(queue, model_factory=success_model)
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+        clock=lambda: datetime.now(UTC),
+    )
 
     run_id = "run-ac1"
     parked = await engine.run(
-        run_id=run_id, session_id=run_id, pathway_id=_PATHWAY_ID, initial=_initial_artifact()
+        run_id=run_id, session_id=run_id, pathway_id="waits", initial=_initial_artifact()
     )
     assert parked.status is RunStatus.WAITING
-    assert len(parked.steps) == 1  # the fresh drain_queue Wait, nothing else ran yet
+    assert len(parked.steps) == 1  # the fresh Wait, nothing else ran yet
+    assert waiter.calls == 1
 
-    # Now that the run is parked, an item arrives — proving the NEXT drive (the resume) is a
-    # real re-execution of the stage, not merely a timer flip.
-    queue.batches.append(
-        [
-            QueueItem(
-                idempotency_key="ac1-item",
-                payload={"item_kind": "generic", "stub_urgency": "high", "subject": "hi"},
-                item_id=1,
-            )
-        ]
-    )
-
-    past_wake = datetime.now(UTC) + timedelta(hours=1)  # comfortably past the 5s poll interval
+    past_wake = datetime.now(UTC) + timedelta(hours=1)  # comfortably past the 5s wait
     sweeper = Sweeper(journal=journal, fire=engine.fire_timer, clock=lambda: past_wake)
     fired = await sweeper.tick(past_wake, lease_ttl=timedelta(seconds=60))
 
     assert fired == 1  # exactly the one due timer, leased and fired
     resumed = await journal.load_run(run_id)
     assert resumed is not None
-    # The resume re-ran drain_queue (drained the new item) and drove it all the way through the
-    # REAL pathway to a genuine mouth call — proving the pathway advanced because the Sweeper
-    # fired it, not a no-op.
+    # The resume genuinely re-ran the stage (not merely flipped a timer) and drove it onward to
+    # the terminal — proving the pathway advanced because the Sweeper fired it.
     assert resumed.status is RunStatus.COMPLETED
-    assert queue.acked == [1]
-    compose_steps = [s for s in resumed.steps if s.stage_name == "compose"]
-    assert len(compose_steps) == 1
+    assert waiter.calls == 2
+
+
+# --- TK-230 (DEC-41): _run_drain_pump -----------------------------------------------------------
+
+
+async def test_pump_idles_over_several_beats_starting_zero_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-230 AC2: several beats over a stub queue whose ``pending_count()`` is always 0 -> the
+    pump starts ZERO engine runs (DEC-8 idles-on-empty is now the pump's job, not the stage's)."""
+    queue = _FakeQueue(batches=[])  # pending_count() is always 0 — nothing ever appended
+
+    class _SpyEngine:
+        async def run(
+            self,
+            *,
+            run_id: str,
+            session_id: str,
+            pathway_id: str,
+            initial: Artifact,
+            pathway_version: int = 1,
+        ) -> object:
+            raise AssertionError("engine.run must never be called on an always-empty queue")
+
+    sleeps: list[float] = []
+
+    async def _fast_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) >= 5:
+            raise asyncio.CancelledError
+
+    # Patches the shared ``asyncio`` module object (the SAME one ``wombat.runtime`` imported) so
+    # the pump's internal ``asyncio.sleep(beat)`` calls hit this stub deterministically.
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._run_drain_pump(
+            queue=queue, engine=_SpyEngine(), drain_pathway_id="wombat.drain", beat=5.0
+        )
+
+    assert sleeps == [5.0, 5.0, 5.0, 5.0, 5.0]  # several idle beats, each a plain sleep
+
+
+async def test_pump_drains_k_pre_enqueued_items_sequentially_within_one_beat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-230 AC3: K>1 items pending at the first peek -> the pump chains K sequential
+    ``engine.run`` drives (each a fresh ``wombat-drain-<uuid>`` run_id, never concurrent) within
+    the SAME beat, only sleeping once the peek finally reports empty."""
+    queue = _FakeQueue(batches=[[QueueItem(idempotency_key=f"k{i}", payload={})] for i in range(3)])
+
+    class _SpyEngine:
+        def __init__(self) -> None:
+            self.run_ids: list[str] = []
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        async def run(
+            self,
+            *,
+            run_id: str,
+            session_id: str,
+            pathway_id: str,
+            initial: Artifact,
+            pathway_version: int = 1,
+        ) -> object:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            self.run_ids.append(run_id)
+            queue.batches.pop(0)  # this drive "drained" exactly the batch it was fired for
+            self.in_flight -= 1
+            return object()
+
+    sleeps: list[float] = []
+
+    async def _stop_on_first_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", _stop_on_first_sleep)
+
+    engine = _SpyEngine()
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._run_drain_pump(
+            queue=queue, engine=engine, drain_pathway_id="wombat.drain", beat=5.0
+        )
+
+    assert len(engine.run_ids) == 3  # all 3 chained before the first sleep
+    assert len(set(engine.run_ids)) == 3  # each run_id is fresh
+    assert all(rid.startswith("wombat-drain-") for rid in engine.run_ids)
+    assert engine.max_in_flight == 1  # sequential — never more than one run in flight (ASMP-2)
+    assert sleeps == [5.0]  # sleeps exactly once, after the peek finally reports empty
 
 
 # --- AC2: the Sweeper idles quietly when nothing is due (DEC-8) -------------------------------
@@ -646,8 +720,9 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
 
     registry = _RecordingSourceRegistry()
     # Real adapters (lazy — no adapter here ever actually connects) so shutdown's close() calls
-    # exercise the genuine types RuntimeBundle carries.
-    queue = WombatQueue(_FAKE_DSN, max_size=10)
+    # exercise the genuine types RuntimeBundle carries. queue is `_NeverPendingQueue` (TK-230): a
+    # genuine WombatQueue subclass so the drain pump's pending_count() peek stays network-free.
+    queue = _NeverPendingQueue(_FAKE_DSN, max_size=10)
     daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
     pending_journal = PgPendingJournal(_FAKE_DSN)
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
@@ -781,7 +856,7 @@ def _serve_bundle(
         dream_schedule_pathway_id=None,
         source_registry=registry,
         pending_journal=PgPendingJournal(_FAKE_DSN),
-        queue=WombatQueue(_FAKE_DSN, max_size=10),
+        queue=_NeverPendingQueue(_FAKE_DSN, max_size=10),  # TK-230: network-free pending_count()
         daily_ledger=DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC")),
         compose_stage=ComposeStage(config=_config(), template_composer=TemplateComposer()),
         live_persona=_live_persona(),
@@ -866,7 +941,10 @@ async def test_daily_ledger_lifecycle_every_constructed_instance_closed_after_te
     # Swap in a trivial self-parking pathway/engine (mirrors the AC4 shutdown test above) so
     # _drive_and_serve's finally teardown runs without ever touching a real Postgres -- the
     # point of this test is the close() lifecycle, not gate/pathway behavior. The real
-    # queue/daily_ledger/pending_journal/compose_stage assemble_runtime built are kept as-is.
+    # daily_ledger/pending_journal/compose_stage assemble_runtime built are kept as-is; queue is
+    # swapped for `_NeverPendingQueue` (TK-230) since this test doesn't assert anything about
+    # queue identity, only that DailyLedger instances get closed, and the drain pump now calls
+    # pending_count() on it every beat.
     journal = InMemoryJournal()
     pathways = PathwayRegistry()
     pathways.register("only", StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only"))
@@ -891,6 +969,7 @@ async def test_daily_ledger_lifecycle_every_constructed_instance_closed_after_te
         journal=journal,
         drain_pathway_id="only",
         source_registry=registry,
+        queue=_NeverPendingQueue(_FAKE_DSN, max_size=10),
         brief_schedule_pathway_id=None,  # skip the second initial drive (its own pathway/engine)
         dream_schedule_pathway_id=None,  # skip the third initial drive (its own pathway/engine)
     )
@@ -1021,7 +1100,7 @@ async def test_action_trail_writer_closed_on_teardown_when_present(
     )
 
     registry = _RecordingSourceRegistry()
-    queue = WombatQueue(_FAKE_DSN, max_size=10)
+    queue = _NeverPendingQueue(_FAKE_DSN, max_size=10)  # TK-230: network-free pending_count()
     daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
     pending_journal = PgPendingJournal(_FAKE_DSN)
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
@@ -1103,7 +1182,7 @@ async def test_behavior_event_log_closed_on_teardown(monkeypatch: pytest.MonkeyP
     )
 
     registry = _RecordingSourceRegistry()
-    queue = WombatQueue(_FAKE_DSN, max_size=10)
+    queue = _NeverPendingQueue(_FAKE_DSN, max_size=10)  # TK-230: network-free pending_count()
     daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
     pending_journal = PgPendingJournal(_FAKE_DSN)
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
