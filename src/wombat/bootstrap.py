@@ -159,6 +159,7 @@ from .cost.daily_spend_ledger import DailySpendLedger
 from .domain.brief_schedule import BriefRunLedger
 from .domain.daily_ledger import DailyLedger, wombat_today
 from .domain.item_identity import idempotency_key
+from .external_store import ExternalItemStore
 from .gate.ceiling import CeilingLedger
 from .gate.decay import DayRollover
 from .gate.gate import gate_item_from_queue_item
@@ -629,6 +630,12 @@ class RuntimeBundle:
     # GUARDED (CON-3): any start/run failure is ONE loud WARNING, the rest of the bundle
     # (drain loop, brief, other sources) is unaffected.
     chat_surface: ChatSurface | None = None
+    # TK-245 (DEC-45(c)/(d), ruling v2.68 r6): the source-poll store sink target — ALWAYS
+    # constructed by assemble_runtime (dsn is a required str, ExternalItemStore is fully lazy —
+    # no connection at construction), typed Optional with default None ONLY to mirror the
+    # action_trail_writer/chat_surface field-declaration precedent above so hand-rolled
+    # RuntimeBundle constructions elsewhere (tests) don't need to pass it.
+    external_item_store: ExternalItemStore | None = None
 
 
 def assemble_runtime(
@@ -1115,6 +1122,10 @@ def assemble_runtime(
     engine = build_engine(
         substrate, config=config, params=op, capability_registry=capability_registry
     )
+    # TK-245 (ruling v2.68 r5): ALWAYS constructed (dsn is a required str here; the store is
+    # fully lazy — no connection at construction), regardless of replay_pending — this is the
+    # source-poll sink target, never a runtime boot mode of its own.
+    external_item_store = ExternalItemStore(dsn)
     source_registry = build_source_registry(
         config,
         queue,
@@ -1123,6 +1134,7 @@ def assemble_runtime(
         live_persona=live_persona,
         speak=speak,
         persona_feedback_recorder=_record_persona_feedback,
+        external_item_store=external_item_store,
     )
     if chat_source is not None:
         # TK-222 (Q-110(d) ruling 1): registered exactly like every other source — the registry
@@ -1209,4 +1221,5 @@ def assemble_runtime(
         behavior_event_log=behavior_event_log,
         action_trail_writer=action_trail_writer,
         chat_surface=chat_surface,
+        external_item_store=external_item_store,
     )

@@ -68,6 +68,7 @@ from cogworx.runtime.sweeper import Sweeper
 from wombat.bootstrap import _DRAIN_POLL_INTERVAL_SECONDS, RuntimeBundle, assemble_runtime
 from wombat.chat.surface import ChatSurface
 from wombat.config import ConfigurationError, load_config, resolve_wombat_zone
+from wombat.external_store import EXTERNAL_ITEMS_PRUNE_DAYS
 from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
@@ -311,6 +312,11 @@ async def serve() -> None:
     already run, so a fresh legacy import's non-persona fields ride defaults/env until the next
     restart (v2.58 ruling (b), deliberately ACCEPTED — this call is never moved ahead of
     ``load_config``); persona rows heal on the first Sweeper beat (TK-243).
+
+    ``bundle.external_item_store.prune_older_than(EXTERNAL_ITEMS_PRUNE_DAYS)`` (TK-245, ruling
+    v2.68 r5) runs exactly ONCE here, guarded on the field being non-``None`` — ``assemble_runtime``
+    always constructs it on this ``dsn``-required path, so the guard is defensive (a hand-rolled
+    ``RuntimeBundle`` elsewhere may leave it ``None``).
     """
     config = load_config()
     check_config(config)
@@ -323,6 +329,8 @@ async def serve() -> None:
     params = load_operating_params()
     bundle = assemble_runtime(config=config, dsn=dsn, params=params, tz=tz)
     import_legacy_settings_file(dsn)
+    if bundle.external_item_store is not None:
+        bundle.external_item_store.prune_older_than(EXTERNAL_ITEMS_PRUNE_DAYS)
     await _drive_and_serve(bundle, params=params)
 
 

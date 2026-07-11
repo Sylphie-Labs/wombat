@@ -28,6 +28,7 @@ from wombat.bootstrap import (
     reset_engine,
 )
 from wombat.config import ConfigurationError, WombatConfig, load_config
+from wombat.external_store import ExternalItemStore
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
@@ -214,6 +215,21 @@ def test_assemble_runtime_replay_pending_false_never_calls_rebuild_from_journal(
 
 
 # --- TK-46 (Q-85): wombat.dream registers UNCONDITIONALLY, connection-free -----------------------
+
+
+# --- TK-245 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ExternalItemStore(dsn) ------
+
+
+def test_assemble_runtime_exposes_a_real_external_item_store() -> None:
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert isinstance(bundle.external_item_store, ExternalItemStore)
 
 
 def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:

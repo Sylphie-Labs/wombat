@@ -326,6 +326,48 @@ async def test_crf4_ac3_stop_survives_a_task_dead_with_a_non_cancelled_exception
     assert any("dead" in record.message for record in error_records)
 
 
+# --- TK-245 (DEC-45(c), ruling v2.68 r6): the optional store sink ------------------------------
+
+
+class _RaisingSink:
+    """AC2: raises on EVERY call — proves the sink's own try/except never kills the poll task or
+    touches the enqueue arm, which stays byte-untouched."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, source_id: str, events: list[SourceEvent]) -> None:
+        self.calls += 1
+        raise RuntimeError("sink boom")
+
+
+async def test_tk245_ac2_sink_failure_every_call_keeps_task_alive_and_enqueue_unaffected(
+    caplog: Any,
+) -> None:
+    enqueuer = _FakeEnqueuer()
+    sink = _RaisingSink()
+    registry = SourceRegistry(enqueuer, sink=sink)
+    stub = _StubSource(
+        id="sinked",
+        poll_interval_seconds=0.01,
+        events_by_call=[[SourceEvent(event_key="e1", payload={"x": 1})]],
+    )
+    registry.register(stub)
+
+    with caplog.at_level(logging.WARNING):
+        await registry.start()
+        try:
+            await _wait_until(lambda: len(enqueuer.items) >= 2)
+            assert registry._tasks["sinked"].done() is False
+        finally:
+            await registry.stop()
+
+    assert sink.calls >= 2
+    assert registry.degraded_sources == frozenset()  # sink failure never marks the source degraded
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("sinked" in record.message for record in warning_records)
+
+
 @_requires_pg
 async def test_ac1_end_to_end_against_a_real_wombat_queue() -> None:
     """The same AC1 flow, wired to a real WombatQueue instead of a fake — a row lands."""

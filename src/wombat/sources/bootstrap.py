@@ -76,6 +76,22 @@ behavior-preserving); the hook is constructed and threaded into ``ASRSource`` ON
 recording at all. This module only ever imports ``wombat.persona.feedback`` — it never imports
 ``wombat.behavior.event_log`` itself; the ``recorder`` closure (built by ``bootstrap.py``, over
 the ONE shared ``RuntimeBundle.behavior_event_log`` instance) is handed in fully assembled.
+
+TK-245 (DEC-45(c)/(d), ruling v2.68 r6): ``build_external_item_sink`` builds the ``SourceRegistry``
+``sink`` seam — an explicit, per-source WHITELIST projection into ``wombat_external_items``. Only
+``gcal``/``gmail`` events are ever projected; any other source id is silently ignored (no
+dict-copy-of-whatever-shows-up). ``gcal`` rows store the ``SourceEvent`` payload verbatim
+(``CalendarEvent.to_payload`` is body-free by construction). ``gmail`` rows store EXACTLY five
+explicit keys (``message_id``/``subject``/``sender``/``received_at``/``priority_band``) — NEVER a
+dict-copy-minus-body, since the raw payload carries the raw message body under its own guarded
+key (Q-65, see ``tests/integrations/gmail/test_body_key_guard.py``; this module never references
+it, staying outside that guard's sanctioned allowlist) — with ``priority_band``
+recomputed via a pure ``triage_message`` call over the ``TriageRules`` ``_build_gmail_source``
+loaded ONCE at composition (never reloaded here, never per-poll); a ``reply:``-prefixed
+``event_key`` (``GmailWithReplyIntents``'s derived draft-item event) is skipped — a ``ReplyIntent``
+payload never lands in this table. ``build_source_registry`` threads the sink into the
+``SourceRegistry`` constructor only when an ``external_item_store`` is supplied; the default
+(``None``) leaves poll behavior byte-unchanged (AC3).
 """
 
 from __future__ import annotations
@@ -90,6 +106,7 @@ from zoneinfo import ZoneInfo
 
 from wombat.calendar.models import CalendarEvent
 from wombat.config import ConfigurationError, WombatConfig
+from wombat.external_store import ExternalItem, ExternalItemStore
 from wombat.integrations.gcal.poller import CalendarPoller
 from wombat.integrations.gcal.session import make_calendar_session
 from wombat.integrations.gcal.token_store import KeyringTokenStore as GcalKeyringTokenStore
@@ -273,24 +290,85 @@ def _maybe_register_gcal(
         registry.register(poller)
 
 
-def _maybe_register_gmail(
-    registry: SourceRegistry,
+def _build_gmail_source(
     config: WombatConfig,
     *,
     clock: Callable[[], datetime],
     poll_interval_seconds: float,
     token_store: GmailTokenStore | None,
-) -> None:
+) -> tuple[InputSource | None, TriageRules | None]:
+    """Build the wired ``GmailWithReplyIntents`` source (TK-177) plus the ``TriageRules`` it
+    loaded, or ``(None, None)`` when gmail is unwired — the SAME wired/unwired decision
+    ``_build_gmail_poller`` makes. TK-245: the returned ``TriageRules`` is reused, never reloaded,
+    by ``build_external_item_sink``'s gmail projection — ``load_triage_rules()`` runs at most
+    ONCE per ``build_source_registry`` call."""
     poller = _build_gmail_poller(
         config,
         clock=clock,
         poll_interval_seconds=poll_interval_seconds,
         token_store=token_store,
     )
-    if poller is not None:
-        # TK-177: wrap the wired poller so reply-intent emission rides the SAME registration —
-        # never a second poll loop, never a registry/queue change (Q-92).
-        registry.register(GmailWithReplyIntents(wrapped=poller, rules=load_triage_rules()))
+    if poller is None:
+        return None, None
+    # TK-177: wrap the wired poller so reply-intent emission rides the SAME registration — never
+    # a second poll loop, never a registry/queue change (Q-92).
+    rules = load_triage_rules()
+    return GmailWithReplyIntents(wrapped=poller, rules=rules), rules
+
+
+def build_external_item_sink(
+    store: ExternalItemStore,
+    *,
+    gmail_rules: TriageRules | None,
+    clock: Callable[[], datetime] = _utc_now,
+) -> Callable[[str, list[SourceEvent]], None]:
+    """TK-245 (DEC-45(c)/(d), ruling v2.68 r6): the ``SourceRegistry`` sink — see the module
+    docstring for the full whitelist/projection design. ``gmail_rules`` is ``None`` only when
+    gmail itself is unwired, in which case no ``"gmail"``-sourced events are ever produced by the
+    registry, so that branch degrades to a silent skip rather than raising (defensive, never
+    reached in practice)."""
+
+    def sink(source_id: str, events: list[SourceEvent]) -> None:
+        items: list[ExternalItem]
+        if source_id == "gcal":
+            items = [
+                ExternalItem(
+                    item_key=event.event_key,
+                    payload=event.payload,
+                    occurs_at=datetime.fromisoformat(event.payload["start"]),
+                )
+                for event in events
+            ]
+        elif source_id == "gmail":
+            if gmail_rules is None:
+                return
+            items = []
+            for event in events:
+                if event.event_key.startswith("reply:"):
+                    continue  # ruling r1: the derived reply-intent event never lands here
+                message = GmailMessageItem.from_payload(event.payload)
+                triage = triage_message(message, gmail_rules)
+                payload = {
+                    "message_id": message.message_id,
+                    "subject": message.subject,
+                    "sender": message.sender,
+                    "received_at": message.received_at.isoformat(),
+                    "priority_band": triage.priority_band.value,
+                }
+                items.append(
+                    ExternalItem(
+                        item_key=event.event_key,
+                        payload=payload,
+                        occurs_at=message.received_at,
+                    )
+                )
+        else:
+            return  # whitelist: only gcal/gmail are ever projected
+        if not items:
+            return
+        store.upsert_many(source_id, items, fetched_at=clock())
+
+    return sink
 
 
 def _maybe_register_feedback(
@@ -488,6 +566,7 @@ def build_source_registry(
     live_persona: LivePersona | None = None,
     speak: Callable[[str], None] | None = None,
     persona_feedback_recorder: Callable[[FeedbackToken, str, datetime], None] | None = None,
+    external_item_store: ExternalItemStore | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
     of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
@@ -510,8 +589,25 @@ def build_source_registry(
     ``persona_feedback_recorder`` (TK-213) also threads into ``_maybe_register_asr`` ONLY, to
     build the ASR side-channel persona-feedback recording hook (``make_persona_feedback_hook``);
     defaults ``None``, which constructs today's ``ASRSource`` exactly, no feedback recording.
+
+    ``external_item_store`` (TK-245) builds the registry's optional store ``sink``
+    (``build_external_item_sink``) ONLY when supplied; defaults ``None``, which constructs the
+    ``SourceRegistry`` with no sink — today's poll behavior exactly (AC3).
     """
-    registry = SourceRegistry(queue)
+    # Built BEFORE the registry itself so the sink (which needs the SAME TriageRules instance,
+    # loaded at most once) can be threaded into the SourceRegistry constructor (TK-245).
+    gmail_source, gmail_rules = _build_gmail_source(
+        config,
+        clock=clock,
+        poll_interval_seconds=gmail_poll_interval_seconds,
+        token_store=gmail_token_store,
+    )
+    sink = (
+        build_external_item_sink(external_item_store, gmail_rules=gmail_rules, clock=clock)
+        if external_item_store is not None
+        else None
+    )
+    registry = SourceRegistry(queue, sink=sink)
     _maybe_register_gcal(
         registry,
         config,
@@ -520,13 +616,8 @@ def build_source_registry(
         poll_interval_seconds=gcal_poll_interval_seconds,
         token_store=gcal_token_store,
     )
-    _maybe_register_gmail(
-        registry,
-        config,
-        clock=clock,
-        poll_interval_seconds=gmail_poll_interval_seconds,
-        token_store=gmail_token_store,
-    )
+    if gmail_source is not None:
+        registry.register(gmail_source)
     _maybe_register_feedback(
         registry,
         config,
@@ -638,6 +729,7 @@ __all__ = [
     "BriefFetches",
     "GmailWithReplyIntents",
     "build_brief_fetches",
+    "build_external_item_sink",
     "build_source_registry",
     "make_persona_command_hook",
     "make_persona_feedback_hook",

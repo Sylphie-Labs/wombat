@@ -60,6 +60,7 @@ from wombat.bootstrap import RuntimeBundle
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
+from wombat.external_store import EXTERNAL_ITEMS_PRUNE_DAYS, ExternalItemStore
 from wombat.gate.pending_journal_pg import PgPendingJournal
 from wombat.integrations.gmail.draft_composer import DraftComposer
 from wombat.params import load_operating_params
@@ -1405,3 +1406,56 @@ async def test_serve_calls_import_legacy_settings_file_after_assemble_before_dri
     await runtime.serve()
 
     assert calls == ["assemble_runtime", "import_legacy_settings_file", "_drive_and_serve"]
+
+
+# --- TK-245 (ruling v2.68 r5): serve() prunes wombat_external_items exactly once at boot --------
+
+
+class _RecordingExternalItemStore(ExternalItemStore):
+    """A real ``ExternalItemStore`` subclass (never opens a connection — ``prune_older_than`` is
+    fully overridden) that records every call, mirroring ``_RecordingSourceRegistry`` above."""
+
+    def __init__(self) -> None:
+        super().__init__(_FAKE_DSN)
+        self.prune_calls: list[int] = []
+
+    def prune_older_than(self, days: int) -> int:
+        self.prune_calls.append(days)
+        return 0
+
+
+async def test_serve_calls_prune_older_than_exactly_once_at_boot(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    store = _RecordingExternalItemStore()
+    bundle = replace(bundle, external_item_store=store)
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()
+
+    assert store.prune_calls == [EXTERNAL_ITEMS_PRUNE_DAYS]

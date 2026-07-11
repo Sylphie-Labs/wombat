@@ -32,19 +32,31 @@ replaced by TK-12's canonical ``item_identity.idempotency_key(source_id, source_
 derivation — the ONE place every dedup path (queue, gate pending-set, outcome binding) agrees
 on identity (Q-18/D). This makes TK-12's AC4 one-derivation obligation real at the first real
 source (``gcal``, TK-72); registry behavior is otherwise unchanged.
+
+TK-245 (DEC-45(c), ruling v2.68 r6): an OPTIONAL ``sink`` — ``(source_id, events) -> None`` —
+is called ONCE per successful poll iteration (a poll() that did not raise), in its OWN
+try/except: a sink failure logs exactly ONE WARNING naming the source and never kills the poll
+task or touches the enqueue arm above/below it, which stays byte-untouched. The registry stays
+enqueue-only toward the queue (ASMP-2) — the sink is a sibling side-write, never a drain; a
+``None`` sink (the default) leaves poll behavior byte-unchanged.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Protocol
 
 from wombat.domain.item_identity import idempotency_key as derive_key
 from wombat.queue import EnqueueResult, QueueFullError, QueueItem
-from wombat.sources.base import InputSource
+from wombat.sources.base import InputSource, SourceEvent
 
 _log = logging.getLogger(__name__)
+
+# TK-245: the optional store-write seam a poll iteration's events are handed to, once per
+# successful poll — see the module docstring for the full contract.
+Sink = Callable[[str, list[SourceEvent]], None]
 
 
 class Enqueuer(Protocol):
@@ -56,8 +68,9 @@ class Enqueuer(Protocol):
 class SourceRegistry:
     """Registers ``InputSource`` instances and drives each on its own asyncio poll loop."""
 
-    def __init__(self, enqueue: Enqueuer) -> None:
+    def __init__(self, enqueue: Enqueuer, sink: Sink | None = None) -> None:
         self._enqueue = enqueue
+        self._sink = sink
         self._sources: dict[str, InputSource] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._degraded: set[str] = set()
@@ -117,6 +130,16 @@ class SourceRegistry:
                 _log.exception("source %s: poll() raised; marking degraded", source.id)
                 self._degraded.add(source.id)
             else:
+                if self._sink is not None:
+                    try:
+                        self._sink(source.id, events)
+                    except Exception:
+                        _log.warning(
+                            "source %s: sink failed; store write skipped for this poll "
+                            "(enqueue is unaffected)",
+                            source.id,
+                            exc_info=True,
+                        )
                 iteration_ok = True
                 for event in events:
                     try:
@@ -149,4 +172,4 @@ class SourceRegistry:
             await asyncio.sleep(source.poll_interval_seconds)
 
 
-__all__ = ["Enqueuer", "SourceRegistry"]
+__all__ = ["Enqueuer", "Sink", "SourceRegistry"]

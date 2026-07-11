@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from types import ModuleType
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import psycopg
 import pytest
 from google_auth_oauthlib.flow import InstalledAppFlow
 from pydantic import SecretStr
@@ -40,16 +42,37 @@ from pydantic import SecretStr
 import wombat.integrations.gcal.session as gcal_session_module
 import wombat.integrations.gmail.session as gmail_session_module
 import wombat.sources.bootstrap as sources_bootstrap_module
+from wombat.calendar.models import CalendarEvent
 from wombat.config import ConfigurationError, WombatConfig
+from wombat.external_store import ExternalItemStore
+from wombat.external_store import ensure_schema as ensure_external_items_schema
+from wombat.integrations.gmail.models import GmailMessageItem
+from wombat.integrations.gmail.triage import load_triage_rules
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.base import SourceEvent
-from wombat.sources.bootstrap import build_brief_fetches, build_source_registry
+from wombat.sources.bootstrap import (
+    build_brief_fetches,
+    build_external_item_sink,
+    build_source_registry,
+)
 from wombat.sources.registry import SourceRegistry
 
 _TZ = ZoneInfo("America/Chicago")
 _NOW = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)
+
+_DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
+
+_requires_pg = pytest.mark.skipif(
+    not _DSN,
+    reason=(
+        "WOMBAT_TEST_PG_DSN is not set — skipping the TK-245 real-ExternalItemStore sink test. "
+        "Start one with:\n"
+        "  docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=wombat postgres:16\n"
+        "then export WOMBAT_TEST_PG_DSN=postgresql://postgres:wombat@localhost:5433/postgres"
+    ),
+)
 
 
 def _utc_now() -> datetime:
@@ -649,3 +672,105 @@ def test_build_brief_fetches_wired_sources_bind_the_real_poller_reads(
     assert [e.event_id for e in events] == ["evt1"]
     assert [m.message_id for m in messages] == ["m1"]
     assert consent_calls == []
+
+
+# --------------------------------------------------------------- TK-245: the store sink ---------
+
+
+def test_build_source_registry_sink_is_none_without_an_external_item_store() -> None:
+    """AC3 (DSN-less half): no ``external_item_store`` given -> the registry carries no sink at
+    all — poll behavior is byte-unchanged."""
+    config = _make_config()
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+    assert registry._sink is None
+
+
+def test_build_source_registry_threads_a_sink_when_an_external_item_store_is_given() -> None:
+    """AC3 (DSN-full half): an ``external_item_store`` given -> the registry carries a sink."""
+    config = _make_config()
+    store = ExternalItemStore("postgresql://fake-host/fake-db")  # lazy — never connects here
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        external_item_store=store,
+    )
+    assert registry._sink is not None
+
+
+@_requires_pg
+def test_tk245_ac1_sink_persists_whitelisted_projections_and_skips_reply_events() -> None:
+    """AC1: fake gcal+gmail ``SourceEvent``s (the gmail one carrying a SECRET-MARKER body) fed
+    through ``build_external_item_sink`` land keyed (source, item_key); the gcal payload round-
+    trips ``CalendarEvent.from_payload``; the gmail payload carries EXACTLY the five whitelisted
+    keys; the SECRET-MARKER and the ``body_text`` key appear NOWHERE in the stored payloads; a
+    ``reply:``-prefixed event produces NO row."""
+    assert _DSN is not None
+    with psycopg.connect(_DSN) as conn:
+        ensure_external_items_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE wombat_external_items")
+        conn.commit()
+
+    store = ExternalItemStore(_DSN)
+    try:
+        secret_marker = "SECRET-MARKER-2f9c8e"
+        gmail_rules = load_triage_rules()
+        sink = build_external_item_sink(store, gmail_rules=gmail_rules, clock=lambda: _NOW)
+
+        gcal_event = SourceEvent(
+            event_key="evt1",
+            payload=CalendarEvent(
+                event_id="evt1",
+                title="Standup",
+                start=datetime(2026, 7, 2, 9, 0, tzinfo=UTC),
+                end=datetime(2026, 7, 2, 9, 30, tzinfo=UTC),
+                all_day=False,
+            ).to_payload(),
+        )
+        message = GmailMessageItem(
+            message_id="m1",
+            subject="hi",
+            sender="a@example.com",
+            received_at=datetime(2026, 7, 2, 8, 0, tzinfo=UTC),
+            body_text=f"do not persist me: {secret_marker}",
+        )
+        gmail_event = SourceEvent(event_key="m1", payload=message.to_payload())
+        reply_event = SourceEvent(
+            event_key="reply:m1", payload={"quoted_excerpt": secret_marker}
+        )
+
+        sink("gcal", [gcal_event])
+        sink("gmail", [gmail_event, reply_event])
+
+        gcal_rows = store.get_recent("gcal", limit=10)
+        assert [row["item_key"] for row in gcal_rows] == ["evt1"]
+        assert CalendarEvent.from_payload(gcal_rows[0]["payload"]).event_id == "evt1"
+
+        gmail_rows = store.get_recent("gmail", limit=10)
+        assert [row["item_key"] for row in gmail_rows] == ["m1"]  # reply: event skipped
+        assert set(gmail_rows[0]["payload"].keys()) == {
+            "message_id",
+            "subject",
+            "sender",
+            "received_at",
+            "priority_band",
+        }
+
+        with psycopg.connect(_DSN) as conn, conn.cursor() as cur:
+            cur.execute("SELECT payload::text FROM wombat_external_items")
+            texts = [row[0] for row in cur.fetchall()]
+        assert not any("body_text" in text for text in texts)
+        assert not any(secret_marker in text for text in texts)
+    finally:
+        store.close()
