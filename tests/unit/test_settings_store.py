@@ -256,10 +256,12 @@ def test_ac3_ensure_schema_and_ensure_all_schemas_never_call_the_import() -> Non
         assert "import_legacy_settings_file(" not in source
 
 
-def test_ac3_runtime_serve_is_the_sole_in_repo_call_site() -> None:
-    """Structural: until TK-242 lands the settings_app entry point, ``wombat.runtime.serve`` is
-    the ONLY production call site for ``import_legacy_settings_file`` (DEC-44: exactly two ever)."""
+def test_ac3_runtime_serve_and_settings_app_main_are_the_only_in_repo_call_sites() -> None:
+    """Structural: with TK-242 landed, ``wombat.runtime.serve`` and ``wombat.settings_app.
+    __main__`` are the ONLY production call sites for ``import_legacy_settings_file`` (DEC-44:
+    exactly two ever)."""
     from wombat import runtime
+    from wombat.settings_app import __main__ as settings_app_main
 
     src_root = Path(settings_store.__file__).parent
     call_sites = []
@@ -269,7 +271,9 @@ def test_ac3_runtime_serve_is_the_sole_in_repo_call_site() -> None:
         text = path.read_text(encoding="utf-8")
         if "import_legacy_settings_file(" in text:
             call_sites.append(path)
-    assert call_sites == [Path(runtime.__file__)]
+    assert sorted(call_sites) == sorted(
+        [Path(runtime.__file__), Path(settings_app_main.__file__)]
+    )
 
 
 # --------------------------------------------------------------------------------------- AC4

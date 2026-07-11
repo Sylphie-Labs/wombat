@@ -2,10 +2,11 @@
 
 ``create_app`` builds a small FastAPI app over TWO existing seams, neither of which touches the
 wombat runtime:
-  * ``wombat.config`` — ``APP_EDITABLE_FIELDS``/``WOMBAT_SETTINGS_FILE`` (TK-196) name the
-    admitted app-editable settings and the file they live in; this module reads/writes that file
-    directly (never via ``WombatConfig`` itself, which would additionally require the DeepSeek
-    env vars ``settings_app`` has no business needing).
+  * ``wombat.settings_store`` — ``SettingsStore`` (TK-240, DEC-43) is the Postgres-backed
+    reader/writer over the ``wombat_settings`` table; ``wombat.config.APP_EDITABLE_FIELDS``
+    (TK-196) still names the admitted app-editable settings for the response view (never via
+    ``WombatConfig``/``load_config`` itself, which would additionally require the DeepSeek env
+    vars ``settings_app`` has no business needing).
   * ``wombat.voice.key_store`` — ``VoiceKeyStore`` (TK-188) is the write-only vault seam for
     cloud voice-provider API keys; this module never reads a stored key back out, only whether
     one is present (``get(provider) is not None``).
@@ -15,6 +16,11 @@ Every route requires the ``X-Wombat-Token`` header to equal the per-launch token
 token is a 401 on every route, never a 404 (that would leak route existence to an unauthenticated
 caller).
 
+DEGRADE POSTURE (TK-242, DEC-43 ruling — loud read-only): a ``None`` store (no DSN at boot) or a
+store call that raises degrades GET to a 200 with every admitted field ``null`` plus
+``storage_unavailable: true``; the same conditions degrade PUT to a 503 with a fixed, generic
+detail naming the settings storage — never a bare 500, never a secret in the body.
+
 STRUCTURAL: this module (and the ``wombat.settings_app`` package as a whole) imports NOTHING from
 ``wombat.bootstrap`` or ``wombat.runtime`` — the settings app must run while ``serve()`` is down
 (``tests/settings_app/test_api.py``'s subprocess-clean check proves this at import time).
@@ -22,17 +28,18 @@ STRUCTURAL: this module (and the ``wombat.settings_app`` package as a whole) imp
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
+from wombat.settings_store import SettingsStore
 from wombat.voice.key_store import VoiceKeyStore, VoiceKeyStoreError
+
+# Fixed, generic PUT-degrade detail (DEC-43 ruling) — NEVER derived from the underlying exception,
+# so a storage failure can never echo a secret (e.g. a DSN fragment) back to the caller.
+_STORAGE_UNAVAILABLE_DETAIL = "settings storage is unavailable; try again later"
 
 # The loopback bind address this API is served on — NEVER 0.0.0.0 (DEC-30/31). A pinned module
 # constant so a structural test can assert it directly.
@@ -93,42 +100,6 @@ class KeyBody(BaseModel):
         return value
 
 
-def _read_settings(settings_path: Path) -> dict[str, Any]:
-    """Best-effort UTF-8 read of ``settings_path``. A missing, unreadable, malformed, or
-    non-object file is treated as empty — a broken settings file never 500s a read (CON-3-style,
-    mirroring ``wombat.config``'s own ``_AppEditableJsonSettingsSource._read_file`` guard)."""
-    if not settings_path.exists():
-        return {}
-    try:
-        loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return {}
-    if not isinstance(loaded, dict):
-        return {}
-    return loaded
-
-
-def _write_settings(settings_path: Path, settings: dict[str, Any]) -> None:
-    """Persist ``settings`` ATOMICALLY (TK-235): write to a temp file in the SAME directory as
-    ``settings_path``, then ``os.replace`` it into place. A crash mid-write leaves either the OLD
-    settings file (or none, on the very first save) behind — never a truncated, half-written one
-    — because ``os.replace`` is a single atomic filesystem rename (the ``wombat.trail.renderer``
-    ``_save_sidecar`` precedent).
-    """
-    fd, tmp_name = tempfile.mkstemp(
-        dir=settings_path.parent,
-        prefix=settings_path.name + ".",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(settings, fh, indent=2)
-        os.replace(tmp_name, settings_path)
-    except BaseException:
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
-
-
 def _settings_view(existing: dict[str, Any]) -> dict[str, Any]:
     """The admitted-field-only view of ``existing`` — every ``APP_EDITABLE_FIELDS`` key, ``null``
     when absent from the file."""
@@ -147,9 +118,12 @@ def _key_presence(key_store: VoiceKeyStore) -> dict[str, bool]:
     return presence
 
 
-def create_app(settings_path: Path, key_store: VoiceKeyStore, token: str) -> FastAPI:
+def create_app(store: SettingsStore | None, key_store: VoiceKeyStore, token: str) -> FastAPI:
     """Build the settings API (TK-197). ``token`` is the per-launch handshake secret every route
-    requires via the ``X-Wombat-Token`` header (the ``__main__`` handshake, DEC-31)."""
+    requires via the ``X-Wombat-Token`` header (the ``__main__`` handshake, DEC-31).
+
+    ``store`` is ``None`` when ``__main__`` found no usable ``WOMBAT_PG_DSN`` at boot — the app
+    still serves, permanently in the read-only degrade posture (TK-242, DEC-43 ruling)."""
 
     app = FastAPI(title="wombat-settings")
 
@@ -161,14 +135,31 @@ def create_app(settings_path: Path, key_store: VoiceKeyStore, token: str) -> Fas
 
     @app.get("/settings", dependencies=[Depends(_require_token)])
     def get_settings() -> dict[str, Any]:
-        existing = _read_settings(settings_path)
-        return {"settings": _settings_view(existing), "keys": _key_presence(key_store)}
+        existing: dict[str, Any] = {}
+        unavailable = True
+        if store is not None:
+            try:
+                existing = store.get_all()
+                unavailable = False
+            except Exception:
+                existing = {}
+        return {
+            "settings": _settings_view(existing),
+            "keys": _key_presence(key_store),
+            "storage_unavailable": unavailable,
+        }
 
     @app.put("/settings", dependencies=[Depends(_require_token)])
     def put_settings(body: SettingsUpdate) -> dict[str, Any]:
-        existing = _read_settings(settings_path)
-        existing.update(body.model_dump(exclude_unset=True))
-        _write_settings(settings_path, existing)
+        if store is None:
+            raise HTTPException(status_code=503, detail=_STORAGE_UNAVAILABLE_DETAIL)
+        try:
+            mapping = body.model_dump(exclude_unset=True)
+            if mapping:
+                store.put(mapping)
+            existing = store.get_all()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=_STORAGE_UNAVAILABLE_DETAIL) from exc
         return {"settings": _settings_view(existing)}
 
     @app.put("/keys/{provider}", dependencies=[Depends(_require_token)])
