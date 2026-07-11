@@ -117,15 +117,16 @@ def _build_local_transcriber(
     config: WombatConfig, *, role: Literal["primary", "fallback"] = "primary"
 ) -> Transcriber | None:
     """Construct the local ``FasterWhisperTranscriber`` (today's exact wiring, byte-preserved).
-    An ``ImportError`` (the ``voice`` extra not installed) is caught, logged LOUD, and degrades to
-    ``None`` — never blocks boot. ``role`` is a log-routing discriminator only (CR4-1, TK-217):
-    ``"primary"`` (default) is today's exact byte-preserved message; ``"fallback"`` is used when
-    filling the fallback slot of an already-healthy cloud transcriber, where local ASR is NOT the
-    only voice input and the message must say so instead of implying ASR is unavailable
-    altogether."""
+    ANY construction failure (missing ``voice`` extra, or a whisper model load failure — uncached
+    model + offline, a bad ``WOMBAT_ASR_MODEL``, a corrupted HF cache) is caught, logged LOUD, and
+    degrades to ``None`` — never blocks boot (CON-3, CRF-6). ``role`` is a log-routing
+    discriminator only (CR4-1, TK-217): ``"primary"`` (default) is today's exact byte-preserved
+    message; ``"fallback"`` is used when filling the fallback slot of an already-healthy cloud
+    transcriber, where local ASR is NOT the only voice input and the message must say so instead
+    of implying ASR is unavailable altogether."""
     try:
         return FasterWhisperTranscriber(model_name=config.wombat_asr_model)
-    except ImportError:
+    except Exception:
         if role == "fallback":
             logger.warning(
                 "voice: local ASR fallback is not installed — install the 'voice' extra "

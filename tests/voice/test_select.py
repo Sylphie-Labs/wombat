@@ -202,6 +202,16 @@ class _RaisingLocalTranscriber:
         raise ImportError("faster-whisper not installed (simulated, TK-217)")
 
 
+class _RaisingLocalTranscriberModelLoadFailure:
+    """Stands in for ``FasterWhisperTranscriber`` failing to construct with a non-``ImportError``
+    (CRF-6) — models are loaded AT CONSTRUCTION, so an uncached model + offline, a bad
+    ``WOMBAT_ASR_MODEL``, or a corrupted HF cache each surface as a broad ``Exception`` (here
+    ``RuntimeError``), never ``ImportError``."""
+
+    def __init__(self, *, model_name: str) -> None:
+        raise RuntimeError(f"simulated whisper model load failure for {model_name!r} (CRF-6)")
+
+
 class _RaisingLocalTTS:
     """Stands in for ``Pyttsx3Adapter`` failing to construct (TK-217) — an ``ImportError`` is one
     of the ANY-exception cases ``_build_local_tts`` catches."""
@@ -519,6 +529,72 @@ def test_tk217_cloud_stt_healthy_primary_contextualizes_local_fallback_failure(
     logs a fallback-unavailable-cloud-active message, and the live cloud primary is returned."""
     monkeypatch.setattr(select_module, "DeepgramTranscriber", _RecordingCloudTranscriber)
     monkeypatch.setattr(select_module, "FasterWhisperTranscriber", _RaisingLocalTranscriber)
+    store = _FakeVoiceKeyStore(initial={"deepgram": "cloud-key"})
+    config = _config(wombat_stt_provider="deepgram")
+
+    with caplog.at_level(logging.WARNING):
+        transcriber = build_transcriber(config, key_store=store)
+
+    assert isinstance(transcriber, FallbackTranscriber)
+    assert isinstance(transcriber._primary, _RecordingCloudTranscriber)  # cloud primary is live
+    assert transcriber._fallback is None
+    assert "remains active" in caplog.text
+
+
+# ------------------------------------------------------------------------------------------ CRF-6
+
+
+def test_crf6_local_stt_primary_non_import_error_degrades_to_none_with_loud_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC1: a whisper model load failure (any non-``ImportError`` exception) at the local STT
+    primary path degrades to ``None`` with the byte-preserved primary-role message — it must
+    never propagate and crash boot (CON-3)."""
+    monkeypatch.setattr(
+        select_module, "FasterWhisperTranscriber", _RaisingLocalTranscriberModelLoadFailure
+    )
+    _block_all_clouds(monkeypatch)
+    config = _config(wombat_stt_provider="local")
+
+    with caplog.at_level(logging.WARNING):
+        transcriber = build_transcriber(config, key_store=_UnreadableVoiceKeyStore())
+
+    assert transcriber is None
+    assert "local STT (faster-whisper) is not installed" in caplog.text
+
+
+def test_crf6_boot_survives_local_stt_non_import_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC1: ``_maybe_register_asr``/``build_source_registry`` complete without raising when the
+    local ASR constructor raises a non-``ImportError`` (a real whisper load failure), proving boot
+    survives (CON-3, CRF-6)."""
+    monkeypatch.setattr(
+        select_module, "FasterWhisperTranscriber", _RaisingLocalTranscriberModelLoadFailure
+    )
+    monkeypatch.setattr(select_module, "KeyringVoiceKeyStore", _FakeVoiceKeyStore)
+    _block_all_clouds(monkeypatch)
+    config = _config(
+        wombat_stt_provider="local",
+        wombat_voice_enabled=True,
+        wombat_asr_drop_dir=str(tmp_path),
+    )
+
+    registry = build_source_registry(config, _FakeEnqueuer(), tz=ZoneInfo("UTC"))
+
+    assert isinstance(registry, SourceRegistry)
+
+
+def test_crf6_cloud_stt_healthy_primary_local_fallback_non_import_error_falls_back_to_none(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2: a healthy cloud STT primary whose local fallback-slot constructor raises a
+    non-``ImportError`` (CRF-6) still returns the ``FallbackTranscriber`` wrapping the live cloud
+    primary with ``fallback=None`` and the TK-217 fallback-role message logged."""
+    monkeypatch.setattr(select_module, "DeepgramTranscriber", _RecordingCloudTranscriber)
+    monkeypatch.setattr(
+        select_module, "FasterWhisperTranscriber", _RaisingLocalTranscriberModelLoadFailure
+    )
     store = _FakeVoiceKeyStore(initial={"deepgram": "cloud-key"})
     config = _config(wombat_stt_provider="deepgram")
 
