@@ -73,6 +73,7 @@ from wombat.params import OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
 from wombat.safety.local_residency import check_config
+from wombat.scratchpad import SCRATCHPAD_PURGE_DAYS
 from wombat.settings_store import import_legacy_settings_file
 
 logger = logging.getLogger(__name__)
@@ -317,6 +318,10 @@ async def serve() -> None:
     v2.68 r5) runs exactly ONCE here, guarded on the field being non-``None`` — ``assemble_runtime``
     always constructs it on this ``dsn``-required path, so the guard is defensive (a hand-rolled
     ``RuntimeBundle`` elsewhere may leave it ``None``).
+
+    ``bundle.scratchpad_store.purge_stale(SCRATCHPAD_PURGE_DAYS)`` (TK-247, DEC-46, ruling v2.68
+    r5) runs exactly ONCE here, guarded the SAME way — non-``None`` on every real boot, defensive
+    against a hand-rolled store-less ``RuntimeBundle``.
     """
     config = load_config()
     check_config(config)
@@ -331,6 +336,8 @@ async def serve() -> None:
     import_legacy_settings_file(dsn)
     if bundle.external_item_store is not None:
         bundle.external_item_store.prune_older_than(EXTERNAL_ITEMS_PRUNE_DAYS)
+    if bundle.scratchpad_store is not None:
+        bundle.scratchpad_store.purge_stale(SCRATCHPAD_PURGE_DAYS)
     await _drive_and_serve(bundle, params=params)
 
 

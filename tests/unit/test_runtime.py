@@ -68,6 +68,7 @@ from wombat.persona.builder import Mouth
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Directness, Humor
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
+from wombat.scratchpad import SCRATCHPAD_PURGE_DAYS, ScratchpadStore
 from wombat.settings_store import SettingsStore
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.brief_compose_stage import BriefComposeStage
@@ -1459,3 +1460,93 @@ async def test_serve_calls_prune_older_than_exactly_once_at_boot(
     await runtime.serve()
 
     assert store.prune_calls == [EXTERNAL_ITEMS_PRUNE_DAYS]
+
+
+# --- TK-247 (DEC-46, ruling v2.68 r5): serve() purges wombat_scratchpad exactly once at boot ----
+
+
+class _RecordingScratchpadStore(ScratchpadStore):
+    """A real ``ScratchpadStore`` subclass (never opens a connection — ``purge_stale`` is fully
+    overridden) that records every call, mirroring ``_RecordingExternalItemStore`` above."""
+
+    def __init__(self) -> None:
+        super().__init__(_FAKE_DSN)
+        self.purge_calls: list[int] = []
+
+    def purge_stale(self, older_than_days: int) -> int:
+        self.purge_calls.append(older_than_days)
+        return 0
+
+
+async def test_serve_calls_purge_stale_exactly_once_at_boot(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    store = _RecordingScratchpadStore()
+    bundle = replace(bundle, scratchpad_store=store)
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()
+
+    assert store.purge_calls == [SCRATCHPAD_PURGE_DAYS]
+
+
+async def test_serve_boots_byte_unchanged_when_scratchpad_store_is_none(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    """A store-less directly-constructed bundle (``_serve_bundle`` never sets ``scratchpad_
+    store``, so it defaults ``None``) boots without error — the field-guard in ``serve()`` is a
+    true no-op, never raising on the absent seam."""
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    assert bundle.scratchpad_store is None
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()  # must not raise

@@ -32,6 +32,7 @@ from wombat.external_store import ExternalItemStore
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
+from wombat.scratchpad import ScratchpadStore
 from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.substrate import cold_boot_bundle
 
@@ -230,6 +231,21 @@ def test_assemble_runtime_exposes_a_real_external_item_store() -> None:
         tz=ZoneInfo("UTC"),
     )
     assert isinstance(bundle.external_item_store, ExternalItemStore)
+
+
+# --- TK-247 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ScratchpadStore(dsn) ---------
+
+
+def test_assemble_runtime_exposes_a_real_scratchpad_store() -> None:
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert isinstance(bundle.scratchpad_store, ScratchpadStore)
 
 
 def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:

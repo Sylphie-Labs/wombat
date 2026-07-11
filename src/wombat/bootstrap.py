@@ -212,6 +212,7 @@ from .persona.matrix import matrix_from_config
 from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
 from .schema_preflight import ensure_all_schemas
+from .scratchpad import ScratchpadStore
 from .settings_store import SettingsStore
 from .sinks.speak import SpeakSink
 from .sources.bootstrap import (
@@ -636,6 +637,12 @@ class RuntimeBundle:
     # action_trail_writer/chat_surface field-declaration precedent above so hand-rolled
     # RuntimeBundle constructions elsewhere (tests) don't need to pass it.
     external_item_store: ExternalItemStore | None = None
+    # TK-247 (DEC-46, ruling v2.68 r5): the scoped working-memory store — ALWAYS constructed by
+    # assemble_runtime (dsn is a required str, ScratchpadStore is fully lazy — no connection at
+    # construction), typed Optional with default None ONLY to mirror the external_item_store
+    # field-declaration precedent above so hand-rolled RuntimeBundle constructions elsewhere
+    # (tests) don't need to pass it.
+    scratchpad_store: ScratchpadStore | None = None
 
 
 def assemble_runtime(
@@ -1126,6 +1133,9 @@ def assemble_runtime(
     # fully lazy — no connection at construction), regardless of replay_pending — this is the
     # source-poll sink target, never a runtime boot mode of its own.
     external_item_store = ExternalItemStore(dsn)
+    # TK-247 (ruling v2.68 r5): ALWAYS constructed (dsn is a required str here; the store is
+    # fully lazy — no connection at construction), mirroring external_item_store above.
+    scratchpad_store = ScratchpadStore(dsn)
     source_registry = build_source_registry(
         config,
         queue,
@@ -1222,4 +1232,5 @@ def assemble_runtime(
         action_trail_writer=action_trail_writer,
         chat_surface=chat_surface,
         external_item_store=external_item_store,
+        scratchpad_store=scratchpad_store,
     )
