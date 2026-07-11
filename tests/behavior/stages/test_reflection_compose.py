@@ -22,7 +22,6 @@ never a hand-rolled fixture.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -324,12 +323,8 @@ async def test_tk209_no_live_persona_preserves_the_fixed_system_instruction() ->
     assert system_msgs[0].content == _SYSTEM_INSTRUCTION
 
 
-async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
-    tmp_path: Path,
-) -> None:
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns() -> None:
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     stage = ReflectionComposeStage(kb=[], live_persona=live_persona)
 
     model_one = FakeModel(

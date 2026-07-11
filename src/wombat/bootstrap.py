@@ -211,6 +211,7 @@ from .persona.matrix import matrix_from_config
 from .queue import QueueItem, WombatQueue
 from .rating.rating_tuner import RatingTuner
 from .schema_preflight import ensure_all_schemas
+from .settings_store import SettingsStore
 from .sinks.speak import SpeakSink
 from .sources.bootstrap import (
     _has_google_client_credentials,
@@ -680,8 +681,13 @@ def assemble_runtime(
     # — built once here from the config-level persona fields, threaded into all four mouth
     # constructions below, and exposed on RuntimeBundle.live_persona (the TK-212/TK-214/TK-215
     # write/read seam). Voice-off and default-config boots construct this identically — it is not
-    # a voice feature.
-    live_persona = LivePersona(matrix_from_config(config), config.wombat_assistant_name)
+    # a voice feature. TK-243 (DEC-43): backed by a SettingsStore over the SAME dsn as every
+    # other Postgres seam here — construction is fully lazy (SettingsStore itself connects lazily,
+    # LivePersona touches it not at all until its first poll), so this stays safe on the
+    # replay_pending=False/connection-free posture too.
+    live_persona = LivePersona(
+        matrix_from_config(config), config.wombat_assistant_name, store=SettingsStore(dsn)
+    )
 
     # The v1 cold-boot substrate (Q-36/TK-14): in-memory journal/graph/latent + a FRESH
     # PathwayRegistry. This EXACT registry is handed to build_engine below, so the pathway

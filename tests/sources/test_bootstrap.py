@@ -475,9 +475,7 @@ def test_build_source_registry_threads_live_persona_and_speak_into_asr_source(
     consent_calls = _assert_never_triggers_consent(monkeypatch)
     captured_kwargs = _wire_spy_asr_source(monkeypatch)
     config = _make_config(asr_drop_dir=str(tmp_path))
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     speak_calls: list[str] = []
 
     registry = build_source_registry(

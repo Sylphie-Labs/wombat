@@ -91,18 +91,14 @@ def test_load_operating_params_personality_band_missing_raises(tmp_path: Path) -
 # ------------------------------------------------------------------------------------- AC4
 
 
-async def test_ac4_live_persona_proactivity_flip_changes_the_next_scored_item_no_restart(
-    tmp_path: Path,
-) -> None:
+async def test_ac4_live_persona_proactivity_flip_changes_the_next_scored_item_no_restart() -> None:
     """A ``LivePersona.set`` proactivity change lands on the very next scored item -- no
     restart, no new Gate (AC4). ``threshold_fn`` closes over ``live_persona.matrix
     .proactivity`` + the shipped ``personality_band`` and is evaluated fresh per item."""
     band = load_operating_params().personality_band  # shipped: floor=0.60, cap=0.95
     base_threshold = 0.75  # eff(BALANCED) == 0.75 exactly; eff(MINIMAL) == 0.85 (clamped-safe)
 
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     assert live_persona.matrix.proactivity is Proactivity.BALANCED  # DEFAULT_MATRIX
 
     # A CONSTANT urgency=0.80 for every item (gain=0.0) -- the only thing that changes between

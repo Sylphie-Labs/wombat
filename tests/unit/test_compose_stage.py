@@ -289,12 +289,8 @@ async def test_tk209_no_live_persona_preserves_the_frozen_default_instruction(
     )
 
 
-async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
-    tmp_path: Path,
-) -> None:
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns() -> None:
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     stage = ComposeStage(
         config=_config(), template_composer=TemplateComposer(), live_persona=live_persona
     )

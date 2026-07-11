@@ -13,7 +13,6 @@ import asyncio
 import base64
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -577,12 +576,8 @@ async def test_tk194_configured_assistant_name_renders_in_system_instruction_onl
 # ------------------------------------------------------------------------------------ TK-209
 
 
-async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
-    tmp_path: Path,
-) -> None:
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns() -> None:
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     writer = _RecordingWriter([])
     reply_intent = _reply_intent()
     stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW, live_persona=live_persona)

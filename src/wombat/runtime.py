@@ -87,19 +87,20 @@ _DREAM_SCHEDULE_RUN_ID_PREFIX = "wombat-dream-schedule"
 
 
 def _sweeper_clock(bundle: RuntimeBundle) -> Callable[[], datetime]:
-    """Build the Sweeper's ``clock=`` callable (DEC-37(g), TK-209).
+    """Build the Sweeper's ``clock=`` callable (DEC-37(g), TK-209; retargeted to Postgres by
+    TK-243/DEC-43).
 
     ``cogworx.runtime.sweeper.Sweeper.run_forever`` calls its injected ``clock`` exactly once per
-    interval beat (``sweeper.py:72-77``) — this piggybacks ``bundle.live_persona``'s cheap mtime
-    poll onto that EXISTING beat before returning the real wall clock, so an app edit to
-    ``wombat.settings.json``'s persona keys (the settings-app path, TK-197/TK-200) hot-applies
-    without a new scheduler. ``poll_settings_file()`` never raises (its own CON-3 guarantee), so
-    this stays a safe drop-in for the plain ``lambda: datetime.now(UTC)`` it replaces — cog-worx
-    itself is untouched.
+    interval beat (``sweeper.py:72-77``) — this piggybacks ``bundle.live_persona``'s cheap
+    ``wombat_settings`` value-diff poll onto that EXISTING beat before returning the real wall
+    clock, so an app edit to the persona keys (the settings-app path, TK-197/TK-200) hot-applies
+    without a new scheduler. ``poll_settings()`` never raises (its own CON-3 guarantee), so this
+    stays a safe drop-in for the plain ``lambda: datetime.now(UTC)`` it replaces — cog-worx itself
+    is untouched.
     """
 
     def _clock() -> datetime:
-        bundle.live_persona.poll_settings_file()
+        bundle.live_persona.poll_settings()
         return datetime.now(UTC)
 
     return _clock

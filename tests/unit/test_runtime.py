@@ -20,7 +20,6 @@ standing-loop cycle (AC5) live in ``tests/integration/test_serve_boot.py``.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import sys
 from collections.abc import Iterator, Sequence
@@ -68,6 +67,7 @@ from wombat.persona.builder import Mouth
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Directness, Humor
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
+from wombat.settings_store import SettingsStore
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.brief_compose_stage import BriefComposeStage
 from wombat.stages.compose import ComposeStage
@@ -83,10 +83,10 @@ def _config() -> WombatConfig:
     return WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com")
 
 
-def _live_persona(settings_path: str = "wombat.settings.json") -> LivePersona:
-    """A hand-rolled RuntimeBundle construction's LivePersona (TK-209) — every field below is
-    additive; this is not what these tests are exercising."""
-    return LivePersona(DEFAULT_MATRIX, "Steward", settings_path=settings_path)
+def _live_persona() -> LivePersona:
+    """A hand-rolled RuntimeBundle construction's LivePersona (TK-209) — store-less (TK-243), so
+    fully in-memory; every field below is additive, this is not what these tests are exercising."""
+    return LivePersona(DEFAULT_MATRIX, "Steward")
 
 
 @pytest.fixture()
@@ -1306,33 +1306,41 @@ def test_assemble_runtime_default_config_live_persona_renders_byte_identical_ins
     assert live_persona.instruction(Mouth.REFLECTION) == reflection_live
 
 
-# --- TK-209/DEC-37(g): the Sweeper clock callable also polls LivePersona -----------------------
+# --- TK-209/DEC-37(g): the Sweeper clock callable also polls LivePersona (retargeted to
+# wombat_settings by TK-243) ----------------------------------------------------------------
 
 
-async def test_sweeper_clock_polls_live_persona_and_still_returns_a_datetime(
-    tmp_path: Path,
-) -> None:
-    """AC4 (beat pickup): an external rewrite of the persona keys is picked up by ONE invocation
-    of the callable ``_drive_and_serve`` wires into ``Sweeper(clock=...)`` — tested directly here,
-    never by spinning ``run_forever``."""
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+class _FakeSettingsStore(SettingsStore):
+    """In-memory ``SettingsStore`` double (never opens a real connection — both public methods
+    are fully overridden), mirroring ``tests/persona/test_live.py``'s own fake."""
+
+    def __init__(self, *, initial: dict[str, Any] | None = None) -> None:
+        super().__init__(dsn="postgresql://unused/fake")
+        self._rows: dict[str, Any] = dict(initial or {})
+
+    def get_all(self) -> dict[str, Any]:
+        return dict(self._rows)
+
+    def put(self, mapping: dict[str, Any]) -> None:
+        self._rows.update(mapping)
+
+
+async def test_sweeper_clock_polls_live_persona_and_still_returns_a_datetime() -> None:
+    """AC4 (beat pickup): the first beat over a store already carrying the five persona keys
+    hydrates them — picked up by ONE invocation of the callable ``_drive_and_serve`` wires into
+    ``Sweeper(clock=...)`` — tested directly here, never by spinning ``run_forever``."""
+    store = _FakeSettingsStore(
+        initial={
+            "wombat_persona_brevity": "terse",
+            "wombat_persona_warmth": "reserved",
+            "wombat_persona_directness": "gentle",
+            "wombat_persona_humor": "dry",
+            "wombat_persona_proactivity": "balanced",
+        }
+    )
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
     bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
     bundle = replace(bundle, live_persona=live_persona)
-
-    # The settings-app path (TK-197/TK-200): an external process writes the five persona keys.
-    settings_path.write_text(
-        json.dumps(
-            {
-                "wombat_persona_brevity": "terse",
-                "wombat_persona_warmth": "reserved",
-                "wombat_persona_directness": "gentle",
-                "wombat_persona_humor": "dry",
-                "wombat_persona_proactivity": "balanced",
-            }
-        ),
-        encoding="utf-8",
-    )
 
     clock = runtime._sweeper_clock(bundle)
     now = clock()
@@ -1342,12 +1350,10 @@ async def test_sweeper_clock_polls_live_persona_and_still_returns_a_datetime(
     assert live_persona.matrix.directness is Directness.GENTLE
 
 
-async def test_sweeper_clock_no_settings_file_never_raises_and_returns_a_datetime() -> None:
-    """A boot with no wombat.settings.json at all (the common case) must not break the callable —
-    poll_settings_file() no-ops (mtime stays None -> None), the clock still returns now()."""
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path="wombat.settings.json.does-not-exist"
-    )
+async def test_sweeper_clock_store_less_persona_never_raises_and_returns_a_datetime() -> None:
+    """A store-less LivePersona (persistence honestly absent) must not break the callable —
+    poll_settings() no-ops, the clock still returns now()."""
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")
     bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
     bundle = replace(bundle, live_persona=live_persona)
 

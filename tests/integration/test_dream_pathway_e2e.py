@@ -281,9 +281,7 @@ def _build_stack_with_raising_dream(
     )
     stub_persona_stage = DreamPersonaStage(
         event_log=BehaviorEventLog(_DSN),
-        live_persona=LivePersona(
-            DEFAULT_MATRIX, "test", settings_path="__unused_dream_pathway_e2e.settings.json"
-        ),
+        live_persona=LivePersona(DEFAULT_MATRIX, "test"),  # store-less (TK-243), fully in-memory
     )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"

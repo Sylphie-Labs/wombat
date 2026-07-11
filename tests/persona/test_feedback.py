@@ -240,9 +240,7 @@ async def test_a_command_utterance_is_consumed_and_records_no_feedback_event(
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
 
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     command_hook = make_persona_command_hook(live_persona, speak=None)
     recorder = _SpyRecorder()
     feedback_hook = make_persona_feedback_hook(recorder, clock=_clock)

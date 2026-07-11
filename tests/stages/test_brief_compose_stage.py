@@ -396,12 +396,8 @@ async def test_tk194_configured_assistant_name_renders_in_system_instruction_onl
 # --- TK-209: OPTIONAL live_persona renders at RENDER time and hot-applies between turns ----------
 
 
-async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns(
-    tmp_path: Path,
-) -> None:
-    live_persona = LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_turns() -> None:
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
     sealed = _sealed_artifact()
     stage = BriefComposeStage(config=_config(), tz=_TZ, live_persona=live_persona)
 

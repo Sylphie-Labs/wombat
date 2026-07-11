@@ -256,10 +256,8 @@ async def test_one_failing_file_moves_to_failed_the_other_still_emits_and_poll_n
 # --------------------------------------------------------------------------------- TK-212: AC1
 
 
-def _live_persona(tmp_path: Path) -> LivePersona:
-    return LivePersona(
-        DEFAULT_MATRIX, "Steward", settings_path=str(tmp_path / "wombat.settings.json")
-    )
+def _live_persona() -> LivePersona:
+    return LivePersona(DEFAULT_MATRIX, "Steward")  # store-less (TK-243), fully in-memory
 
 
 class _RecordingSpeak:
@@ -275,11 +273,10 @@ async def test_matched_command_is_consumed_never_enqueued_stepped_matrix_one_ack
 ) -> None:
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
-    settings_dir = tmp_path / "settings"
-    settings_dir.mkdir()
     (drop_dir / "note.wav").write_bytes(b"be-warmer-bytes")
 
-    live_persona = _live_persona(settings_dir)
+    live_persona = _live_persona()
+    caplog.clear()  # drop the store-less construction warning -- irrelevant to this order-assert
     speak = _RecordingSpeak()
     hook = make_persona_command_hook(live_persona, speak)
 
@@ -320,7 +317,7 @@ async def test_matched_command_is_consumed_never_enqueued_stepped_matrix_one_ack
 async def test_matched_reset_command_uses_the_fixed_reset_ack_template(tmp_path: Path) -> None:
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
-    live_persona = _live_persona(tmp_path)
+    live_persona = _live_persona()
     speak = _RecordingSpeak()
     hook = make_persona_command_hook(live_persona, speak)
     (drop_dir / "note.wav").write_bytes(b"reset-bytes")
@@ -350,7 +347,7 @@ async def test_unmatched_transcript_yields_a_byte_identical_source_event_even_wi
     SourceEvent payload is pinned byte-identical to pre-ticket (no command_hook) behavior."""
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
-    live_persona = _live_persona(tmp_path)
+    live_persona = _live_persona()
     hook = make_persona_command_hook(live_persona, speak=None)
     audio_bytes = b"unmatched-utterance-bytes"
     (drop_dir / "note.wav").write_bytes(audio_bytes)
@@ -384,7 +381,8 @@ async def test_live_persona_set_raising_still_consumes_logs_loud_and_keeps_proce
 ) -> None:
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
-    live_persona = _live_persona(tmp_path)
+    live_persona = _live_persona()
+    caplog.clear()  # drop the store-less construction-time warning -- this test counts set()'s own
     speak = _RecordingSpeak()
     hook = make_persona_command_hook(live_persona, speak)
 
@@ -428,7 +426,8 @@ async def test_speak_raising_degrades_loud_without_blocking_the_applied_persona_
 ) -> None:
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
-    live_persona = _live_persona(tmp_path)
+    live_persona = _live_persona()
+    caplog.clear()  # drop the store-less construction warning -- this test counts the hook's own
 
     def _boom_speak(text: str) -> None:
         raise RuntimeError("simulated speak failure")

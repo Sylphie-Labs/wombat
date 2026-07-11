@@ -3,21 +3,21 @@
 In-memory/monkeypatched substrate, ZERO network: mirrors ``tests/pathways/
 test_dream_behavior_log_stage.py``'s own idiom — ``event_log`` is a REAL ``BehaviorEventLog`` over
 an unreachable DSN (lazy — never actually connects) with ``events_between`` monkeypatched to a
-recording/canned/raising double; ``live_persona`` is a REAL ``LivePersona`` over a ``tmp_path``
-settings file (the genuine pg round-trip for the event log lives in
+recording/canned/raising double; ``live_persona`` is a REAL ``LivePersona`` over an in-memory
+``SettingsStore`` double (TK-243 — the genuine pg round-trip for the event log lives in
 ``tests/behavior/test_event_log.py``, pg-gated; this module is about ``DreamPersonaStage``'s own
 read/decide/apply/journal-line logic).
 
   AC1 (row mapping + apply): two same-direction in-window ``persona_feedback`` rows step the axis
       exactly once, clamped via ``wombat.persona.commands.apply`` — proven on ``live_persona.
-      matrix``, the persisted ``wombat.settings.json`` persona key, and a caplog INFO line naming
+      matrix``, the persisted ``wombat_settings`` persona key, and a caplog INFO line naming
       axis/direction/counts; a ``WOMBAT_TEST_PG_DSN``-gated variant drives it through a real
       ``BehaviorEventLog``. A non-``persona_feedback`` row (e.g. an ``OUTCOME_*`` row a sibling
       writer left) is never counted.
   AC2 (conservative-by-construction): mixed signals, a single (below-threshold) signal, and an
-      empty window move NOTHING — ``live_persona.set`` is never called (no settings file write).
+      empty window move NOTHING — ``live_persona.set`` is never called (no store write).
   AC3 (pin custody, DEC-37(h)): a pin (created either via ``set()``'s default ``explicit=True`` or
-      via a ``poll_settings_file``-detected app edit) blocks a qualifying signal within its 7-day
+      via a ``poll_settings``-detected app edit) blocks a qualifying signal within its 7-day
       window but no longer once the pin is 8+ days old; a dream nudge (``explicit=False``) never
       creates a pin, so a second consecutive night's fresh signal steps again.
   AC4 (never-block): a raising collaborator (event log read, or a raising ``live_persona.set``) is
@@ -28,12 +28,11 @@ read/decide/apply/journal-line logic).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
@@ -55,10 +54,28 @@ from wombat.pathways.dream_pathway import (
 )
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Directness, Warmth
+from wombat.settings_store import SettingsStore
 from wombat.substrate import cold_boot_bundle
 
 _NOW = datetime(2026, 7, 10, 3, 0, 0, tzinfo=UTC)
 _UNREACHABLE_DSN = "postgresql://nonexistent-host-should-never-be-dialed:1/db"
+
+
+class _FakeStore(SettingsStore):
+    """In-memory ``SettingsStore`` double (never opens a real connection — both public methods
+    are fully overridden), mirroring ``tests/persona/test_live.py``'s own fake."""
+
+    def __init__(self, *, initial: dict[str, Any] | None = None) -> None:
+        super().__init__(dsn="postgresql://unused/fake")
+        self._rows: dict[str, Any] = dict(initial or {})
+        self.put_calls: list[dict[str, Any]] = []
+
+    def get_all(self) -> dict[str, Any]:
+        return dict(self._rows)
+
+    def put(self, mapping: dict[str, Any]) -> None:
+        self.put_calls.append(dict(mapping))
+        self._rows.update(mapping)
 
 
 def _row(
@@ -106,10 +123,10 @@ def _current(live_persona: LivePersona, axis: str) -> object:
 
 
 async def test_ac1_two_same_direction_tokens_step_the_axis_once_persisted_and_journaled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
     # DEFAULT_MATRIX.brevity is TERSE (the floor) — "too terse" is brevity/up, a VISIBLE step.
     rows = (_row("too terse"), _row("too terse"))
     event_log, calls = _fake_event_log(monkeypatch, rows)
@@ -132,9 +149,8 @@ async def test_ac1_two_same_direction_tokens_step_the_axis_once_persisted_and_jo
     # live_persona's in-memory matrix reflects the clamped step.
     assert live_persona.matrix.brevity is Brevity.BALANCED
 
-    # Persisted to wombat.settings.json (LivePersona.set's own read-modify-write).
-    saved = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert saved["wombat_persona_brevity"] == "balanced"
+    # Persisted to wombat_settings (LivePersona.set's own key-level upsert).
+    assert store.get_all()["wombat_persona_brevity"] == "balanced"
 
     # A dream nudge (explicit=False) never stamps a pin.
     assert live_persona.pinned_axes(_NOW) == frozenset()
@@ -151,10 +167,10 @@ async def test_ac1_two_same_direction_tokens_step_the_axis_once_persisted_and_jo
 
 
 async def test_ac1_a_non_persona_feedback_row_is_never_counted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
     # A sibling writer's OUTCOME_* row happens to share the SAME phrase-shaped outcome_label
     # string — it must never be counted since its event_type isn't 'persona_feedback'.
     rows = (
@@ -169,7 +185,7 @@ async def test_ac1_a_non_persona_feedback_row_is_never_counted(
     assert isinstance(result, Transition)
     assert result.output.data == {"stepped": []}
     assert live_persona.matrix == DEFAULT_MATRIX
-    assert not settings_path.exists()  # live_persona.set was never called
+    assert store.put_calls == []  # live_persona.set was never called
 
 
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
@@ -196,15 +212,12 @@ def clean_table() -> None:
 
 
 @_requires_pg
-async def test_ac1_pg_gated_real_behavior_event_log_round_trip(
-    tmp_path: Path, clean_table: None
-) -> None:
+async def test_ac1_pg_gated_real_behavior_event_log_round_trip(clean_table: None) -> None:
     assert _DSN is not None
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
-    store = BehaviorEventLog(_DSN)
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward")  # store-less — not what this AC covers
+    event_store = BehaviorEventLog(_DSN)
     try:
-        store.upsert(
+        event_store.upsert(
             idempotency_key="persona_feedback:one",
             event_type="persona_feedback",
             source_id="asr",
@@ -212,7 +225,7 @@ async def test_ac1_pg_gated_real_behavior_event_log_round_trip(
             outcome_label="too terse",
             duration_seconds=None,
         )
-        store.upsert(
+        event_store.upsert(
             idempotency_key="persona_feedback:two",
             event_type="persona_feedback",
             source_id="asr",
@@ -221,13 +234,13 @@ async def test_ac1_pg_gated_real_behavior_event_log_round_trip(
             duration_seconds=None,
         )
 
-        stage = DreamPersonaStage(event_log=store, live_persona=live_persona)
+        stage = DreamPersonaStage(event_log=event_store, live_persona=live_persona)
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
         assert isinstance(result, Transition)
         assert live_persona.matrix.brevity is Brevity.BALANCED
     finally:
-        store.close()
+        event_store.close()
 
 
 # ================================================================================================
@@ -235,11 +248,9 @@ async def test_ac1_pg_gated_real_behavior_event_log_round_trip(
 # ================================================================================================
 
 
-async def test_ac2_mixed_signals_move_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+async def test_ac2_mixed_signals_move_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
     event_log, _calls = _fake_event_log(monkeypatch, (_row("too chatty"), _row("too terse")))
     stage = DreamPersonaStage(event_log=event_log, live_persona=live_persona)
 
@@ -248,14 +259,14 @@ async def test_ac2_mixed_signals_move_nothing(
     assert isinstance(result, Transition)
     assert result.output.data == {"stepped": []}
     assert live_persona.matrix == DEFAULT_MATRIX
-    assert not settings_path.exists()
+    assert store.put_calls == []
 
 
 async def test_ac2_single_below_threshold_signal_moves_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
     event_log, _calls = _fake_event_log(monkeypatch, (_row("too terse"),))
     stage = DreamPersonaStage(event_log=event_log, live_persona=live_persona)
 
@@ -264,14 +275,12 @@ async def test_ac2_single_below_threshold_signal_moves_nothing(
     assert isinstance(result, Transition)
     assert result.output.data == {"stepped": []}
     assert live_persona.matrix == DEFAULT_MATRIX
-    assert not settings_path.exists()
+    assert store.put_calls == []
 
 
-async def test_ac2_empty_window_moves_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+async def test_ac2_empty_window_moves_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
     event_log, _calls = _fake_event_log(monkeypatch, ())
     stage = DreamPersonaStage(event_log=event_log, live_persona=live_persona)
 
@@ -280,7 +289,7 @@ async def test_ac2_empty_window_moves_nothing(
     assert isinstance(result, Transition)
     assert result.output.data == {"stepped": []}
     assert live_persona.matrix == DEFAULT_MATRIX
-    assert not settings_path.exists()
+    assert store.put_calls == []
 
 
 # ================================================================================================
@@ -289,18 +298,16 @@ async def test_ac2_empty_window_moves_nothing(
 
 
 async def test_ac3_a_pin_created_via_set_blocks_within_seven_days_but_not_after(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
 
     # An explicit (default) set bumps brevity — a real TK-212 voice-command-shaped call — and
     # stamps a pin for brevity at "now" (wall-clock).
     bumped = replace(DEFAULT_MATRIX, brevity=Brevity.BALANCED)
     live_persona.set(bumped)
-    stamped_at = datetime.fromisoformat(
-        json.loads(settings_path.read_text(encoding="utf-8"))["wombat_persona_pins"]["brevity"]
-    )
+    stamped_at = datetime.fromisoformat(store.get_all()["wombat_persona_pins"]["brevity"])
 
     # Two qualifying "up" signals would step brevity BALANCED -> EXPANSIVE if unpinned.
     rows = (_row("too terse"), _row("too terse"))
@@ -325,22 +332,19 @@ async def test_ac3_a_pin_created_via_set_blocks_within_seven_days_but_not_after(
 
 
 async def test_ac3_a_pin_created_via_poll_detected_edit_blocks_within_seven_days_but_not_after(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    store = _FakeStore()
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=store)
+    live_persona.poll_settings()  # first beat -- establishes the cursor over an empty table
 
-    # An app-edit (TK-200 UI path): the settings file changes externally, then the standing
-    # Sweeper beat picks it up via poll_settings_file — itself an "explicit" edit (TK-214).
+    # An app-edit (TK-200 UI path): an external writer updates the row, then the standing
+    # Sweeper beat picks it up via poll_settings — itself an "explicit" edit (TK-214).
     # BLUNT (the ceiling) leaves room for "too blunt" (directness/down) to move if unpinned.
-    settings_path.write_text(json.dumps({"wombat_persona_directness": "blunt"}), encoding="utf-8")
-    live_persona.poll_settings_file()
+    store.put({"wombat_persona_directness": "blunt"})
+    live_persona.poll_settings()
     assert live_persona.matrix.directness is Directness.BLUNT
-    stamped_at = datetime.fromisoformat(
-        json.loads(settings_path.read_text(encoding="utf-8"))["wombat_persona_pins"][
-            "directness"
-        ]
-    )
+    stamped_at = datetime.fromisoformat(store.get_all()["wombat_persona_pins"]["directness"])
 
     rows = (_row("too blunt"), _row("too blunt"))
     event_log, _calls = _fake_event_log(monkeypatch, rows)
@@ -364,10 +368,9 @@ async def test_ac3_a_pin_created_via_poll_detected_edit_blocks_within_seven_days
 
 
 async def test_ac3_a_dream_nudge_never_pins_a_second_night_can_step_again(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=_FakeStore())
     rows = (_row("too stiff"), _row("too stiff"))  # warmth/up
     event_log, _calls = _fake_event_log(monkeypatch, rows)
     stage = DreamPersonaStage(event_log=event_log, live_persona=live_persona)
@@ -393,10 +396,9 @@ async def test_ac3_a_dream_nudge_never_pins_a_second_night_can_step_again(
 
 
 async def test_ac4_raising_event_log_is_caught_logged_and_still_transitions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=_FakeStore())
     event_log, _calls = _fake_event_log(
         monkeypatch, (), raises=RuntimeError("simulated event-log read failure — AC4")
     )
@@ -416,10 +418,9 @@ async def test_ac4_raising_event_log_is_caught_logged_and_still_transitions(
 
 
 async def test_ac4_raising_live_persona_set_is_caught_logged_and_still_transitions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=_FakeStore())
 
     def _boom(self: LivePersona, matrix: object, *, explicit: bool = True) -> None:
         raise RuntimeError("simulated LivePersona.set failure — AC4")
@@ -462,12 +463,11 @@ class _PassthroughStage:
 
 
 async def test_ac4_engine_drive_completes_even_when_the_event_log_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End-to-end: a REAL ``Engine`` drives ``wombat.dream`` through ``dream_persona`` with a
     raising event log — the run still reaches COMPLETED (dream_run)."""
-    settings_path = tmp_path / "wombat.settings.json"
-    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", settings_path=str(settings_path))
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", store=_FakeStore())
     event_log, _calls = _fake_event_log(
         monkeypatch, (), raises=RuntimeError("simulated event-log read failure — AC4 engine")
     )

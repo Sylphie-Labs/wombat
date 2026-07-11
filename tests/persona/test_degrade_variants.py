@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import itertools
 from datetime import UTC, datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -57,8 +56,8 @@ _ITEM_KIND = ItemKind.GENERIC
 _ITEM_ID = "i-1"
 
 
-def _live_persona(tmp_path: Path, matrix: PersonaMatrix = DEFAULT_MATRIX) -> LivePersona:
-    return LivePersona(matrix, "Steward", settings_path=str(tmp_path / "wombat.settings.json"))
+def _live_persona(matrix: PersonaMatrix = DEFAULT_MATRIX) -> LivePersona:
+    return LivePersona(matrix, "Steward")  # store-less (TK-243), fully in-memory
 
 
 def _matrix_with(
@@ -104,10 +103,8 @@ def test_ac1_template_composer_no_live_persona_renders_byte_identical_pin() -> N
     assert composer.render(_ITEM_KIND, _PAYLOAD) == "[generic] a: 1; b: 2"
 
 
-def test_ac1_template_composer_default_matrix_live_persona_renders_byte_identical(
-    tmp_path: Path,
-) -> None:
-    composer = TemplateComposer(live_persona=_live_persona(tmp_path))
+def test_ac1_template_composer_default_matrix_live_persona_renders_byte_identical() -> None:
+    composer = TemplateComposer(live_persona=_live_persona())
 
     assert composer.render(_ITEM_KIND, _PAYLOAD) == "[generic] a: 1; b: 2"
 
@@ -121,12 +118,10 @@ def test_ac1_persona_degrade_wrap_default_matrix_is_identity() -> None:
 # --------------------------------------------------------------------------------------- AC2
 
 
-def test_ac2_template_composer_balanced_then_expansive_via_live_persona_flip(
-    tmp_path: Path,
-) -> None:
+def test_ac2_template_composer_balanced_then_expansive_via_live_persona_flip() -> None:
     """Same composer instance, matrix flipped between two ``render`` calls — proves the
     render-time (hot-apply) read, not just a constructor-frozen snapshot."""
-    live_persona = _live_persona(tmp_path, _matrix_with(brevity=Brevity.BALANCED))
+    live_persona = _live_persona(_matrix_with(brevity=Brevity.BALANCED))
     composer = TemplateComposer(live_persona=live_persona)
 
     balanced = composer.render(_ITEM_KIND, _PAYLOAD)
@@ -205,10 +200,10 @@ _DIRECTNESS_HUMOR_SWEEP = list(itertools.product(Directness, Humor))
 
 @pytest.mark.parametrize(("directness", "humor"), _DIRECTNESS_HUMOR_SWEEP)
 def test_ac3_template_composer_directness_and_humor_never_change_output(
-    directness: Directness, humor: Humor, tmp_path: Path
+    directness: Directness, humor: Humor
 ) -> None:
     matrix = _matrix_with(directness=directness, humor=humor)
-    composer = TemplateComposer(live_persona=_live_persona(tmp_path, matrix))
+    composer = TemplateComposer(live_persona=_live_persona(matrix))
 
     assert composer.render(_ITEM_KIND, _PAYLOAD) == "[generic] a: 1; b: 2"
 
@@ -226,13 +221,13 @@ def test_ac3_persona_degrade_wrap_directness_and_humor_never_change_output(
 # ----------------------------------------------------------------------- drive-level integration
 
 
-async def test_degraded_compose_stage_run_with_balanced_live_persona_emits_balanced_template(
-    tmp_path: Path,
-) -> None:
+async def test_degraded_compose_stage_run_with_balanced_live_persona_emits_balanced_template() -> (
+    None
+):
     """Cheap drive-level proof: a degraded ``ComposeStage`` run, wired with the SAME
     ``live_persona`` bootstrap shares between the stage and its ``TemplateComposer`` (Q-107(b)),
     emits the BALANCED wrapper variant in its ``composed_output`` artifact."""
-    live_persona = _live_persona(tmp_path, _matrix_with(brevity=Brevity.BALANCED))
+    live_persona = _live_persona(_matrix_with(brevity=Brevity.BALANCED))
     model = FakeModel(raises=ConnectionError("503 Service Unavailable"))
     ctx = StageContextFake(
         now_fn=lambda: _FIXED_NOW,
