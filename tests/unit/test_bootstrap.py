@@ -2,17 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from datetime import UTC, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from cogworx.claims.provenance import Artifact, Provenance
+from cogworx.loop.graph import StageGraph
+from cogworx.loop.pathway import PathwayRegistry
+from cogworx.loop.result import StageResult, Transition
+from cogworx.loop.state import RunStatus
+from cogworx.model.registry import ModelRegistry
+from cogworx.runtime.engine import Engine
+from cogworx.testing.doubles import InMemoryGraphStore, InMemoryJournal, InMemoryLatentStore
 
+from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
-from wombat.bootstrap import MODEL_PROFILE, build_engine, reset_engine
+from wombat.bootstrap import (
+    _ENGINE_MAX_STEPS,
+    MODEL_PROFILE,
+    _log_engine_event,
+    build_engine,
+    reset_engine,
+)
 from wombat.config import ConfigurationError, WombatConfig, load_config
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
+from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
+from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.substrate import cold_boot_bundle
 
 # The ten seams the Engine must carry after composition (4 required substrate + 6 optional).
@@ -267,3 +286,132 @@ def test_assemble_runtime_reflection_kb_load_failure_boots_with_empty_kb_and_lou
     ]
     assert len(matching) == 1
     assert matching[0].levelname == "WARNING"
+
+
+# --- CRF-3 (DEC-41(e)): build_engine pins max_steps=100_000 + a logging event_sink --------------
+# so a run's terminal RUN_FAILED (e.g. the max_steps ceiling tripping) is never dropped into a
+# None sink and dies silent.
+
+
+def test_ac1_build_engine_pins_max_steps_and_wombat_event_sink_never_none() -> None:
+    engine = build_engine(cold_boot_bundle(), config=_config())
+    assert engine._max_steps == 100_000 == _ENGINE_MAX_STEPS
+    assert engine._event_sink is _log_engine_event
+    assert engine._event_sink is not None
+
+
+class _LooperStage:
+    """A trivial self-looping stage (AC3 harness): every visit is a plain ``Transition`` back to
+    itself, never a ``Wait`` — so ``seq`` climbs by one on every drive iteration until the
+    engine's ``max_steps`` ceiling trips. ``looper_terminal`` is a declared-but-never-taken stub,
+    mirroring ``BriefTimerTerminalStage``'s precedent for satisfying the "graph can end"
+    structural invariant without changing runtime behavior.
+    """
+
+    name = "looper"
+    transitions: tuple[str, ...] = ("looper", "looper_terminal")
+
+    async def run(self, ctx: object) -> StageResult:
+        return Transition(
+            to="looper",
+            output=Artifact(
+                kind="tick",
+                produced_by="looper",
+                provenance=_system_provenance(),
+                data={},
+            ),
+        )
+
+
+class _LooperTerminalStage:
+    name = "looper_terminal"
+    transitions: tuple[str, ...] = ()
+
+    async def run(self, ctx: object) -> StageResult:  # pragma: no cover - never reached
+        raise RuntimeError("looper_terminal must never be entered")
+
+
+def _looper_pathway() -> StageGraph:
+    return StageGraph([_LooperStage(), _LooperTerminalStage()], entry="looper")
+
+
+def _system_provenance() -> Provenance:
+    return Provenance(source="system", confidence=1.0, recorded_at=datetime.now(UTC))
+
+
+async def test_ac3_max_steps_ceiling_trip_logs_error_naming_run_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A harness Engine built with a tiny ``max_steps`` and the SAME wombat sink
+    (``bootstrap._log_engine_event``): when the ceiling trips, the run flips FAILED and the sink
+    logs an ERROR record naming the run_id — never a silent death."""
+    pathways = PathwayRegistry()
+    pathways.register("test.looper", _looper_pathway())
+    models = ModelRegistry()
+    # The looper stage never touches ctx.model(), but context assembly eagerly assembles ONE
+    # regardless — a factory slot satisfies that eager assembly without ever being called.
+    models.register_factory("default", lambda guard: FakeModel())
+    engine = Engine(
+        models=models,
+        journal=InMemoryJournal(),
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        max_steps=3,
+        event_sink=_log_engine_event,
+    )
+    run_id = "ceiling-trip"
+
+    with caplog.at_level(logging.ERROR):
+        state = await engine.run(
+            run_id=run_id,
+            session_id=run_id,
+            pathway_id="test.looper",
+            initial=Artifact(
+                kind="tick",
+                produced_by="test",
+                provenance=_system_provenance(),
+                data={},
+            ),
+        )
+
+    assert state.status is RunStatus.FAILED
+    matching = [
+        r for r in caplog.records if r.levelname == "ERROR" and run_id in r.getMessage()
+    ]
+    assert len(matching) == 1
+
+
+async def test_ac2_brief_timer_shaped_self_park_survives_2000_wakes_never_fails() -> None:
+    """AC2: an engine built with ``build_engine``'s kwargs (``max_steps=100_000`` + the wombat
+    sink) lets a ``BriefTimerStage``-shaped eternal ``Wait(to=self)`` run (the TK-97/TK-52 shape)
+    survive far past cog-worx's 1000-step default — driven past 2000 wakes via
+    ``engine.fire_timer``, the run status stays WAITING, never FAILED."""
+
+    async def _never_called_fire_brief(now: datetime) -> object:  # pragma: no cover
+        raise AssertionError("fire_brief must never be called -- ran_today() is always True")
+
+    timer_stage = BriefTimerStage(
+        fire_brief=_never_called_fire_brief,  # type: ignore[arg-type]
+        ran_today=lambda: True,  # always "already ran" -- pure re-park, no fire, every wake
+        mark_ran=lambda: 0,
+        tz=ZoneInfo("UTC"),
+        brief_time=time(7, 0),
+    )
+    bundle = cold_boot_bundle()
+    bundle.pathways.register("test.brief_schedule", build_brief_schedule_pathway(timer_stage))
+    engine = build_engine(bundle, config=_config())
+
+    run_id = "self-park-run"
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    state = await engine.run(
+        run_id=run_id,
+        session_id=run_id,
+        pathway_id="test.brief_schedule",
+        initial=brief_timer_tick_artifact(now),
+    )
+    assert state.status is RunStatus.WAITING
+
+    for _ in range(2000):
+        state = await engine.fire_timer(run_id)
+        assert state.status is RunStatus.WAITING  # never FAILED, across every one of 2000 wakes

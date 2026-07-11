@@ -134,6 +134,7 @@ from cogworx.capability.registry import Registry
 from cogworx.coherence.reconciler import CoherenceReconciler
 from cogworx.context.personality import PersonalityProfile
 from cogworx.context.rules import RuleSet
+from cogworx.coordination.events import Event, EventType
 from cogworx.cost.budget import BudgetPolicy
 from cogworx.knowledge.scopes import ScopeRegistry
 from cogworx.loop.pathway import PathwayRegistry
@@ -258,8 +259,32 @@ _DRAIN_POLL_INTERVAL_SECONDS = 5.0
 # process's UserModel reads/writes under.
 _RUNTIME_USER_ID = "wombat-user"
 
+# CRF-3 (DEC-41(e)): the Engine's structural step ceiling (cog-worx engine.py names unbounded
+# loops the anti-pattern; the DEFAULT is 1000) MUST stay a real runaway-loop guard while never
+# tripping on a legitimate eternal self-park -- BriefTimerStage (TK-97) and DreamTimerStage
+# (TK-52) are deliberately-eternal Wait(to=self) runs that accrue exactly one committed step per
+# Sweeper re-drive, so the once-daily cadence would exhaust the cog-worx default after ~1000 days.
+# 100_000 wakes outlives any plausible process lifetime while still catching a genuine runaway.
+_ENGINE_MAX_STEPS = 100_000
+
 _lock = threading.Lock()
 _engine: Engine | None = None
+
+
+def _log_engine_event(event: Event) -> None:
+    """The wombat ``event_sink`` (CRF-3, DEC-41(e)): the ONE place an ``Engine``-emitted ``Event``
+    is observed, so a run's terminal failure is never silent. ``RUN_FAILED`` (e.g. the
+    ``max_steps`` ceiling tripping) logs LOUD at ERROR naming the ``run_id`` -- previously routed
+    to a ``None`` sink and dropped. Every other lifecycle event logs at DEBUG only: this sink is a
+    safety net against silent death, not a general-purpose event log.
+    """
+    if event.type is EventType.RUN_FAILED:
+        logger.error(
+            "cog-worx Engine: run %s FAILED (RUN_FAILED event) -- the run will not complete",
+            event.run_id,
+        )
+    else:
+        logger.debug("cog-worx Engine: %s run_id=%s", event.type, event.run_id)
 
 
 def _deepseek_spec(config: WombatConfig) -> ModelSpec:
@@ -336,6 +361,11 @@ def build_engine(
                 recall_stack=RecallStack(channels=[]),
                 personality=_personality(),
                 rules=RuleSet(),
+                # CRF-3 (DEC-41(e)): a real (not cog-worx's 1000-step default) runaway-loop
+                # ceiling, plus a logging sink so a RUN_FAILED (or any other) event is never
+                # dropped into a None sink -- no run ever dies silent.
+                max_steps=_ENGINE_MAX_STEPS,
+                event_sink=_log_engine_event,
             )
         return _engine
 
