@@ -17,6 +17,16 @@ the source id, the source is added to ``degraded_sources``, and its OWN loop kee
 later poll may recover) — other sources' loops are separate asyncio tasks, so one source's
 failure never stops or crashes another's.
 
+CRF-4: the enqueue() calls in the same loop iteration are guarded the same way, riding the
+two-arm ``QueueFullError``-then-``Exception`` precedent at ``pattern_detector`` (TK-204/CR3-2) —
+a full queue or any enqueue-time error is logged loud naming the source and the dropped event
+key, marks the source degraded, and the loop continues (a pull source redelivers on a later
+poll; a push-buffered event is honestly dropped-and-logged). The degraded mark only clears on an
+iteration where every enqueue in that poll succeeded. ``stop()`` awaits every task inside a
+try/except rather than a bare ``CancelledError`` suppress, so a task left dead by a non-cancel
+exception can never abort the remaining ``stop()`` iterations or the runtime's teardown
+``finally``.
+
 TK-72/Q-59 SANCTIONED RIDER: the interim ``f"{source.id}:{event.event_key}"`` join has been
 replaced by TK-12's canonical ``item_identity.idempotency_key(source_id, source_natural_id)``
 derivation — the ONE place every dedup path (queue, gate pending-set, outcome binding) agrees
@@ -27,12 +37,11 @@ source (``gcal``, TK-72); registry behavior is otherwise unchanged.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import Protocol
 
 from wombat.domain.item_identity import idempotency_key as derive_key
-from wombat.queue import EnqueueResult, QueueItem
+from wombat.queue import EnqueueResult, QueueFullError, QueueItem
 from wombat.sources.base import InputSource
 
 _log = logging.getLogger(__name__)
@@ -84,9 +93,17 @@ class SourceRegistry:
         """Cancel every poll loop task and stop every registered source (AC2)."""
         for task in self._tasks.values():
             task.cancel()
-        for task in self._tasks.values():
-            with contextlib.suppress(asyncio.CancelledError):
+        for source_id, task in self._tasks.items():
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                _log.exception(
+                    "source %s: poll loop task raised on teardown; suppressing so stop() "
+                    "finishes awaiting the remaining tasks",
+                    source_id,
+                )
         self._tasks.clear()
         for source in self._sources.values():
             await source.stop()
@@ -100,14 +117,35 @@ class SourceRegistry:
                 _log.exception("source %s: poll() raised; marking degraded", source.id)
                 self._degraded.add(source.id)
             else:
-                self._degraded.discard(source.id)
+                iteration_ok = True
                 for event in events:
-                    self._enqueue.enqueue(
-                        QueueItem(
-                            idempotency_key=derive_key(source.id, event.event_key),
-                            payload=event.payload,
+                    try:
+                        self._enqueue.enqueue(
+                            QueueItem(
+                                idempotency_key=derive_key(source.id, event.event_key),
+                                payload=event.payload,
+                            )
                         )
-                    )
+                    except QueueFullError:
+                        _log.error(
+                            "source %s: enqueue failed — wombat_queue is at capacity; event "
+                            "%r is dropped",
+                            source.id,
+                            event.event_key,
+                            exc_info=True,
+                        )
+                        self._degraded.add(source.id)
+                        iteration_ok = False
+                    except Exception:
+                        _log.exception(
+                            "source %s: enqueue failed unexpectedly; event %r is dropped",
+                            source.id,
+                            event.event_key,
+                        )
+                        self._degraded.add(source.id)
+                        iteration_ok = False
+                if iteration_ok:
+                    self._degraded.discard(source.id)
             await asyncio.sleep(source.poll_interval_seconds)
 
 

@@ -18,6 +18,15 @@ non-flaky without sleeping for real wall-clock production intervals.
   AC3 two sources with different intervals -> each is polled on its own interval.
   AC4 poll() raises -> logged with the source id, that source is marked degraded, the registry
       keeps polling the other source without crashing.
+
+CRF-4 adds coverage for the enqueue-seam guard riding the pattern_detector (TK-204/CR3-2)
+two-arm precedent, plus stop()'s teardown-proof task awaiting:
+  AC1 enqueue() raises QueueFullError every interval -> poll task survives, logged naming the
+      source, source marked degraded.
+  AC2 enqueue() raises a generic Exception then recovers -> task survives; a later
+      fully-successful poll+enqueue iteration clears the degraded mark.
+  AC3 a poll loop task already dead with a stored non-CancelledError exception -> stop() logs
+      and suppresses it, still awaits every remaining task and calls every source's stop().
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ import psycopg
 import pytest
 
 from wombat.domain.item_identity import idempotency_key as derive_key
-from wombat.queue import EnqueueResult, QueueItem, WombatQueue, ensure_schema
+from wombat.queue import EnqueueResult, QueueFullError, QueueItem, WombatQueue, ensure_schema
 from wombat.sources.base import SourceEvent
 from wombat.sources.registry import SourceRegistry
 
@@ -88,6 +97,24 @@ class _FakeEnqueuer:
         self.items: list[QueueItem] = []
 
     def enqueue(self, item: QueueItem) -> EnqueueResult:
+        self.items.append(item)
+        return EnqueueResult.QUEUED
+
+
+class _RaisingEnqueuer:
+    """CRF-4: raises ``exc`` on enqueue() until (and including) ``fail_until_call``, then
+    succeeds — mirrors ``_StubSource.fail_with``/``fail_until_call`` for the enqueue seam."""
+
+    def __init__(self, exc: Exception, *, fail_until_call: int = 0) -> None:
+        self.exc = exc
+        self.fail_until_call = fail_until_call  # 0 = fail every call
+        self.calls = 0
+        self.items: list[QueueItem] = []
+
+    def enqueue(self, item: QueueItem) -> EnqueueResult:
+        self.calls += 1
+        if self.fail_until_call == 0 or self.calls <= self.fail_until_call:
+            raise self.exc
         self.items.append(item)
         return EnqueueResult.QUEUED
 
@@ -213,6 +240,90 @@ async def test_tk171_degraded_source_clears_from_degraded_sources_on_a_later_suc
         assert "flaky" not in registry.degraded_sources
     finally:
         await registry.stop()
+
+
+async def test_crf4_ac1_queuefull_enqueue_keeps_task_alive_and_marks_degraded(
+    caplog: Any,
+) -> None:
+    """CRF-4 AC1: enqueue() raising QueueFullError, every interval, does NOT kill the poll
+    task (unlike the pre-fix bare try/except around only poll()) — it is logged naming the
+    source and the source is marked degraded."""
+    enqueuer = _RaisingEnqueuer(QueueFullError("wombat_queue at capacity"))
+    registry = SourceRegistry(enqueuer)
+    stub = _StubSource(
+        id="full-src",
+        poll_interval_seconds=0.01,
+        events_by_call=[[SourceEvent(event_key="e1", payload={"x": 1})]],
+    )
+    registry.register(stub)
+
+    with caplog.at_level(logging.ERROR):
+        await registry.start()
+        try:
+            await _wait_until(lambda: enqueuer.calls >= 3)
+            assert registry._tasks["full-src"].done() is False
+        finally:
+            await registry.stop()
+
+    assert "full-src" in registry.degraded_sources
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("full-src" in record.message for record in error_records)
+
+
+async def test_crf4_ac2_generic_enqueue_exception_then_recovery_clears_degraded() -> None:
+    """CRF-4 AC2: enqueue() raising a generic Exception (not QueueFullError) also survives —
+    the two-arm parity with the pattern_detector precedent — and a later fully-successful
+    poll+enqueue iteration clears the degraded mark."""
+    enqueuer = _RaisingEnqueuer(RuntimeError("boom"), fail_until_call=2)
+    registry = SourceRegistry(enqueuer)
+    stub = _StubSource(
+        id="flaky-enqueue",
+        poll_interval_seconds=0.01,
+        events_by_call=[[SourceEvent(event_key="e1", payload={"x": 1})]],
+    )
+    registry.register(stub)
+
+    await registry.start()
+    try:
+        await _wait_until(lambda: enqueuer.calls >= 2)
+        assert "flaky-enqueue" in registry.degraded_sources
+        assert registry._tasks["flaky-enqueue"].done() is False
+
+        await _wait_until(lambda: len(enqueuer.items) >= 1)
+        await _wait_until(lambda: "flaky-enqueue" not in registry.degraded_sources)
+    finally:
+        await registry.stop()
+
+
+async def test_crf4_ac3_stop_survives_a_task_dead_with_a_non_cancelled_exception(
+    caplog: Any,
+) -> None:
+    """CRF-4 AC3: a poll loop task that already finished with a stored non-CancelledError
+    exception (simulated by seeding one directly into the registry's task map, ahead of a
+    real source's task) must not abort stop() — every remaining task is still awaited and
+    every registered source's stop() still runs (the runtime-shaped teardown ``finally``)."""
+    enqueuer = _FakeEnqueuer()
+    registry = SourceRegistry(enqueuer)
+    good = _StubSource(id="good", poll_interval_seconds=0.05)
+    registry.register(good)
+
+    async def _boom() -> None:
+        raise RuntimeError("poll loop died with a non-CancelledError exception")
+
+    dead_task: asyncio.Task[None] = asyncio.create_task(_boom())
+    await _wait_until(lambda: dead_task.done())
+
+    await good.start()
+    registry._tasks["dead"] = dead_task
+    registry._tasks["good"] = asyncio.create_task(registry._poll_loop(good))
+
+    with caplog.at_level(logging.ERROR):
+        await registry.stop()  # must not raise — awaits every task, then stops every source
+
+    assert registry._tasks == {}
+    assert good.stop_called == 1
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("dead" in record.message for record in error_records)
 
 
 @_requires_pg
