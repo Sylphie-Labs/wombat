@@ -5783,6 +5783,123 @@ nodes:
       - tests/unit/test_schema_preflight.py
       - tests/unit/test_bootstrap.py
       - tests/unit/test_runtime.py
+  - id: TK-248
+    kind: ticket
+    parent: EP-32
+    title: "Phase-2 UI - iteration-4 theme-token vocabulary with placeholder colors in the single token source (DEC-48 pass, ticket 1 of 4)"
+    intent: "Per DEC-48 (Jim direction 2026-07-11, supersedes-in-part DEC-47(b)) - the app implements the APPROVED iteration-4 design (planning/design/settings-screen-design-brief.md section 11 + settings-screen-mock.html @ commit c6b9bb3). This leaf aligns the TK-225 single token source to the mock's token vocabulary - surface canvas/panel/elevated, ink primary/muted, border default/strong, brand + brand-hover + brand-ink, accent, danger + danger-ink, positive, focus - with PLACEHOLDER color values (Jim owns the palette and re-themes by editing theme.css alone; Jim's change-1 verbatim - 'use any color as placeholders and let me change the token file when I'm ready'). tokens.ts exposes typed utility names for every token; NO color literal exists outside theme.css (the standing TK-225 color-audit test keeps it honest)."
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    complexity_budget: "Token vocabulary alignment in the two token files + a DESIGN.md note - no component changes beyond mechanical renames where a token name changes. The mock's root custom-property names are the naming contract."
+    acceptance_criteria:
+      - given: "app/src/theme.css and app/src/tokens.ts"
+        when: "audited against the iteration-4 mock's token set (brief section 11.2)"
+        then: "every mock token name has exactly one corresponding theme token with a placeholder value; tokens.ts exposes typed names for all of them; no color value is repeated outside theme.css."
+      - given: "the app source"
+        when: "npm run lint and npm test run"
+        then: "green - including the standing color/gradient/MUI/animation audit tests (zero hardcoded color literals in component code, TK-225 discipline)."
+    non_goals:
+      - "No final palette - values are placeholders; Jim owns colors (DEC-47/DEC-48)."
+      - "No layout or component work - TK-249..TK-251."
+    depends_on:
+      - TK-225
+    files_in_scope:
+      - app/src/theme.css
+      - app/src/tokens.ts
+      - app/DESIGN.md
+  - id: TK-249
+    kind: ticket
+    parent: EP-32
+    title: "Phase-2 UI - the approved iteration-4 app shell - header + left nav rail + persistent collapsible 320px chat pane + Today-as-landing, settings re-housed into four categories (DEC-48 pass, ticket 2 of 4)"
+    intent: "The iteration-3/4 APPROVED layout (Jim verbatim - 'this is a much better layout. I like the side panel chat. Keep that.'). App shell per the mock - header with mark + wordmark + runtime status; left nav rail with Today first then the settings categories Persona / Voice & Audio / API Keys / System; the persistent COLLAPSIBLE 320px chat pane on every view (the existing ChatPane re-housed, wombat-down state preserved); Today is the default landing view (its data sections arrive in TK-250/TK-251 - this ticket ships the shell with honest placeholder sections). The existing settings form re-houses into the four category views with BEHAVIOR UNCHANGED - GET /settings load, PUT save, write-only key rows with configured dots, restart strip, persona hot-apply hint, 26px slim controls on the 16/24/32 spacing rhythm. All colors via TK-248 tokens."
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "Layout + re-housing only - no new data fetching, no behavior change to settings/chat/audio/runtime controls. Existing component tests updated for the new structure, not for new behavior."
+    acceptance_criteria:
+      - given: "the app launched dev-mode"
+        when: "rendered"
+        then: "the shell matches the approved layout - header (mark, wordmark, runtime status), left rail (Today first, four settings categories), 320px chat pane present and collapsible on every view, Today as the default landing; the chat pane's wombat-not-running state still renders."
+      - given: "the settings views"
+        when: "exercised via the existing component tests (updated for the re-housing)"
+        then: "load/save/write-only-keys/restart-strip/persona-hint behavior is unchanged and green."
+      - given: "the app source"
+        when: "npm run lint and npm test run"
+        then: "green including all standing audits; every color flows through theme tokens."
+    non_goals:
+      - "No Today data sections - TK-250/TK-251."
+      - "No backend/API changes of any kind (DEC-47(c)/(d) stand)."
+      - "Zero analytics (DEC-29)."
+    depends_on:
+      - TK-248
+    files_in_scope:
+      - app/src/App.tsx
+      - app/src/main.tsx
+      - app/src/components/
+  - id: TK-250
+    kind: ticket
+    parent: EP-32
+    title: "Phase-2 UI - Today upcoming section - /external/calendar client + iteration-4 event cards with skeleton/degraded/empty card states (DEC-48 pass, ticket 3 of 4)"
+    intent: "api.ts gains a token-guarded GET /external/calendar read (window_hours param, default 168) consuming the TK-246 envelope verbatim - items list + storage_unavailable bool - and Today's Upcoming section renders it as the iteration-4 EVENT CARDS (brief section 11.3) - 3px left accent edge + fixed-width time block (start time prominent, semibold tabular-nums; end time muted beneath), 600-weight title with a small-icon meta line, time-bucketed list; today's NEXT event emphasized (brand accent edge, elevated surface, a next chip); all-day events swap the time block for an All-day pill + dashed edge; later buckets put the weekday atop the time block. Loading renders CARD-SHAPED skeleton frames (plain, no shimmer); storage_unavailable true renders the degraded body inside the card shells; zero items renders the designed empty state. RENDER HONESTLY from what exists - gcal payload fields only, per-card sync time is the client fetch time; nothing invented (DEC-48(d))."
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "One api.ts read function + one Today section of card components + vitest coverage over mocked fetch. Load-on-view fetch only - no polling/refresh machinery, no route invention, no backend changes."
+    acceptance_criteria:
+      - given: "a mocked /external/calendar returning items with storage_unavailable false"
+        when: "the Today view renders"
+        then: "event cards match the iteration-4 spec - time block, accent edge, next-event emphasis, all-day pill, later-bucket weekday - sourced from payload fields only."
+      - given: "the loading state, a storage_unavailable-true envelope, and a zero-items envelope"
+        when: "each renders"
+        then: "card-shaped skeletons / degraded-inside-card-shells / the designed empty state respectively - never a blank pane, never a crash."
+      - given: "the app source"
+        when: "npm run lint and npm test run"
+        then: "green including all standing audits; the client sends the bridge token exactly like the existing settings reads."
+    non_goals:
+      - "No brief card, no needs-reply classification, no invented routes/fields - the recorded DEC-47(c) deferrals."
+      - "No inbox/notepad sections - TK-251."
+    depends_on:
+      - TK-249
+      - TK-246
+    files_in_scope:
+      - app/src/api.ts
+      - app/src/App.tsx
+      - app/src/components/
+  - id: TK-251
+    kind: ticket
+    parent: EP-32
+    title: "Phase-2 UI - Today inbox highlights + notepad - /external/gmail client, five-field-honest inbox cards with an open-in-Gmail preload bridge, notepad timeline with its honest empty state (DEC-48 pass, ticket 4 of 4)"
+    intent: "api.ts gains a token-guarded GET /external/gmail read (limit param, default 50) consuming the TK-246 envelope; Today's Inbox highlights renders iteration-4 INBOX CARDS honest to the DEC-45 five-field projection (message_id, subject, sender, received_at, priority_band - NO snippet exists in the store) - 28px rounded sender initial block, subject as the primary line, sender + received-at meta line, a right-aligned priority chip mapping the two-band priority_band (high filled, normal outline; the needs-reply/fyi label refinement is the recorded DEC-47(c) deferral). Row click opens the message in Gmail in the EXTERNAL browser via a one-method preload openExternal bridge - the ONLY interaction; no in-app message view. The Steward's NOTEPAD section renders the iteration-4 timeline treatment (marker dot + entry text + muted noted-time) in its designed EMPTY state - NO scratch read route exists (recorded deferral) and the UI renders honestly from what exists (DEC-48(d)). Both sections get card-shaped skeletons and degraded-inside-card-shell states."
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    complexity_budget: "One api.ts read function + two Today sections + a one-method preload openExternal bridge + vitest coverage over mocked fetch. No scratch/notepad data fetching, no backend changes, no message body anywhere (none is stored - DEC-45(d))."
+    acceptance_criteria:
+      - given: "a mocked /external/gmail returning five-field items"
+        when: "the Inbox highlights section renders"
+        then: "inbox cards show the initial block, subject, sender + received-at meta line, and the band-mapped priority chip - exactly the five stored fields, nothing invented, no snippet."
+      - given: "an inbox card"
+        when: "clicked"
+        then: "the message opens in Gmail in the EXTERNAL browser via the preload bridge - no in-app navigation, no renderer-direct shell access."
+      - given: "the notepad section, plus the loading/degraded/empty envelopes for inbox"
+        when: "rendered"
+        then: "the notepad shows the timeline treatment's designed empty state (no invented data route); inbox loading/degraded render card-shaped skeletons / degraded-inside-card-shells; npm run lint and npm test green including all standing audits."
+    non_goals:
+      - "No scratch/notepad read route - recorded deferral; the section is honest-empty until one exists."
+      - "No needs-reply/fyi backend classification, no stored snippet - DEC-47(c) deferrals."
+      - "No in-app message view; no message body anywhere."
+    depends_on:
+      - TK-250
+    files_in_scope:
+      - app/src/api.ts
+      - app/src/App.tsx
+      - app/src/components/
+      - app/electron/
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -6624,6 +6741,12 @@ governance:
       consequences: "(+) The design gate closes without speculative backend churn - API changes are pulled by real UI demand, not pushed from a mock. (+) Clear ownership boundary - agents own the backend seams, Jim owns the pixels. (-) The as-built /external/ response shapes may not match the approved design field-for-field until Jim asks - accepted, that is the point of demand-driven.",
       alternatives: ["Mint the normalization/route tickets now against the approved mock (rejected - Jim building the UI is the only honest oracle for which fields/routes matter; pre-minting is speculative scope)", "Agents build the UI to the approved design (rejected - Jim explicitly took UI ownership; architect-mode respected, not re-derived)"],
       links: ["DEC-39","DEC-43","DEC-45","TK-225","TK-246","EP-32"] }
+  - { id: DEC-48, type: decision, status: accepted, scope: EP-32, date_raised: "2026-07-11", title: "Supersedes-in-part DEC-47(b) (JIM DIRECTION 2026-07-11) - ONE agent Phase-2 implementation pass brings the app/ renderer to the approved iteration-4 design BEFORE Jim takes UI ownership, executed through the standard build-batch workflow as TK-248..TK-251; TK-225 theme-token rule binding; DEC-47(c)/(d) untouched",
+      context: "Jim verbatim - 'The UI still looks the same. Lets at least first get the UI Looking like iteration 4 and THEN ill take over.' DEC-47(b) recorded UI/Phase-2 as OPERATOR-OWNED with no agent app/ UI work absent new explicit Jim direction - this IS that direction, scoped to exactly one pass. A ux-designer agent initially started the pass and was STOPPED mid-run with NO code landed; Jim refined the direction - ALL implementation goes through the standard Sonnet build-batch workflow over real atomic tickets.",
+      decision: "(a) Agents implement the approved iteration-4 design - design brief section 11 + settings-screen-mock.html @ commit c6b9bb3 - in app/ as a ONE-TIME Phase-2 pass, via the standard build-batch workflow over four minted atomic tickets in strict serial order (shared app/src files) - TK-248 (iteration-4 token vocabulary, placeholder colors) -> TK-249 (approved shell - header/left rail/collapsible 320px chat pane/Today-as-landing, settings re-housed into four categories, behavior unchanged) -> TK-250 (event cards over GET /external/calendar) -> TK-251 (inbox cards over GET /external/gmail + open-in-Gmail preload bridge + notepad honest-empty timeline). (b) AFTER the pass lands, DEC-47(b) operator ownership RESUMES unchanged - no further agent app/ UI work without new Jim direction. (c) The TK-225 theme-token rule binds throughout - every color via theme tokens, zero hardcoded values, placeholder palette, Jim re-themes by editing theme.css alone. (d) The UI renders HONESTLY from what exists - the TK-246 /external/ envelopes verbatim; NO routes or fields invented; needs-reply classification, scratch/notepad read, stored snippet, and the brief card remain the recorded DEC-47(c) operator-demand deferrals. (e) DEC-47(c) and DEC-47(d) are UNTOUCHED - the pass is renderer-only and the backend read-path disciplines bind.",
+      consequences: "(+) Jim inherits a live UI matching the approved design, not a mock. (+) The pass rides the endorsed build cadence - builder bar + batch verify, not a one-off agent. (-) The board reopens 164/168 until TK-248..TK-251 land.",
+      alternatives: ["Jim restyles the renderer himself from the mock (rejected by Jim - land the baseline first, then he takes over)", "One monolithic UI ticket (rejected - fails the atomicity gate; tokens/shell/data-sections are separately verifiable vertical slices)", "The ux-designer agent implements directly (rejected by Jim mid-run - all implementation goes through the standard build workflow)"],
+      links: ["DEC-47","TK-248","TK-249","TK-250","TK-251","TK-225","TK-246","EP-32"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -6901,3 +7024,4 @@ changelog:
   - { date: "2026-07-11", version: "2.71", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-246 DONE (163/164) - the DEC-45(e) read path lands (EP-32). settings_app/api.py create_app gains OPTIONAL external_store (ExternalItemStore or None, default None) and TWO token-guarded READ-ONLY routes exactly per the v2.68 r4 envelope - GET /external/calendar (window_hours default 168 as module constant DEFAULT_CALENDAR_WINDOW_HOURS, get_window over gcal from now to now+window) and GET /external/gmail (limit default 50 as DEFAULT_GMAIL_LIMIT, get_recent over gmail); both return items (stored payloads VERBATIM - calendar = to_payload dicts, gmail = the r2 five-key dicts) + storage_unavailable bool. Degrade rides the DEC-43 posture verbatim - None store or a raising read = 200 with empty items + storage_unavailable true, never a bare 500, never exception-derived detail; X-Wombat-Token 401 discipline identical to every existing route. __main__.py builds ExternalItemStore from the SAME _resolve_pg_dsn resolution as SettingsStore (absent DSN = None, boots degraded; no schema-ensure added for wombat_external_items - the runtime preflight owns it, a missing table degrades like any storage failure). NO write/delete route (structural AC proves no non-GET method routable under /external/); no bootstrap/runtime import (TK-197 discipline held). Builder self-ran the full bar green - ruff clean, mypy strict 0 errors / 322 files, tests/settings_app/test_api.py 42 passed on throwaway pg 5438 incl. the pg-gated AC1 window-filter + occurs_at-order + token proof; architect pre-commit uv run pytest -q green. Scope exact - the three files_in_scope. The r4 follow-up amendment stands - route/field normalization when the settings-screen design lands (unapproved iteration cannot bind). BATCH-VERIFY PENDING per the v2 cadence (one Opus review audits TK-244..247 after all land, alongside the owed v2.42..46 / v2.50..54 / TK-240..243 process debt). Board 163/164; NEXT per the v2.68 order - TK-247 (scratchpad) closes the board." }
   - { date: "2026-07-11", version: "2.72", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-247 DONE (164/164 - the BOARD CLOSES; the DEC-45/DEC-46 arc is fully landed pending the batch verify) - the DEC-46 scratch substrate (EP-36). NEW src/wombat/scratchpad.py owns wombat_scratchpad via packaged migrations/009_wombat_scratchpad.sql - the pinned shape exactly (scope_key/entry_key/value JSONB/created_at/updated_at, PRIMARY KEY scope_key+entry_key); ensure_schema wired as the ensure_all_schemas EIGHTH entry (schema_preflight docstrings/counts updated). ScratchpadStore is dsn-injected with ONE lazy psycopg connection per the Q-46 convention, mirroring settings_store/external_store exactly - put upserts bumping updated_at, get_scope returns ONLY its scope, delete_scope removes exactly its scope, purge_stale deletes by updated_at age; SCRATCHPAD_PURGE_DAYS = 14 ships in scratchpad.py per the v2.68 r3 mirror ruling. bootstrap.py RuntimeBundle gains scratchpad_store (ScratchpadStore or None, default None - the v2.68 r5 Optional-default precedent) with assemble_runtime ALWAYS constructing it on the required-dsn posture; runtime.py serve() calls purge_stale EXACTLY ONCE at boot, guarded non-None (AC2 incl. the store-less-composition byte-unchanged proof). AC3 structural held - scratchpad.py imports NOTHING from wombat.bootstrap/wombat.runtime. Beyond the nine files_in_scope, tests/unit/test_external_store.py carries the mechanical seven-to-eight preflight-count ripple ONLY (its AC3 count assert + docstring) - accepted as-built normalization, within authority, no behavior touched. Builder self-ran the full bar green - ruff clean, mypy strict 0 errors / 324 files, unarmed suite 1540 passed / 92 skipped / 0 failed; pg-gated ACs 85 passed on a throwaway postgres:16 (port 5439); the armed-full-suite 5 failures are the STANDING pre-existing pg-armed integration debt (the v2.70 stash-proven class), none new. Architect re-ran uv run pytest -q pre-commit - green. BATCH-VERIFY PENDING per the v2 cadence (one Opus review audits TK-244..247 together, alongside the owed v2.42..46 / v2.50..54 / TK-240..243 process debt). Board 164/164 - NEXT: the owed batch verifies, then the settings-screen redesign on Jim explicit go." }
   - { date: "2026-07-11", version: "2.73", by: "architect (recording Jim-direct ruling ~20:15)", change: "governance - DEC-47 recorded (JIM RULING) - the settings-screen iteration-4 design (planning/design/settings-screen-design-brief.md section 11 + settings-screen-mock.html @ commit c6b9bb3) is APPROVED, and UI/Phase-2 implementation is OPERATOR-OWNED - Jim builds the app/ UI himself; no agent builds app/ UI without new Jim direction; the TK-225 theme-token rule (every color via theme tokens, zero hardcoded values) is the binding implementation constraint on his build. The TK-246 recorded follow-up amendment (route/field normalization to the approved design, possible /brief/latest, needs_reply/fyi classification, stored-snippet field) converts to an OPERATOR-DEMAND-DRIVEN deferral inside DEC-47(c) - Jim's UI build surfaces exactly which API adjustments matter and agents implement backend changes on his ask; NOTHING minted now. Backend read-path disciplines (token guard, DEC-43 degrade, read-only /external/, DEC-45(d) whitelist/no-body) unchanged and binding on any future amendment. Board stays 164/164; the owed batch verifies (TK-244..247, v2.42..46, v2.50..54, TK-240..243) remain the standing process debt." }
+  - { date: "2026-07-11", version: "2.74", by: "architect (recording Jim-direct direction)", change: "governance - DEC-48 recorded (JIM DIRECTION, supersedes-in-part DEC-47(b)) - Jim verbatim 'The UI still looks the same. Lets at least first get the UI Looking like iteration 4 and THEN ill take over.' ONE agent Phase-2 pass brings app/ to the approved iteration-4 design (brief section 11 + mock @ c6b9bb3) through the STANDARD build-batch workflow, then DEC-47(b) operator ownership resumes. A ux-designer agent that had started implementing was stopped with NO code landed. FOUR atomic tickets minted in EP-32, strict serial chain (shared app/src files) - TK-248 (iteration-4 token vocabulary, placeholder colors, TK-225 discipline) -> TK-249 (approved shell - header/left rail/collapsible 320px chat pane/Today-as-landing, settings re-housed into four categories, behavior unchanged) -> TK-250 (GET /external/calendar client + iteration-4 event cards with skeleton/degraded/empty card states; also depends on the done TK-246) -> TK-251 (GET /external/gmail client + five-field-honest inbox cards + open-in-Gmail preload bridge + notepad timeline honest-empty). UI renders HONESTLY from the existing envelopes - nothing invented; needs-reply/scratch-read/snippet/brief-card stay the DEC-47(c) deferrals; DEC-47(d) read-path disciplines untouched. Board 164/168. The owed batch verifies remain standing process debt. Governance + tickets only; no src/app code touched." }
