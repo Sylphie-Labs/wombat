@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, session } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import path from "node:path";
 
 import { describeFailure, startApiProcess, type ApiProcessHandle } from "./api-process";
 import { readChatInfo } from "./chat-info";
 import { resolveBackendRoot } from "./env-config";
+import { openGmailMessage } from "./gmail-open";
 import { isAllowedPermission } from "./permissions";
 import { restartRuntime } from "./runtime-control";
 import { saveCapture } from "./save-capture";
@@ -93,6 +94,13 @@ app.whenReady().then(async () => {
   // `runtime-control.ts` itself, single-flight process-wide.
   ipcMain.handle("wombat:restart-runtime", () =>
     restartRuntime(process.env, app.getAppPath()),
+  );
+
+  // TK-251 (RULING r3): the "open in Gmail" bridge - the renderer passes
+  // ONLY a message_id; validation + URL construction happen in
+  // gmail-open.ts, and ONLY a validated URL ever reaches shell.openExternal.
+  ipcMain.handle("wombat:open-gmail-message", (_event, messageId: unknown) =>
+    openGmailMessage(messageId, (url) => shell.openExternal(url)),
   );
 
   createWindow();

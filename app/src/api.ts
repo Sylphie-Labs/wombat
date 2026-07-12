@@ -148,3 +148,37 @@ export async function getCalendarEvents(): Promise<CalendarResponse> {
   }
   return (await response.json()) as CalendarResponse;
 }
+
+/**
+ * TK-251 (verified against `src/wombat/integrations/gmail/triage.py`'s
+ * `PriorityBand`): a stored gmail item, verbatim - the DEC-45 five-field
+ * projection. No snippet/body field exists in the store - the UI must never
+ * invent one.
+ */
+export type PriorityBand = "high" | "normal";
+
+export interface GmailMessageItem {
+  message_id: string;
+  subject: string;
+  sender: string;
+  received_at: string;
+  priority_band: PriorityBand;
+}
+
+export interface GmailResponse {
+  items: GmailMessageItem[];
+  storage_unavailable: boolean;
+}
+
+/**
+ * `GET /external/gmail` (TK-246, read-only). Load-on-view only - no
+ * polling/refresh machinery, no `limit` override in this client (the
+ * backend's 50-item default stands).
+ */
+export async function getGmailMessages(): Promise<GmailResponse> {
+  const response = await tokenedFetch("/external/gmail");
+  if (!response.ok) {
+    throw new Error(`GET /external/gmail failed: ${response.status}`);
+  }
+  return (await response.json()) as GmailResponse;
+}

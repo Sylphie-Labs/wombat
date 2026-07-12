@@ -128,3 +128,44 @@ describe("main.ts permission-request posture", () => {
     expect(source).toMatch(/isAllowedPermission\(permission\)/);
   });
 });
+
+// TK-251 (RULING r3): the "open in Gmail" bridge never lets the renderer
+// reach `shell` directly or supply a URL - it exposes ONLY a message-id-in
+// bridge, backed by ipcRenderer.invoke, the same posture as the bridges
+// above.
+describe("preload.ts gmail bridge posture", () => {
+  const source = readFileSync(PRELOAD_TS_PATH, "utf-8");
+
+  it("exposes wombatGmail via contextBridge.exposeInMainWorld", () => {
+    expect(source).toMatch(/contextBridge\.exposeInMainWorld\(\s*["']wombatGmail["']/);
+  });
+
+  it("wombatGmail's openMessage is backed by ipcRenderer.invoke, not a raw ipcRenderer exposure", () => {
+    const match = source.match(
+      /contextBridge\.exposeInMainWorld\(\s*["']wombatGmail["'],\s*\{([\s\S]*?)\}\s*\);/,
+    );
+    expect(match).not.toBeNull();
+    const body = (match as RegExpMatchArray)[1];
+    expect(body).toMatch(
+      /openMessage:\s*\(messageId[^)]*\)\s*=>\s*ipcRenderer\.invoke\(\s*["']wombat:open-gmail-message["']/,
+    );
+  });
+
+  it("never passes a renderer-supplied URL - only messageId crosses the bridge", () => {
+    const match = source.match(
+      /contextBridge\.exposeInMainWorld\(\s*["']wombatGmail["'],\s*\{([\s\S]*?)\}\s*\);/,
+    );
+    expect(match).not.toBeNull();
+    const body = (match as RegExpMatchArray)[1];
+    expect(body).not.toMatch(/\burl\b/i);
+  });
+});
+
+describe("main.ts gmail-open posture", () => {
+  const source = readFileSync(MAIN_TS_PATH, "utf-8");
+
+  it("wires the open-gmail-message channel through gmail-open.ts's validator, never a raw shell.openExternal(messageId) call", () => {
+    expect(source).toMatch(/openGmailMessage\(\s*messageId/);
+    expect(source).not.toMatch(/shell\.openExternal\(\s*messageId\s*\)/);
+  });
+});

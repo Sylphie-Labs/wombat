@@ -46,3 +46,16 @@ contextBridge.exposeInMainWorld("wombatAudio", {
 contextBridge.exposeInMainWorld("wombatRuntime", {
   restart: () => ipcRenderer.invoke("wombat:restart-runtime"),
 });
+
+/**
+ * TK-251 (RULING r3): the "open in Gmail" bridge - the SAME
+ * `contextBridge`-only pattern as the four channels above. The renderer
+ * passes ONLY a `message_id` string; `main.ts`'s handler (backed by
+ * `gmail-open.ts`) validates it and does the actual `shell.openExternal`
+ * call - never a renderer-supplied URL, never direct `shell` access from
+ * this process. The renderer surface (`window.wombatGmail.openMessage(id)`)
+ * is pinned - `InboxHighlights.tsx` binds against this exact name.
+ */
+contextBridge.exposeInMainWorld("wombatGmail", {
+  openMessage: (messageId: string) => ipcRenderer.invoke("wombat:open-gmail-message", messageId),
+});

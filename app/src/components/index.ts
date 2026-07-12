@@ -32,3 +32,7 @@ export { ChatDock } from "./ChatDock";
 export { Today } from "./Today";
 
 export { Upcoming } from "./Upcoming";
+
+export { InboxHighlights } from "./InboxHighlights";
+
+export { NotepadCard } from "./NotepadCard";
