@@ -36,9 +36,14 @@ export const accent = {
   bg: "bg-accent",
 } as const;
 
-/** TK-249: the wombat mark's ring - the one non-interactive brand-colored outline in the shell. */
+/**
+ * TK-249: the wombat mark's ring - the one non-interactive brand-colored
+ * outline in the shell. TK-250 adds `text` for the event-card "next" chip
+ * (outline-style, not a filled `interactive.brand` control).
+ */
 export const brand = {
   border: "border-brand",
+  text: "text-brand",
 } as const;
 
 export const radius = {

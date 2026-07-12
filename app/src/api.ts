@@ -117,3 +117,34 @@ export async function putKey(provider: KeyProvider, key: string): Promise<void> 
     throw new Error(`PUT /keys/${provider} failed: ${response.status}`);
   }
 }
+
+/**
+ * TK-250 (RULING r2, contract v2.75 - binding payload shape): a stored gcal
+ * item, verbatim. No location/attendee/source field exists in the store -
+ * the UI must never invent one.
+ */
+export interface CalendarEventItem {
+  event_id: string;
+  title: string;
+  start: string;
+  end: string;
+  all_day: boolean;
+}
+
+export interface CalendarResponse {
+  items: CalendarEventItem[];
+  storage_unavailable: boolean;
+}
+
+/**
+ * `GET /external/calendar` (TK-246, read-only). Load-on-view only - no
+ * polling/refresh machinery, no `window_hours` override in this client
+ * (the backend's 168-hour default stands).
+ */
+export async function getCalendarEvents(): Promise<CalendarResponse> {
+  const response = await tokenedFetch("/external/calendar");
+  if (!response.ok) {
+    throw new Error(`GET /external/calendar failed: ${response.status}`);
+  }
+  return (await response.json()) as CalendarResponse;
+}

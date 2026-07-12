@@ -1,11 +1,13 @@
 import { ink } from "../tokens";
 import { Panel } from "./Panel";
+import { Upcoming } from "./Upcoming";
 
 /**
  * TK-249: the default landing view. Ships with honest placeholder sections
- * only - the morning brief, upcoming events, inbox highlights, and the
- * steward's notepad all arrive with real data in TK-250/251; until then
- * each section says so rather than faking content.
+ * only - the morning brief, inbox highlights, and the steward's notepad
+ * arrive with real data in TK-251; until then each section says so rather
+ * than faking content. TK-250 replaces the Upcoming placeholder with the
+ * live `GET /external/calendar` event-card section.
  */
 export function Today() {
   return (
@@ -14,10 +16,7 @@ export function Today() {
         <h2 className="text-sm font-semibold">Morning brief</h2>
         <p className={ink.muted}>Not available yet.</p>
       </Panel>
-      <Panel>
-        <h2 className="text-sm font-semibold">Upcoming</h2>
-        <p className={ink.muted}>Not available yet.</p>
-      </Panel>
+      <Upcoming />
       <Panel>
         <h2 className="text-sm font-semibold">Inbox highlights</h2>
         <p className={ink.muted}>Not available yet.</p>

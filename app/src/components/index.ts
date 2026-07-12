@@ -30,3 +30,5 @@ export type { ViewId } from "./NavRail";
 export { ChatDock } from "./ChatDock";
 
 export { Today } from "./Today";
+
+export { Upcoming } from "./Upcoming";
