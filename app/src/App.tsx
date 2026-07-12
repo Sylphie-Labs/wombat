@@ -3,13 +3,17 @@ import { useEffect, useState } from "react";
 import {
   AudioPanel,
   Button,
-  ChatPane,
+  ChatDock,
   Field,
+  Header,
   Indicator,
+  NavRail,
   Panel,
   RuntimeControls,
   Select,
+  Today,
   type SelectOption,
+  type ViewId,
 } from "./components";
 import { font, ink, surface } from "./tokens";
 import {
@@ -29,10 +33,14 @@ import {
 } from "./api";
 
 /**
- * TK-200: the renderer's one settings form. Loads via `GET /settings`,
- * saves via `PUT /settings` + `PUT /keys/{provider}` (Q-110(e) ruled shape).
- * Plain `useState` form state - no state framework, no router
- * (complexity_budget).
+ * TK-200 (re-housed by TK-249 into the approved iteration-4 shell): the
+ * renderer's one settings form. Loads via `GET /settings`, saves via
+ * `PUT /settings` + `PUT /keys/{provider}` (Q-110(e) ruled shape) - both
+ * BYTE-UNCHANGED from TK-200/224/239. Plain `useState` form + `view` state -
+ * no state framework, no router (complexity_budget). The four settings
+ * categories (Persona, Voice & Audio, API Keys, System) and Today all read
+ * from this single shared form/touched/keyInputs state, so a field changed
+ * on one category page and saved from another still round-trips correctly.
  */
 
 interface FormState {
@@ -180,6 +188,7 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
 }
 
 export function App() {
+  const [view, setView] = useState<ViewId>("today");
   const [formState, setFormState] = useState<FormState | null>(null);
   const [touched, setTouched] = useState<ReadonlySet<FormField>>(new Set());
   const [keyInputs, setKeyInputs] = useState<Record<KeyProvider, string>>(EMPTY_KEY_INPUTS);
@@ -258,137 +267,192 @@ export function App() {
   const hasChanges =
     touched.size > 0 || KEY_PROVIDERS.some((provider) => keyInputs[provider].trim() !== "");
 
-  return (
-    <div className={`${surface.canvas} ${font.sans} ${ink.primary} min-h-screen p-8`}>
-      <div className="mx-auto flex max-w-2xl flex-col gap-4">
-        <h1 className="text-lg font-semibold">Wombat settings</h1>
+  // The Save bar is identical on every settings category page - one shared
+  // save button over the one shared form/touched/keyInputs state above,
+  // regardless of which category is on screen when it's clicked.
+  function renderSaveBar() {
+    return (
+      <>
+        {saveError && <p className={ink.primary}>Save failed: {saveError}</p>}
 
-        <ChatPane />
-
-        <AudioPanel />
-
-        <RuntimeControls />
-
-        {loadError && (
-          <Panel>
-            <p className={ink.primary}>Failed to load settings: {loadError}</p>
+        {notice && (
+          <Panel className="flex flex-col gap-1">
+            {notice.hotApply && (
+              <p className={ink.muted}>Persona changes apply on the next turn.</p>
+            )}
+            {notice.restart && (
+              <p className={ink.muted}>Restart Wombat to apply these changes.</p>
+            )}
           </Panel>
         )}
 
-        {formState && (
-          <>
-            <Panel className="flex flex-col gap-4">
-              <Field
-                id="assistant-name"
-                label="Assistant name"
-                value={formState.wombat_assistant_name}
-                onChange={(e) => updateField("wombat_assistant_name", e.target.value)}
-              />
-              <Select
-                id="stt-provider"
-                label="STT provider"
-                options={PROVIDER_OPTIONS}
-                value={formState.wombat_stt_provider}
-                onChange={(e) => updateField("wombat_stt_provider", e.target.value as Provider)}
-              />
-              <Select
-                id="tts-provider"
-                label="TTS provider"
-                options={PROVIDER_OPTIONS}
-                value={formState.wombat_tts_provider}
-                onChange={(e) => updateField("wombat_tts_provider", e.target.value as Provider)}
-              />
-              <Field
-                id="tts-voice-id"
-                label="TTS voice ID"
-                value={formState.wombat_tts_voice_id}
-                onChange={(e) => updateField("wombat_tts_voice_id", e.target.value)}
-              />
-            </Panel>
+        <Button type="button" onClick={() => void handleSave()} disabled={!hasChanges || saving}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </>
+    );
+  }
 
-            <Panel className="flex flex-col gap-4">
-              <h2 className="text-sm font-semibold">Persona</h2>
-              <Select
-                id="persona-brevity"
-                label="Brevity"
-                options={BREVITY_OPTIONS}
-                value={formState.wombat_persona_brevity}
-                onChange={(e) =>
-                  updateField("wombat_persona_brevity", e.target.value as Brevity)
-                }
-              />
-              <Select
-                id="persona-warmth"
-                label="Warmth"
-                options={WARMTH_OPTIONS}
-                value={formState.wombat_persona_warmth}
-                onChange={(e) => updateField("wombat_persona_warmth", e.target.value as Warmth)}
-              />
-              <Select
-                id="persona-directness"
-                label="Directness"
-                options={DIRECTNESS_OPTIONS}
-                value={formState.wombat_persona_directness}
-                onChange={(e) =>
-                  updateField("wombat_persona_directness", e.target.value as Directness)
-                }
-              />
-              <Select
-                id="persona-humor"
-                label="Humor"
-                options={HUMOR_OPTIONS}
-                value={formState.wombat_persona_humor}
-                onChange={(e) => updateField("wombat_persona_humor", e.target.value as Humor)}
-              />
-              <Select
-                id="persona-proactivity"
-                label="Proactivity"
-                options={PROACTIVITY_OPTIONS}
-                value={formState.wombat_persona_proactivity}
-                onChange={(e) =>
-                  updateField("wombat_persona_proactivity", e.target.value as Proactivity)
-                }
-              />
-            </Panel>
+  const loadErrorBanner = loadError && (
+    <Panel>
+      <p className={ink.primary}>Failed to load settings: {loadError}</p>
+    </Panel>
+  );
 
-            <Panel className="flex flex-col gap-4">
-              <h2 className="text-sm font-semibold">Cloud voice-provider keys</h2>
-              {/* Write-only: the key input NEVER carries a stored value - the
-                  configured indicator is driven solely by the GET /settings
-                  `keys` booleans, never by what's typed here. */}
-              {KEY_PROVIDERS.map((provider) => (
-                <div key={provider} className="flex flex-col gap-1">
-                  <Field
-                    id={`key-${provider}`}
-                    label={KEY_PROVIDER_LABELS[provider]}
-                    type="password"
-                    autoComplete="off"
-                    value={keyInputs[provider]}
-                    onChange={(e) => updateKeyInput(provider, e.target.value)}
-                  />
-                  <Indicator configured={keysConfigured[provider]} />
-                </div>
-              ))}
-            </Panel>
+  return (
+    <div className={`${surface.canvas} ${font.sans} ${ink.primary} flex h-screen flex-col`}>
+      <Header />
+      <div className="flex min-h-0 flex-1">
+        <NavRail active={view} onSelect={setView} />
 
-            {saveError && <p className={ink.primary}>Save failed: {saveError}</p>}
+        <main className="min-w-0 flex-1 overflow-y-auto p-8">
+          <div className="mx-auto flex max-w-2xl flex-col gap-4">
+            {view === "today" && <Today />}
 
-            {notice && (
-              <Panel className="flex flex-col gap-1">
-                {notice.hotApply && <p className={ink.muted}>Persona changes apply on the next turn.</p>}
-                {notice.restart && <p className={ink.muted}>Restart Wombat to apply these changes.</p>}
-              </Panel>
+            {view === "persona" && (
+              <>
+                {loadErrorBanner}
+                {formState && (
+                  <>
+                    <Panel className="flex flex-col gap-4">
+                      <Field
+                        id="assistant-name"
+                        label="Assistant name"
+                        value={formState.wombat_assistant_name}
+                        onChange={(e) => updateField("wombat_assistant_name", e.target.value)}
+                      />
+                    </Panel>
+
+                    <Panel className="flex flex-col gap-4">
+                      <h2 className="text-sm font-semibold">Persona</h2>
+                      <Select
+                        id="persona-brevity"
+                        label="Brevity"
+                        options={BREVITY_OPTIONS}
+                        value={formState.wombat_persona_brevity}
+                        onChange={(e) =>
+                          updateField("wombat_persona_brevity", e.target.value as Brevity)
+                        }
+                      />
+                      <Select
+                        id="persona-warmth"
+                        label="Warmth"
+                        options={WARMTH_OPTIONS}
+                        value={formState.wombat_persona_warmth}
+                        onChange={(e) =>
+                          updateField("wombat_persona_warmth", e.target.value as Warmth)
+                        }
+                      />
+                      <Select
+                        id="persona-directness"
+                        label="Directness"
+                        options={DIRECTNESS_OPTIONS}
+                        value={formState.wombat_persona_directness}
+                        onChange={(e) =>
+                          updateField("wombat_persona_directness", e.target.value as Directness)
+                        }
+                      />
+                      <Select
+                        id="persona-humor"
+                        label="Humor"
+                        options={HUMOR_OPTIONS}
+                        value={formState.wombat_persona_humor}
+                        onChange={(e) =>
+                          updateField("wombat_persona_humor", e.target.value as Humor)
+                        }
+                      />
+                      <Select
+                        id="persona-proactivity"
+                        label="Proactivity"
+                        options={PROACTIVITY_OPTIONS}
+                        value={formState.wombat_persona_proactivity}
+                        onChange={(e) =>
+                          updateField("wombat_persona_proactivity", e.target.value as Proactivity)
+                        }
+                      />
+                    </Panel>
+
+                    {renderSaveBar()}
+                  </>
+                )}
+              </>
             )}
 
-            <Button
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={!hasChanges || saving}
-            >
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </>
-        )}
+            {view === "voice" && (
+              <>
+                {loadErrorBanner}
+                <AudioPanel />
+                {formState && (
+                  <>
+                    <Panel className="flex flex-col gap-4">
+                      <Select
+                        id="stt-provider"
+                        label="STT provider"
+                        options={PROVIDER_OPTIONS}
+                        value={formState.wombat_stt_provider}
+                        onChange={(e) =>
+                          updateField("wombat_stt_provider", e.target.value as Provider)
+                        }
+                      />
+                      <Select
+                        id="tts-provider"
+                        label="TTS provider"
+                        options={PROVIDER_OPTIONS}
+                        value={formState.wombat_tts_provider}
+                        onChange={(e) =>
+                          updateField("wombat_tts_provider", e.target.value as Provider)
+                        }
+                      />
+                      <Field
+                        id="tts-voice-id"
+                        label="TTS voice ID"
+                        value={formState.wombat_tts_voice_id}
+                        onChange={(e) => updateField("wombat_tts_voice_id", e.target.value)}
+                      />
+                    </Panel>
+
+                    {renderSaveBar()}
+                  </>
+                )}
+              </>
+            )}
+
+            {view === "keys" && (
+              <>
+                {loadErrorBanner}
+                {formState && (
+                  <>
+                    <Panel className="flex flex-col gap-4">
+                      <h2 className="text-sm font-semibold">Cloud voice-provider keys</h2>
+                      {/* Write-only: the key input NEVER carries a stored value - the
+                          configured indicator is driven solely by the GET /settings
+                          `keys` booleans, never by what's typed here. */}
+                      {KEY_PROVIDERS.map((provider) => (
+                        <div key={provider} className="flex flex-col gap-1">
+                          <Field
+                            id={`key-${provider}`}
+                            label={KEY_PROVIDER_LABELS[provider]}
+                            type="password"
+                            autoComplete="off"
+                            value={keyInputs[provider]}
+                            onChange={(e) => updateKeyInput(provider, e.target.value)}
+                          />
+                          <Indicator configured={keysConfigured[provider]} />
+                        </div>
+                      ))}
+                    </Panel>
+
+                    {renderSaveBar()}
+                  </>
+                )}
+              </>
+            )}
+
+            {view === "system" && <RuntimeControls />}
+          </div>
+        </main>
+
+        <ChatDock />
       </div>
     </div>
   );

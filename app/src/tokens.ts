@@ -36,6 +36,11 @@ export const accent = {
   bg: "bg-accent",
 } as const;
 
+/** TK-249: the wombat mark's ring - the one non-interactive brand-colored outline in the shell. */
+export const brand = {
+  border: "border-brand",
+} as const;
+
 export const radius = {
   sm: "rounded-sm",
   md: "rounded-md",

@@ -21,3 +21,12 @@ export { ChatPane } from "./ChatPane";
 export { AudioPanel } from "./AudioPanel";
 
 export { RuntimeControls } from "./RuntimeControls";
+
+export { Header } from "./Header";
+
+export { NavRail } from "./NavRail";
+export type { ViewId } from "./NavRail";
+
+export { ChatDock } from "./ChatDock";
+
+export { Today } from "./Today";

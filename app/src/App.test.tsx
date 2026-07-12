@@ -10,6 +10,11 @@ import { resetBridgeCacheForTests } from "./api";
  * the live round trip is TK-201's smoke). Covers AC1 (load), AC2 (save +
  * restart notice), and AC3 (the DEC-37 persona hot-apply/restart notice
  * split).
+ *
+ * TK-249 AC1/AC2: the "App (TK-249 shell)" block below covers the re-housed
+ * iteration-4 shell itself - header/rail/Today-as-landing/the collapsible
+ * chat dock's down-state - on top of the TK-200 behavior above, which stays
+ * byte-unchanged aside from now living behind nav-rail navigation.
  */
 
 const PORT = 41417;
@@ -99,21 +104,37 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// TK-249: settings fields now live across four nav-rail categories instead
+// of one page - these helpers navigate there before touching a field.
+function gotoPersona(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Persona" }));
+}
+function gotoVoice(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Voice & Audio" }));
+}
+function gotoKeys(): void {
+  fireEvent.click(screen.getByRole("button", { name: "API Keys" }));
+}
+
 describe("App (TK-200 AC1: load)", () => {
   it("renders current settings and never displays a stored key value", async () => {
     installFakeApi();
     render(<App />);
 
+    gotoPersona();
     expect(await screen.findByDisplayValue("Wombat")).toBeTruthy();
-    expect(screen.getByDisplayValue("voice-1")).toBeTruthy();
-    expect((screen.getByLabelText("STT provider") as HTMLSelectElement).value).toBe("deepgram");
-    expect((screen.getByLabelText("TTS provider") as HTMLSelectElement).value).toBe("elevenlabs");
     expect((screen.getByLabelText("Brevity") as HTMLSelectElement).value).toBe("balanced");
     expect((screen.getByLabelText("Warmth") as HTMLSelectElement).value).toBe("warm");
     expect((screen.getByLabelText("Directness") as HTMLSelectElement).value).toBe("blunt");
     expect((screen.getByLabelText("Humor") as HTMLSelectElement).value).toBe("dry");
     expect((screen.getByLabelText("Proactivity") as HTMLSelectElement).value).toBe("forward");
 
+    gotoVoice();
+    expect(screen.getByDisplayValue("voice-1")).toBeTruthy();
+    expect((screen.getByLabelText("STT provider") as HTMLSelectElement).value).toBe("deepgram");
+    expect((screen.getByLabelText("TTS provider") as HTMLSelectElement).value).toBe("elevenlabs");
+
+    gotoKeys();
     // Configured/not-configured indicators are driven by the GET `keys`
     // booleans - elevenlabs is configured, deepgram/fish are not.
     expect(screen.getAllByText("Configured").length).toBe(1);
@@ -135,17 +156,22 @@ describe("App (TK-200 AC2: save)", () => {
   it("PUTs only touched settings + the touched key, then shows the restart notice", async () => {
     const { calls } = installFakeApi();
     render(<App />);
-    await screen.findByDisplayValue("Wombat");
 
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
     fireEvent.change(screen.getByLabelText("Assistant name"), {
       target: { value: "New Name" },
     });
+
+    gotoVoice();
     fireEvent.change(screen.getByLabelText("STT provider"), {
       target: { value: "fish" },
     });
     fireEvent.change(screen.getByLabelText("TTS voice ID"), {
       target: { value: "voice-42" },
     });
+
+    gotoKeys();
     fireEvent.change(screen.getByLabelText("ElevenLabs API key"), {
       target: { value: "sk-live-abc" },
     });
@@ -186,6 +212,7 @@ describe("App (TK-200 AC3: notice split)", () => {
   it("shows only the hot-apply hint for a persona-only save; a later provider edit restores the restart notice", async () => {
     const { calls } = installFakeApi();
     render(<App />);
+    gotoPersona();
     await screen.findByDisplayValue("Wombat");
 
     fireEvent.change(screen.getByLabelText("Brevity"), { target: { value: "expansive" } });
@@ -213,6 +240,7 @@ describe("App (TK-200 AC3: notice split)", () => {
     expect(screen.queryByText("Restart Wombat to apply these changes.")).toBeNull();
 
     // A provider edit in the same session still triggers the restart notice.
+    gotoVoice();
     fireEvent.change(screen.getByLabelText("STT provider"), { target: { value: "deepgram" } });
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
 
@@ -224,5 +252,74 @@ describe("App (TK-200 AC3: notice split)", () => {
     });
 
     expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+  });
+});
+
+describe("App (TK-249 shell AC1: header/rail/chat dock/Today landing)", () => {
+  it("renders the header mark+wordmark, Today as the default landing view, and every nav category", async () => {
+    installFakeApi();
+    render(<App />);
+
+    expect(screen.getByText("wombat")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Today" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Persona" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Voice & Audio" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "API Keys" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "System" })).toBeTruthy();
+
+    // Today is the default landing view - its honest placeholder sections
+    // render without navigating anywhere, and none of the settings fields do.
+    expect(screen.getByText("Morning brief")).toBeTruthy();
+    expect(screen.getByText("Upcoming")).toBeTruthy();
+    expect(screen.getByText("Inbox highlights")).toBeTruthy();
+    expect(screen.getByText("Steward's notepad")).toBeTruthy();
+    expect(screen.queryByLabelText("Assistant name")).toBeNull();
+  });
+
+  it("keeps the chat pane mounted on every view, honestly rendering its down-state", async () => {
+    installFakeApi(); // wombatChat.getInfo() resolves null - the chat-absent baseline.
+    render(<App />);
+
+    expect(await screen.findByText(/wombat is not running/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Persona" }));
+    expect(screen.getByText(/wombat is not running/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "System" }));
+    expect(screen.getByText(/wombat is not running/i)).toBeTruthy();
+  });
+
+  it("collapses and re-expands the chat dock without unmounting the shell", async () => {
+    installFakeApi();
+    render(<App />);
+    await screen.findByText(/wombat is not running/i);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide chat" }));
+    expect(screen.queryByText(/wombat is not running/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show chat" }));
+    expect(await screen.findByText(/wombat is not running/i)).toBeTruthy();
+  });
+
+  it("switches settings categories on nav click, rendering only the active category's fields", async () => {
+    installFakeApi();
+    render(<App />);
+
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
+    expect(screen.getByLabelText("Brevity")).toBeTruthy();
+    expect(screen.queryByLabelText("STT provider")).toBeNull();
+
+    gotoVoice();
+    expect(screen.getByLabelText("STT provider")).toBeTruthy();
+    expect(screen.queryByLabelText("Brevity")).toBeNull();
+
+    gotoKeys();
+    expect(screen.getByLabelText("ElevenLabs API key")).toBeTruthy();
+    expect(screen.queryByLabelText("STT provider")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "System" }));
+    expect(screen.getByRole("button", { name: /restart wombat/i })).toBeTruthy();
+    expect(screen.queryByLabelText("ElevenLabs API key")).toBeNull();
   });
 });
