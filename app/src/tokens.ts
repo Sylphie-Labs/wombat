@@ -27,6 +27,15 @@ export const border = {
   strong: "border-border-strong",
 } as const;
 
+/**
+ * Accent - powers the focus ring (via `focusRing` below) and any small
+ * text/background accent the mock uses directly outside a focus state.
+ */
+export const accent = {
+  text: "text-accent",
+  bg: "bg-accent",
+} as const;
+
 export const radius = {
   sm: "rounded-sm",
   md: "rounded-md",

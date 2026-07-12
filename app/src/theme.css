@@ -9,12 +9,15 @@
  * repeats a color value, so drift between the token names components use
  * and the values behind them is impossible by construction.
  *
- * Palette: see ../DESIGN.md for the full color-theory rationale. Summary -
- * a triadic scheme (three hues 120deg apart on the OKLCH hue wheel: ~75deg
- * amber "brand", ~195deg teal "accent", plus danger/positive pinned off
- * that wheel for unambiguous semantics) over warm near-neutral surfaces
- * and ink (hue ~80deg at very low chroma, instead of the cold slate grays
- * most AI-tool UIs default to).
+ * Palette: PLACEHOLDER values (DEC-47/DEC-48) - the 15 --color-* custom
+ * properties below are the naming contract fixed by the approved
+ * iteration-4 mock (planning/design/settings-screen-mock.html @ c6b9bb3,
+ * design brief section 11.2) and carry that mock's oklch values verbatim.
+ * Jim owns the final palette and re-themes by editing the values in this
+ * one file - see ../DESIGN.md for the token-contract note. Everything
+ * beyond the mock's 15 names (the *-active/-hover extra state steps,
+ * plus radius/font/transition below) is not part of the naming contract
+ * but is revalued here to sit coherently in the same placeholder family.
  *
  * Spacing rides Tailwind v4's built-in single `--spacing` base unit
  * (already one token controlling the whole numeric scale) - not
@@ -35,45 +38,48 @@
   --radius-lg: 1rem;
   --radius-full: 9999px;
 
-  /* Surfaces - warm near-white, layered canvas -> panel -> elevated. */
-  --color-surface-canvas: oklch(96% 0.012 80);
-  --color-surface-panel: oklch(99% 0.006 80);
-  --color-surface-elevated: oklch(100% 0 0);
+  /* Surfaces - mock naming contract, layered canvas -> panel -> elevated. */
+  --color-surface-canvas: oklch(18% 0.02 265);
+  --color-surface-panel: oklch(22% 0.022 265);
+  --color-surface-elevated: oklch(27% 0.025 265);
 
-  /* Ink - warm near-black text, never a cold pure gray. Text-on-a-filled-
-     color need is covered per-color by the *-ink tokens below (brand-ink,
-     danger-ink, ...), so there is no separate generic "inverted" token. */
-  --color-ink-primary: oklch(24% 0.02 80);
-  --color-ink-muted: oklch(48% 0.02 80);
+  /* Ink - mock naming contract. Text-on-a-filled-color need is covered
+     per-color by the *-ink tokens below (brand-ink, danger-ink, ...), so
+     there is no separate generic "inverted" token. */
+  --color-ink-primary: oklch(93% 0.012 265);
+  --color-ink-muted: oklch(68% 0.02 265);
 
-  /* Borders. */
-  --color-border-default: oklch(88% 0.015 80);
-  --color-border-strong: oklch(75% 0.02 80);
+  /* Borders - mock naming contract. */
+  --color-border-default: oklch(33% 0.022 265);
+  --color-border-strong: oklch(46% 0.03 265);
 
-  /* Brand - bright amber, hue ~75deg (triadic point 1). */
-  --color-brand: oklch(78% 0.19 75);
-  --color-brand-hover: oklch(72% 0.2 75);
-  --color-brand-active: oklch(66% 0.2 75);
-  --color-brand-ink: oklch(18% 0.03 75);
+  /* Brand - mock naming contract (hue ~295deg). -active is not part of the
+     mock's 15-token set; it extends the same hover step size (-6% L) one
+     further so the family stays coherent. */
+  --color-brand: oklch(72% 0.16 295);
+  --color-brand-hover: oklch(66% 0.17 295);
+  --color-brand-active: oklch(60% 0.16 295);
+  --color-brand-ink: oklch(16% 0.04 295);
 
-  /* Accent - bright teal, hue ~195deg (triadic point 2). Powers the focus
-     ring only for now - its contrast against brand amber makes focus
-     states unmistakable rather than borrowing brand's own hover shade.
-     (No accent-hover/-active/-ink: nothing renders an accent FILL yet: a
-     future accent-filled control, per DESIGN.md's extension rules, adds
-     those the same way brand's states are declared below.) */
-  --color-accent: oklch(70% 0.14 195);
+  /* Accent - mock naming contract (hue ~200deg). Powers the focus ring;
+     the mock also fills small text/dot accents with it directly.
+     (No accent-hover/-active/-ink: nothing renders a full accent FILL
+     needing states yet: a future accent-filled control, per DESIGN.md's
+     extension rules, adds those the same way brand's states are declared
+     above.) */
+  --color-accent: oklch(76% 0.12 200);
 
-  /* Danger - warm red-orange, deliberately off the brand/accent wheel so
-     it never reads as "just another brand shade". */
-  --color-danger: oklch(58% 0.21 25);
-  --color-danger-hover: oklch(52% 0.21 25);
-  --color-danger-active: oklch(46% 0.21 25);
-  --color-danger-ink: oklch(98% 0.01 25);
+  /* Danger - mock naming contract (hue ~25deg). -hover/-active are not
+     part of the mock's 15-token set; they extend the same -6% L step size
+     used for brand's hover/active so the family stays coherent. */
+  --color-danger: oklch(70% 0.16 25);
+  --color-danger-hover: oklch(64% 0.16 25);
+  --color-danger-active: oklch(58% 0.16 25);
+  --color-danger-ink: oklch(15% 0.05 25);
 
-  /* Positive - used only for the configured/not-configured Indicator's
-     dot; no text is ever rendered on top of it, so no -ink companion. */
-  --color-positive: oklch(62% 0.17 150);
+  /* Positive - mock naming contract; used only for the configured/
+     not-configured Indicator's dot, so no -ink companion. */
+  --color-positive: oklch(75% 0.13 155);
 
   /* Focus ring - reuses accent (single source; not a new hue). */
   --color-focus: var(--color-accent);

@@ -26,6 +26,21 @@ fails the moment one appears.
 
 ## The palette and its color theory
 
+**Placeholder note (DEC-47/DEC-48):** the color *values* below are
+placeholders (the iteration-2 "midnight-burrow" set), not the final
+palette. The **token contract** - the 15 `--color-*` names in
+`theme.css`'s naming vocabulary (`surface-canvas/-panel/-elevated`,
+`ink-primary/-muted`, `border-default/-strong`, `brand/-hover/-ink`,
+`accent`, `danger/-ink`, `positive`, `focus`) - is fixed by the approved
+iteration-4 mock (`planning/design/settings-screen-mock.html` @ `c6b9bb3`,
+design brief section 11.2) and is a lower bound: `theme.css` may declare
+more tokens than the mock (e.g. `brand-active`, `danger-hover`,
+`danger-active`) but never fewer, and every mock token name must always
+resolve to exactly one `theme.css` custom property. Jim owns the final
+palette and re-themes the app by editing `theme.css`'s values alone - the
+color-theory rationale immediately below describes today's placeholder
+values, not a permanent design decision.
+
 The palette is a **triadic scheme**: three hues spaced 120 degrees apart
 on the OKLCH hue wheel, which is the classical color-theory construction
 for a set of hues that read as clearly distinct while staying balanced
