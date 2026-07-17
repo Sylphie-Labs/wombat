@@ -168,6 +168,7 @@ from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
 from .gate.trigger import effective_urgency_threshold
+from .integrations.gcal.token_store import TokenStore as GcalTokenStore
 from .integrations.gmail.draft_composer import (
     DraftComposer,
     DraftTrailWriter,
@@ -653,6 +654,7 @@ def assemble_runtime(
     tz: ZoneInfo,
     replay_pending: bool = True,
     gmail_token_store: GmailTokenStore | None = None,
+    gcal_token_store: GcalTokenStore | None = None,
 ) -> RuntimeBundle:
     """Compose the ONE standing wombat process (TK-53, Q-71).
 
@@ -662,6 +664,12 @@ def assemble_runtime(
     BOTH that call and the outbound wiring's own check below, so the source-side read wiring and
     the draft-side write wiring always agree on the SAME stored credential. Defaults to ``None``
     (the real ``GmailKeyringTokenStore``), behavior-preserving for every existing caller.
+
+    ``gcal_token_store`` (TK-254, ISS-10(a)) mirrors ``gmail_token_store`` above for the gcal
+    seam — threaded into BOTH ``build_source_registry`` and ``build_brief_fetches`` (the source
+    poller and the morning-brief fetch share this exact wired/unwired decision, TK-96) so tests
+    can inject an in-memory fake instead of ever touching the real OS keyring. Defaults to
+    ``None`` (the real ``GcalKeyringTokenStore``), behavior-preserving for every existing caller.
 
     Registers the TK-7 drain pathway (id ``DRAIN_PATHWAY_ID``) and wires the REAL production
     ``Gate`` (TK-27) — a durable ``PendingSet`` backed by the TK-29 Postgres ``PendingJournal``
@@ -1112,7 +1120,12 @@ def assemble_runtime(
         )
     else:
         triage_rules = load_triage_rules()
-        brief_fetches = build_brief_fetches(config, tz=tz)
+        brief_fetches = build_brief_fetches(
+            config,
+            tz=tz,
+            gcal_token_store=gcal_token_store,
+            gmail_token_store=gmail_token_store,
+        )
         brief_gather_stage = BriefGatherStage(
             fetch_calendar=brief_fetches.fetch_calendar,
             fetch_gmail=brief_fetches.fetch_gmail,
@@ -1155,6 +1168,7 @@ def assemble_runtime(
         config,
         queue,
         tz=tz,
+        gcal_token_store=gcal_token_store,
         gmail_token_store=gmail_token_store,
         live_persona=live_persona,
         speak=speak,

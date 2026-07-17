@@ -1022,6 +1022,25 @@ class _FakeGmailTokenStore:
         self._value = None
 
 
+class _FakeGcalTokenStore:
+    """TK-254 (ISS-10(a)): the gcal counterpart of ``_FakeGmailTokenStore`` above — injected
+    via ``assemble_runtime``'s ``gcal_token_store`` seam so the Google-creds tests below never
+    fall through to the real ``GcalKeyringTokenStore`` (which the root conftest keyring
+    tripwire would trip)."""
+
+    def __init__(self, *, initial: str | None = None) -> None:
+        self._value = initial
+
+    def load(self) -> str | None:
+        return self._value
+
+    def save(self, token: str) -> None:
+        self._value = token
+
+    def clear(self) -> None:
+        self._value = None
+
+
 def _config_with_google() -> WombatConfig:
     return WombatConfig(
         deepseek_api_key="sk-test",
@@ -1048,6 +1067,7 @@ def test_assemble_runtime_with_google_creds_and_token_exposes_action_trail_write
         replay_pending=False,
         tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeGmailTokenStore(initial="fake-stored-token"),
+        gcal_token_store=_FakeGcalTokenStore(initial="fake-stored-token"),
     )
 
     assert bundle.action_trail_writer is not None
@@ -1279,6 +1299,7 @@ def test_assemble_runtime_with_google_creds_threads_live_persona_into_draft_comp
         replay_pending=False,
         tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeGmailTokenStore(initial="fake-stored-token"),
+        gcal_token_store=_FakeGcalTokenStore(initial="fake-stored-token"),
     )
 
     graph = bundle.pathways.get(bundle.drain_pathway_id)

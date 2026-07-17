@@ -379,6 +379,11 @@ def test_assemble_runtime_expired_gmail_token_degrades_like_google_less_boot(
             replay_pending=False,
             tz=ZoneInfo("UTC"),
             gmail_token_store=_FakeTokenStore(initial="expired-token"),
+            # TK-254 (ISS-10(a)): _google_config() sets Google client creds directly, so
+            # without an injected gcal store this would fall through to the real OS-keyring
+            # GcalKeyringTokenStore (tripped by the root conftest hermeticity guard) even
+            # though this test exercises the gmail seam only.
+            gcal_token_store=_FakeTokenStore(),
         )
 
     graph = bundle.pathways.get(bundle.drain_pathway_id)
