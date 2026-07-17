@@ -182,8 +182,18 @@ def _build_gcal_poller(
         )
         return None
     # Token is confirmed present BEFORE the session factory (and thus get_credentials()) is
-    # ever called — this path never triggers interactive OAuth consent (Q-61).
-    session = make_calendar_session(config, token_store=store)
+    # ever called — this path never triggers interactive OAuth consent (Q-61). But a stored
+    # token can still be expired/revoked: TK-253 (DEC-49, CRF-6 precedent) — a bad stored
+    # credential degrades exactly like the no-stored-credential branch above, not a boot crash.
+    try:
+        session = make_calendar_session(config, token_store=store)
+    except Exception:
+        logger.warning(
+            "gcal source not wired: stored credential failed to refresh — run "
+            "`python -m wombat.integrations.gcal.auth` once to re-consent, then restart",
+            exc_info=True,
+        )
+        return None
     return CalendarPoller(
         session=session,
         tz=tz,
@@ -221,8 +231,18 @@ def _build_gmail_poller(
         )
         return None
     # Token is confirmed present BEFORE the session factory (and thus get_credentials()) is
-    # ever called — this path never triggers interactive OAuth consent (Q-67).
-    session = make_gmail_session(config, token_store=store)
+    # ever called — this path never triggers interactive OAuth consent (Q-67). But a stored
+    # token can still be expired/revoked: TK-253 (DEC-49, CRF-6 precedent) — a bad stored
+    # credential degrades exactly like the no-stored-credential branch above, not a boot crash.
+    try:
+        session = make_gmail_session(config, token_store=store)
+    except Exception:
+        logger.warning(
+            "gmail source not wired: stored credential failed to refresh — run "
+            "`python -m wombat.integrations.gmail.auth` once to re-consent, then restart",
+            exc_info=True,
+        )
+        return None
     return GmailPoller(
         session=session,
         poll_interval_seconds=poll_interval_seconds,

@@ -17,6 +17,8 @@ from cogworx.loop.state import RunStatus
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 from cogworx.testing.doubles import InMemoryGraphStore, InMemoryJournal, InMemoryLatentStore
+from google.auth.exceptions import RefreshError
+from pydantic import SecretStr
 
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
@@ -318,6 +320,73 @@ def test_assemble_runtime_reflection_kb_load_failure_boots_with_empty_kb_and_lou
     ]
     assert len(matching) == 1
     assert matching[0].levelname == "WARNING"
+
+
+# --- TK-253 (DEC-49, CRF-6 precedent): expired stored gmail token degrades like absent -----------
+
+
+class _FakeTokenStore:
+    def __init__(self, *, initial: str | None = None) -> None:
+        self._value = initial
+
+    def load(self) -> str | None:
+        return self._value
+
+    def save(self, token: str) -> None:
+        self._value = token
+
+    def clear(self) -> None:
+        self._value = None
+
+
+def _google_config() -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        google_oauth_client_id="test-client-id",
+        google_oauth_client_secret=SecretStr("test-client-secret"),
+    )
+
+
+def test_assemble_runtime_expired_gmail_token_degrades_like_google_less_boot(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC1: client creds configured + a stored gmail token present, but the token is expired/
+    revoked (``make_gmail_session`` raises ``RefreshError``) -- ``assemble_runtime`` COMPLETES,
+    no ``drafts.create`` capability, no DRAFT composer route, drain graph byte-identical to a
+    Google-less boot; the WARNING names the gmail re-consent command."""
+    op = load_operating_params()
+
+    def _raise_refresh_error(config: WombatConfig, *, token_store: object) -> object:
+        raise RefreshError("stored gmail token is expired/revoked")  # type: ignore[no-untyped-call]
+
+    monkeypatch.setattr(bootstrap, "make_gmail_session", _raise_refresh_error)
+
+    google_less = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    baseline_stages = set(google_less.pathways.get(google_less.drain_pathway_id).names())
+
+    with caplog.at_level("WARNING"):
+        bundle = bootstrap.assemble_runtime(
+            config=_google_config(),
+            dsn="postgresql://fake-host/fake-db",
+            params=op,
+            replay_pending=False,
+            tz=ZoneInfo("UTC"),
+            gmail_token_store=_FakeTokenStore(initial="expired-token"),
+        )
+
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    assert set(graph.names()) == baseline_stages  # byte-identical to the Google-less boot
+    assert "draft_composer" not in graph.names()
+    assert "gmail outbound wiring not wired" in caplog.text
+    assert "stored Gmail credential failed to refresh" in caplog.text
+    assert "python -m wombat.integrations.gmail.auth" in caplog.text
 
 
 # --- CRF-3 (DEC-41(e)): build_engine pins max_steps=100_000 + a logging event_sink --------------

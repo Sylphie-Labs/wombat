@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
+from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from pydantic import SecretStr
 
@@ -401,6 +402,108 @@ def test_no_client_creds_skips_loudly_naming_the_missing_config(
 
     assert consent_calls == []
     assert "GOOGLE_OAUTH_CLIENT_ID" in caplog.text or "not configured" in caplog.text
+
+
+# --------------------------------------------------------- TK-253 (DEC-49): expired stored token
+
+
+def test_gcal_source_not_wired_when_stored_credential_fails_to_refresh(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2: client creds configured AND a stored gcal token present, but the token is expired/
+    revoked (session factory's ``get_credentials`` raises) — degrades exactly like the no-stored-
+    token branch (source skipped, no exception), WARNING names the gcal re-consent command."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+
+    class _FailingCalendarAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            raise RefreshError("stored gcal token is expired/revoked")  # type: ignore[no-untyped-call]
+
+    monkeypatch.setattr(gcal_session_module, "CalendarAuth", _FailingCalendarAuth)
+    config = _make_config(**_CONFIGURED)
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial="expired-token"),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "gcal")
+    assert "gcal source not wired" in caplog.text
+    assert "python -m wombat.integrations.gcal.auth" in caplog.text
+    assert consent_calls == []
+
+
+def test_gmail_source_not_wired_when_stored_credential_fails_to_refresh(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2: same as above for the gmail source builder."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+
+    class _FailingGmailAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            raise RefreshError("stored gmail token is expired/revoked")  # type: ignore[no-untyped-call]
+
+    monkeypatch.setattr(gmail_session_module, "GmailAuth", _FailingGmailAuth)
+    config = _make_config(**_CONFIGURED)
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial="expired-token"),
+        )
+
+    assert not _is_registered(registry, "gmail")
+    assert "gmail source not wired" in caplog.text
+    assert "python -m wombat.integrations.gmail.auth" in caplog.text
+    assert consent_calls == []
+
+
+def test_build_brief_fetches_shares_the_gmail_expired_token_skip_decision(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2: ``build_brief_fetches`` reuses the SAME ``_build_gmail_poller`` extraction (TK-96) —
+    an expired stored gmail token degrades it to the same raising placeholder as no-token-at-all,
+    boot continues Google-less rather than propagating the RefreshError."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+
+    class _FailingGmailAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            raise RefreshError("stored gmail token is expired/revoked")  # type: ignore[no-untyped-call]
+
+    monkeypatch.setattr(gmail_session_module, "GmailAuth", _FailingGmailAuth)
+    config = _make_config(**_CONFIGURED)
+
+    with caplog.at_level(logging.WARNING):
+        fetches = build_brief_fetches(
+            config,
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial="expired-token"),
+        )
+
+    with pytest.raises(ConfigurationError):
+        fetches.fetch_gmail()
+    assert "python -m wombat.integrations.gmail.auth" in caplog.text
+    assert consent_calls == []
 
 
 # ---------------------------------------------------------------------- TK-162/Q-97: asr lesion

@@ -872,20 +872,35 @@ def assemble_runtime(
                 "`python -m wombat.integrations.gmail.auth` once to grant consent, then restart"
             )
         else:
-            gmail_session = make_gmail_session(config, token_store=gmail_store)
-            capability_registry.register(make_drafts_create_capability(gmail_session))
-            # ActionTrailWriter (TK-146) has no other boot composition site (TK-177) — ONE
-            # instance over this SAME dsn, shared by draft_composer and draft_dispatch below, and
-            # exposed on RuntimeBundle.action_trail_writer (TK-184) so runtime's teardown can
-            # close it.
-            action_trail_writer = ActionTrailWriter(dsn)
-            draft_composer_stage = build_draft_composer_stage(
-                writer=action_trail_writer,
-                clock=_utc_now,
-                assistant_name=config.wombat_assistant_name,
-                live_persona=live_persona,
-            )
-            composer_by_kind[ItemKind.DRAFT] = "draft_composer"
+            # TK-253 (DEC-49, CRF-6 precedent): a stored-but-expired/revoked credential must
+            # degrade exactly like the no-stored-credential branch above, not crash boot —
+            # RefreshError/transport/JSON-decode/scope failures on a bad stored credential are
+            # one operational class. This does NOT wrap the interactive consent flow itself
+            # (get_credentials/gmail/auth.py) — only the eager-refresh session factory call.
+            try:
+                gmail_session = make_gmail_session(config, token_store=gmail_store)
+            except Exception:
+                logger.warning(
+                    "assemble_runtime: gmail outbound wiring not wired (drafts.create capability + "
+                    "DRAFT route/dispatch-edge skipped together): stored Gmail credential failed "
+                    "to refresh — run `python -m wombat.integrations.gmail.auth` once to "
+                    "re-consent, then restart",
+                    exc_info=True,
+                )
+            else:
+                capability_registry.register(make_drafts_create_capability(gmail_session))
+                # ActionTrailWriter (TK-146) has no other boot composition site (TK-177) — ONE
+                # instance over this SAME dsn, shared by draft_composer and draft_dispatch below,
+                # and exposed on RuntimeBundle.action_trail_writer (TK-184) so runtime's teardown
+                # can close it.
+                action_trail_writer = ActionTrailWriter(dsn)
+                draft_composer_stage = build_draft_composer_stage(
+                    writer=action_trail_writer,
+                    clock=_utc_now,
+                    assistant_name=config.wombat_assistant_name,
+                    live_persona=live_persona,
+                )
+                composer_by_kind[ItemKind.DRAFT] = "draft_composer"
     else:
         logger.warning(
             "assemble_runtime: gmail outbound wiring not wired (drafts.create capability + "
