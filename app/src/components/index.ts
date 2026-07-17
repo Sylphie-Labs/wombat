@@ -36,3 +36,5 @@ export { Upcoming } from "./Upcoming";
 export { InboxHighlights } from "./InboxHighlights";
 
 export { NotepadCard } from "./NotepadCard";
+
+export { GoogleConnections } from "./GoogleConnections";

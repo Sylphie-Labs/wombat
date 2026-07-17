@@ -5,6 +5,7 @@ import {
   Button,
   ChatDock,
   Field,
+  GoogleConnections,
   Header,
   Indicator,
   NavRail,
@@ -441,6 +442,8 @@ export function App() {
                         </div>
                       ))}
                     </Panel>
+
+                    <GoogleConnections />
 
                     {renderSaveBar()}
                   </>

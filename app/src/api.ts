@@ -182,3 +182,45 @@ export async function getGmailMessages(): Promise<GmailResponse> {
   }
   return (await response.json()) as GmailResponse;
 }
+
+/**
+ * TK-257 (DEC-50, verified against `src/wombat/settings_app/google_connect.py` +
+ * `settings_app/api.py`'s `GET /google/status`/`POST /google/{service}/connect`):
+ * the in-app Google OAuth connection shapes, verbatim. `GoogleServiceName` is the
+ * closed two-value vocabulary (`GOOGLE_SERVICES`); `status` is the honest
+ * non-crashing connection probe, `consent` is the (in-memory, per-service)
+ * background consent-trigger state - `error` is present only while `consent`
+ * is `"error"`.
+ */
+export type GoogleServiceName = "gmail" | "gcal";
+export type GoogleConnectionStatus = "not_configured" | "not_connected" | "expired" | "connected";
+export type GoogleConsentState = "idle" | "in_progress" | "error";
+
+export interface GoogleServiceStatus {
+  status: GoogleConnectionStatus;
+  consent: GoogleConsentState;
+  error?: string;
+}
+
+export type GoogleStatusResponse = Record<GoogleServiceName, GoogleServiceStatus>;
+
+/** `GET /google/status`. Load-on-view / poll-while-consent-in-progress only - no other refresh. */
+export async function getGoogleStatus(): Promise<GoogleStatusResponse> {
+  const response = await tokenedFetch("/google/status");
+  if (!response.ok) {
+    throw new Error(`GET /google/status failed: ${response.status}`);
+  }
+  return (await response.json()) as GoogleStatusResponse;
+}
+
+/**
+ * `POST /google/{service}/connect` - triggers the (possibly interactive) consent
+ * flow. Succeeds with 202 (accepted, runs on a background thread); the backend
+ * 409s if a consent flow is already running for this service.
+ */
+export async function connectGoogleService(service: GoogleServiceName): Promise<void> {
+  const response = await tokenedFetch(`/google/${service}/connect`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`POST /google/${service}/connect failed: ${response.status}`);
+  }
+}
