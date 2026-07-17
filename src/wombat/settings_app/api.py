@@ -42,6 +42,12 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
 from wombat.external_store import ExternalItemStore
+from wombat.settings_app.google_connect import (
+    GOOGLE_SERVICES,
+    ConsentInProgressError,
+    GoogleConnectionManager,
+    ServiceName,
+)
 from wombat.settings_store import SettingsStore
 from wombat.voice.key_store import VoiceKeyStore, VoiceKeyStoreError
 
@@ -55,6 +61,12 @@ DEFAULT_GMAIL_LIMIT = 50
 # Fixed, generic PUT-degrade detail (DEC-43 ruling) — NEVER derived from the underlying exception,
 # so a storage failure can never echo a secret (e.g. a DSN fragment) back to the caller.
 _STORAGE_UNAVAILABLE_DETAIL = "settings storage is unavailable; try again later"
+
+# TK-256 (DEC-50): the POST /google/{service}/connect degrade detail when create_app was built
+# with google_connections=None — mirrors the settings-store degrade posture above.
+_GOOGLE_UNAVAILABLE_DETAIL = "google connection service is unavailable; try again later"
+
+_GoogleServiceLiteral = Literal["gmail", "gcal"]
 
 # The loopback bind address this API is served on — NEVER 0.0.0.0 (DEC-30/31). A pinned module
 # constant so a structural test can assert it directly.
@@ -138,6 +150,7 @@ def create_app(
     key_store: VoiceKeyStore,
     token: str,
     external_store: ExternalItemStore | None = None,
+    google_connections: GoogleConnectionManager | None = None,
 ) -> FastAPI:
     """Build the settings API (TK-197). ``token`` is the per-launch handshake secret every route
     requires via the ``X-Wombat-Token`` header (the ``__main__`` handshake, DEC-31).
@@ -149,7 +162,12 @@ def create_app(
     for ``GET /external/calendar``/``GET /external/gmail`` — ``None`` the same way ``store`` can
     be, riding the SAME loud-degrade posture (a ``None`` store or a raising read returns 200 with
     empty ``items`` and ``storage_unavailable: true``, never a bare 500). No write/delete route
-    exists here; the TK-245 runtime sync is the only writer."""
+    exists here; the TK-245 runtime sync is the only writer.
+
+    ``google_connections`` (TK-256, DEC-50) is the in-app Google OAuth connection manager behind
+    ``GET /google/status``/``POST /google/{service}/connect`` — ``None`` mirrors the ``store=None``
+    degrade: GET renders every service honestly ``not_configured``, POST 503s with a fixed,
+    generic detail."""
 
     app = FastAPI(title="wombat-settings")
 
@@ -228,6 +246,29 @@ def create_app(
             except Exception:
                 items = []
         return {"items": items, "storage_unavailable": unavailable}
+
+    @app.get("/google/status", dependencies=[Depends(_require_token)])
+    def get_google_status() -> dict[ServiceName, dict[str, object]]:
+        if google_connections is None:
+            return {
+                service: {"status": "not_configured", "consent": "idle"}
+                for service in GOOGLE_SERVICES
+            }
+        return google_connections.status()
+
+    @app.post(
+        "/google/{service}/connect",
+        status_code=202,
+        dependencies=[Depends(_require_token)],
+    )
+    def post_google_connect(service: _GoogleServiceLiteral) -> dict[str, bool]:
+        if google_connections is None:
+            raise HTTPException(status_code=503, detail=_GOOGLE_UNAVAILABLE_DETAIL)
+        try:
+            google_connections.get(service).connect()
+        except ConsentInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True}
 
     return app
 

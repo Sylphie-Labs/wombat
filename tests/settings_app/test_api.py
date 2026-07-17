@@ -30,6 +30,15 @@ TK-246 (DEC-45(e)): GET /external/calendar + GET /external/gmail — AC1
     ``test_get_external_calendar_store_raises_degrades_to_empty_items_with_flag``,
     ``test_get_external_gmail_store_raises_degrades_to_empty_items_with_flag``; AC3
     ``test_no_non_get_method_is_routable_under_external``.
+
+TK-256 (DEC-50): GET /google/status + POST /google/{service}/connect — AC1
+    ``test_get_google_status_no_connections_returns_not_configured_for_both``,
+    ``test_get_google_status_reads_per_service_status_from_the_manager``; AC2
+    ``test_post_google_connect_no_connections_is_503``,
+    ``test_post_google_connect_unknown_service_is_422``,
+    ``test_post_google_connect_returns_202_reports_in_progress_then_connected``,
+    ``test_second_post_google_connect_while_in_progress_is_409``,
+    ``test_post_google_connect_raising_runner_surfaces_error_and_process_stays_up``.
 """
 
 from __future__ import annotations
@@ -39,6 +48,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import typing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -57,6 +68,7 @@ from wombat.settings_app.api import (
     SettingsUpdate,
     create_app,
 )
+from wombat.settings_app.google_connect import GoogleConnectionManager, GoogleServiceConnection
 from wombat.settings_store import SettingsStore, ensure_schema
 from wombat.voice.key_store import VoiceKeyStoreError
 
@@ -144,10 +156,17 @@ def _client(
     key_store: object | None = None,
     store: object | None = None,
     external_store: object | None = None,
+    google_connections: object | None = None,
 ) -> TestClient:
     voice_store = key_store if key_store is not None else _FakeVoiceKeyStore()
     settings_store = store if store is not None else _FakeSettingsStore()
-    app = create_app(settings_store, voice_store, TOKEN, external_store)  # type: ignore[arg-type]
+    app = create_app(
+        settings_store,  # type: ignore[arg-type]
+        voice_store,  # type: ignore[arg-type]
+        TOKEN,
+        external_store,  # type: ignore[arg-type]
+        google_connections,  # type: ignore[arg-type]
+    )
     return TestClient(app)
 
 
@@ -162,6 +181,8 @@ def _client(
         ("PUT", "/keys/fish", {"key": "abc"}),
         ("GET", "/external/calendar", None),
         ("GET", "/external/gmail", None),
+        ("GET", "/google/status", None),
+        ("POST", "/google/gmail/connect", None),
     ],
 )
 def test_missing_token_is_401(
@@ -180,6 +201,8 @@ def test_missing_token_is_401(
         ("PUT", "/keys/fish", {"key": "abc"}),
         ("GET", "/external/calendar", None),
         ("GET", "/external/gmail", None),
+        ("GET", "/google/status", None),
+        ("POST", "/google/gmail/connect", None),
     ],
 )
 def test_wrong_token_is_401(method: str, path: str, json_body: dict[str, object] | None) -> None:
@@ -544,6 +567,217 @@ def test_get_external_gmail_store_raises_degrades_to_empty_items_with_flag() -> 
     assert body["storage_unavailable"] is True
 
 
+# --- TK-256 (DEC-50): GET /google/status + POST /google/{service}/connect ----------------------
+
+
+class _NullAuth:
+    """Never-called fake — proves the load()-None case never reaches the route's connections."""
+
+    def get_credentials(self) -> object:
+        raise AssertionError("get_credentials must not be called for a not_configured service")
+
+
+class _OkAuth:
+    def get_credentials(self) -> object:
+        return object()
+
+
+class _BlockingConnectAuth:
+    """A fake whose ``get_credentials()`` blocks until the test releases it, then saves a token
+    — proves POST /google/{service}/connect returns before the flow completes (CON-5) and that
+    GET /google/status reflects in_progress while it's running."""
+
+    def __init__(
+        self, token_store: object, started: threading.Event, resume: threading.Event
+    ) -> None:
+        self._token_store = token_store
+        self._started = started
+        self._resume = resume
+
+    def get_credentials(self) -> object:
+        self._started.set()
+        self._resume.wait(timeout=5)
+        self._token_store.save("consented-token")  # type: ignore[attr-defined]
+        return object()
+
+
+class _RaisingConnectAuth:
+    def get_credentials(self) -> object:
+        raise RuntimeError("consent flow failed: user closed the browser")
+
+
+class _InMemoryTokenStore:
+    def __init__(self, initial: str | None = None) -> None:
+        self.token = initial
+
+    def load(self) -> str | None:
+        return self.token
+
+    def save(self, value: str) -> None:
+        self.token = value
+
+
+def test_get_google_status_no_connections_returns_not_configured_for_both() -> None:
+    """TK-256: create_app(google_connections=None) mirrors the store=None degrade — an honest
+    not_configured for every service, never a crash."""
+    client = _client(google_connections=None)
+
+    response = client.get("/google/status", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "gmail": {"status": "not_configured", "consent": "idle"},
+        "gcal": {"status": "not_configured", "consent": "idle"},
+    }
+
+
+def test_get_google_status_reads_per_service_status_from_the_manager() -> None:
+    manager = GoogleConnectionManager(
+        {
+            "gmail": GoogleServiceConnection(
+                configured=False, token_store=_InMemoryTokenStore(), auth_factory=_NullAuth
+            ),
+            "gcal": GoogleServiceConnection(
+                configured=True,
+                token_store=_InMemoryTokenStore("stored-token"),
+                auth_factory=_OkAuth,
+            ),
+        }
+    )
+    client = _client(google_connections=manager)
+
+    response = client.get("/google/status", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "gmail": {"status": "not_configured", "consent": "idle"},
+        "gcal": {"status": "connected", "consent": "idle"},
+    }
+
+
+def test_post_google_connect_no_connections_is_503() -> None:
+    client = _client(google_connections=None)
+
+    response = client.post("/google/gmail/connect", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 503
+
+
+def test_post_google_connect_unknown_service_is_422() -> None:
+    manager = GoogleConnectionManager(
+        {
+            "gmail": GoogleServiceConnection(
+                configured=False, token_store=_InMemoryTokenStore(), auth_factory=_NullAuth
+            ),
+            "gcal": GoogleServiceConnection(
+                configured=False, token_store=_InMemoryTokenStore(), auth_factory=_NullAuth
+            ),
+        }
+    )
+    client = _client(google_connections=manager)
+
+    response = client.post("/google/outlook/connect", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 422
+
+
+def test_post_google_connect_returns_202_reports_in_progress_then_connected() -> None:
+    token_store = _InMemoryTokenStore(None)
+    started = threading.Event()
+    resume = threading.Event()
+    manager = GoogleConnectionManager(
+        {
+            "gmail": GoogleServiceConnection(
+                configured=True,
+                token_store=token_store,
+                auth_factory=lambda: _BlockingConnectAuth(token_store, started, resume),
+            ),
+            "gcal": GoogleServiceConnection(
+                configured=False, token_store=_InMemoryTokenStore(), auth_factory=_NullAuth
+            ),
+        }
+    )
+    client = _client(google_connections=manager)
+
+    connect_response = client.post("/google/gmail/connect", headers={"X-Wombat-Token": TOKEN})
+    assert connect_response.status_code == 202
+    assert started.wait(timeout=5)
+
+    in_progress = client.get("/google/status", headers={"X-Wombat-Token": TOKEN})
+    assert in_progress.json()["gmail"]["consent"] == "in_progress"
+
+    resume.set()
+    deadline = time.monotonic() + 5
+    body: dict[str, typing.Any] = {}
+    while time.monotonic() < deadline:
+        body = client.get("/google/status", headers={"X-Wombat-Token": TOKEN}).json()
+        if body["gmail"] == {"status": "connected", "consent": "idle"}:
+            break
+        time.sleep(0.01)
+    assert body["gmail"] == {"status": "connected", "consent": "idle"}
+
+
+def test_second_post_google_connect_while_in_progress_is_409() -> None:
+    token_store = _InMemoryTokenStore(None)
+    started = threading.Event()
+    resume = threading.Event()
+    manager = GoogleConnectionManager(
+        {
+            "gmail": GoogleServiceConnection(
+                configured=True,
+                token_store=token_store,
+                auth_factory=lambda: _BlockingConnectAuth(token_store, started, resume),
+            ),
+            "gcal": GoogleServiceConnection(
+                configured=False, token_store=_InMemoryTokenStore(), auth_factory=_NullAuth
+            ),
+        }
+    )
+    client = _client(google_connections=manager)
+
+    first = client.post("/google/gmail/connect", headers={"X-Wombat-Token": TOKEN})
+    assert first.status_code == 202
+    assert started.wait(timeout=5)
+
+    second = client.post("/google/gmail/connect", headers={"X-Wombat-Token": TOKEN})
+    assert second.status_code == 409
+
+    resume.set()  # release the background thread before the test ends
+
+
+def test_post_google_connect_raising_runner_surfaces_error_and_process_stays_up() -> None:
+    manager = GoogleConnectionManager(
+        {
+            "gmail": GoogleServiceConnection(
+                configured=True,
+                token_store=_InMemoryTokenStore(None),
+                auth_factory=_RaisingConnectAuth,
+            ),
+            "gcal": GoogleServiceConnection(
+                configured=False, token_store=_InMemoryTokenStore(), auth_factory=_NullAuth
+            ),
+        }
+    )
+    client = _client(google_connections=manager)
+
+    connect_response = client.post("/google/gmail/connect", headers={"X-Wombat-Token": TOKEN})
+    assert connect_response.status_code == 202
+
+    deadline = time.monotonic() + 5
+    body: dict[str, typing.Any] = {}
+    while time.monotonic() < deadline:
+        body = client.get("/google/status", headers={"X-Wombat-Token": TOKEN}).json()
+        if body["gmail"]["consent"] == "error":
+            break
+        time.sleep(0.01)
+    assert body["gmail"]["consent"] == "error"
+    assert "consent flow failed" in str(body["gmail"]["error"])
+
+    # the process stays up — a plain, unrelated request still works.
+    still_up = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert still_up.status_code == 200
+
+
 # --- AC3: structural ---------------------------------------------------------------------------
 
 
@@ -636,7 +870,13 @@ def test_subprocess_handshake_and_smoke(tmp_path: Path) -> None:
 def test_subprocess_boots_degraded_when_dsn_absent(tmp_path: Path) -> None:
     """TK-242: no ``WOMBAT_PG_DSN`` in env and no ``.env`` in ``tmp_path`` (a fresh, empty cwd,
     never the repo root) -> the process still boots in the read-only degrade posture instead of
-    crashing: GET is 200 all-null + storage_unavailable, PUT is 503."""
+    crashing: GET is 200 all-null + storage_unavailable, PUT is 503.
+
+    TK-256 (DEC-50): the root ``tests/conftest.py`` fixture forces
+    ``GOOGLE_OAUTH_CLIENT_ID``/``GOOGLE_OAUTH_CLIENT_SECRET`` to the empty string for every test
+    (hermeticity) — that empty-string env override rides into this subprocess's ``env`` too, so
+    it also proves ``__main__`` boots creds-less into DEC-50's ``not_configured`` degrade for
+    both Google services, rather than crashing."""
     env = {k: v for k, v in os.environ.items() if k != "WOMBAT_PG_DSN"}
     proc = subprocess.Popen(
         [sys.executable, "-m", "wombat.settings_app"],
@@ -667,6 +907,15 @@ def test_subprocess_boots_degraded_when_dsn_absent(tmp_path: Path) -> None:
             timeout=5,
         )
         assert put_response.status_code == 503
+
+        google_status = httpx.get(
+            f"{base_url}/google/status", headers={"X-Wombat-Token": token}, timeout=5
+        )
+        assert google_status.status_code == 200
+        assert google_status.json() == {
+            "gmail": {"status": "not_configured", "consent": "idle"},
+            "gcal": {"status": "not_configured", "consent": "idle"},
+        }
     finally:
         proc.terminate()
         try:
