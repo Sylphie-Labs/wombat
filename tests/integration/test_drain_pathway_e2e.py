@@ -14,17 +14,10 @@ a fresh clone), mirroring ``tests/unit/test_queue.py``:
     docker run --rm -d -p 5511:5432 -e POSTGRES_PASSWORD=wombat postgres:16
     WOMBAT_TEST_PG_DSN=postgresql://postgres:wombat@localhost:5511/postgres
 
-IDLE SCENARIO — route-guard fix (Q-53 rider on TK-7): the "idle" scenario (a second drive on an
-empty queue parks the run on a ``Wait``) originally tripped a pre-existing defect in
-``DrainQueueStage`` (TK-5): ``transitions = ("gate",)`` did not declare a self-edge, yet its
-empty-queue path returns ``Wait(to="drain_queue")`` (self), so a REAL ``Engine`` drive's
-declared-route guard (``graph.edges_from(current)`` — see ``cogworx.runtime.engine._drive``)
-rejected the ``Wait`` with ``StageGraphError`` the moment the queue went empty (TK-5's own tests
-only ever drove the stage via ``StageContextFake``, so the gap was never exercised until this e2e).
-The architect sanctioned the one-line fix as a cross-ticket rider (Q-53):
-``DrainQueueStage.transitions = ("gate", "drain_queue")`` declares BOTH real edges, so the idle
-``Wait`` is now accepted and the run reaches ``WAITING`` cleanly — proven by the real (un-stubbed)
-idle test below.
+IDLE SCENARIO (TK-230, DEC-41, superseding the old Q-53 self-park rider): a second drive on an
+empty queue no longer parks the run on a ``Wait`` at all. ``DrainQueueStage`` (TK-5) declares only
+``transitions = ("gate",)``; its empty-queue path returns ``Done`` carrying a ``DRAIN_HEARTBEAT``
+artifact, so the run COMPLETES — proven by the real (un-stubbed) idle test below.
 """
 
 from __future__ import annotations
@@ -58,6 +51,7 @@ from wombat.sinks.speak import SpeakSink
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
+    DRAIN_HEARTBEAT,
     HOLD_REPORT,
     composed_output_from_artifact_data,
 )
@@ -407,10 +401,10 @@ async def test_degrade_variant_composed_output_degraded_true(clean_table: None) 
         queue.close()
 
 
-# --- Idle: a drive on the empty queue parks WAITING (Q-53 route-guard rider fix — real pass) ------
+# --- Idle: a drive on the empty queue completes Done (DEC-41 bounded episode) --------------------
 
 
-async def test_idle_second_drive_on_empty_queue_parks_wait(clean_table: None) -> None:
+async def test_idle_second_drive_on_empty_queue_completes_done_pg(clean_table: None) -> None:
     unused_model = lambda guard: FakeModel(  # noqa: E731
         raises=AssertionError("the mouth must never be called while the queue is empty")
     )
@@ -423,10 +417,12 @@ async def test_idle_second_drive_on_empty_queue_parks_wait(clean_table: None) ->
             initial=_initial_artifact(),
         )
 
-        # No StageGraphError: the empty-queue Wait(to="drain_queue") is now an accepted edge and
-        # the run parks WAITING on the drain_queue heartbeat (the committed fresh Wait step).
-        assert final.status is RunStatus.WAITING
+        # TK-230/DEC-41: the empty-queue drive is NOT a self-park any more — DrainQueueStage
+        # returns Done carrying a DRAIN_HEARTBEAT artifact, and the run COMPLETES.
+        assert final.status is RunStatus.COMPLETED
         assert tuple(s.stage_name for s in final.steps) == ("drain_queue",)
+        assert final.steps[0].result.output is not None
+        assert final.steps[0].result.output.kind == DRAIN_HEARTBEAT
     finally:
         queue.close()
 
