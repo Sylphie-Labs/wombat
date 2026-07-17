@@ -66,6 +66,7 @@ from wombat.queue import WombatQueue
 from wombat.queue import ensure_schema as ensure_queue_schema
 from wombat.rating.rating_tuner import RatingTuner
 from wombat.sinks.speak import SpeakSink
+from wombat.stages.artifacts import DRAIN_HEARTBEAT
 from wombat.stages.chat_reply import ChatReplyStage
 from wombat.stages.compose import ComposeStage
 from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
@@ -133,7 +134,7 @@ def clean_tables() -> None:
 # --- AC1(b): a real assemble_runtime-composed Engine, dream COMPLETED, drain drive still clean ----
 
 
-async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
+async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_pg(
     clean_tables: None,
 ) -> None:
     assert _DSN is not None
@@ -167,8 +168,9 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
         ]
 
         # A drain drive fired AFTER the dream run completes is clean and unaffected — the
-        # heartbeat continues (an empty queue self-parks WAITING, mirrors the drain e2e's own
-        # idle scenario).
+        # heartbeat continues (TK-230/DEC-41: an empty-queue drive is NOT a self-park; it
+        # COMPLETES carrying a DRAIN_HEARTBEAT artifact, mirrors the drain e2e's own idle
+        # scenario).
         drain_run_id = "run-drain-after-dream-ac1"
         drain_final = await bundle.engine.run(
             run_id=drain_run_id,
@@ -176,7 +178,9 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean(
             pathway_id=bundle.drain_pathway_id,
             initial=_initial_drain_artifact(),
         )
-        assert drain_final.status is RunStatus.WAITING
+        assert drain_final.status is RunStatus.COMPLETED
+        assert drain_final.steps[0].result.output is not None
+        assert drain_final.steps[0].result.output.kind == DRAIN_HEARTBEAT
     finally:
         bundle.queue.close()
         bundle.daily_ledger.close()
@@ -331,7 +335,7 @@ def clean_table(clean_tables: None) -> None:
     ``clean_tables`` fixture so a prior test's rows can never leak into the queue drive."""
 
 
-async def test_ac2_injected_raising_dream_stage_isolated_from_subsequent_drain_drive(
+async def test_ac2_injected_raising_dream_stage_isolated_from_subsequent_drain_drive_pg(
     clean_table: None,
 ) -> None:
     never_called_model = lambda guard: FakeModel(  # noqa: E731
@@ -363,6 +367,8 @@ async def test_ac2_injected_raising_dream_stage_isolated_from_subsequent_drain_d
             pathway_id=_LOCAL_DRAIN_PATHWAY_ID,
             initial=_initial_drain_artifact(),
         )
-        assert drain_final.status is RunStatus.WAITING
+        assert drain_final.status is RunStatus.COMPLETED
+        assert drain_final.steps[0].result.output is not None
+        assert drain_final.steps[0].result.output.kind == DRAIN_HEARTBEAT
     finally:
         queue.close()

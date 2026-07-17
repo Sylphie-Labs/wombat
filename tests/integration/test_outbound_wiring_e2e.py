@@ -374,6 +374,7 @@ async def test_ac2_draft_surfaces_parks_and_approve_dispatches_with_one_capabili
         params=op,
         tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
+        gcal_token_store=_FakeTokenStore(initial="fake-stored-token"),
     )
     try:
         reply = ReplyIntent(
@@ -426,41 +427,36 @@ async def test_ac2_draft_surfaces_parks_and_approve_dispatches_with_one_capabili
 
 
 # ============================================================================================
-# TK-179 AC1/AC2 (CR2-2, Q-94) — the idled-drain repro: the register's exact failure scenario.
-# The drain is ONE long-lived cog-worx run — every idle Sweeper poll commits a Wait step, so
-# draft_composer's AwaitHuman parks at an ever-higher step_index than the fresh-run position (4)
-# proven above. DraftDispatchStage must locate the parked step by STAGE IDENTITY (walking the
-# run's committed step history for the last "draft_composer" step), not a precomputed index, or
-# the real approval reads None, writes a false refusal, and strands the run RUNNING.
+# TK-179 AC1/AC2 (CR2-2, Q-94) — the stage-identity lookup repro: the register's exact failure
+# scenario, rebased onto the DEC-41/TK-255 empty-queue-completes contract. The drain graph is
+# strictly linear (drain_queue(0)/gate(1)/review_or_speak(2)/compose_dispatch(3)/
+# draft_composer(4)) and an empty-queue run now COMPLETES rather than self-parking, so a
+# terminal run can never be ``fire_timer``'d into a HIGHER park position any more — index 4 is
+# the ONLY reachable park for a draft surfaced on a fresh run. DraftDispatchStage must still
+# locate the parked step by STAGE IDENTITY (walking the run's committed step history for the
+# last "draft_composer" step), not a precomputed index, or the real approval reads None, writes
+# a false refusal, and strands the run RUNNING.
 # ============================================================================================
 
 
 async def _idle_then_surface_draft(
     bundle: bootstrap.RuntimeBundle, run_id: str, reply: ReplyIntent
 ) -> RunState:
-    """Park the run WAITING on an empty queue (1 committed boot Wait), fire ONE Sweeper-style
-    ``fire_timer`` poll while STILL empty (a second committed Wait), THEN enqueue the draft item
-    and fire once more so the drain proceeds — the register's exact idled-drain repro (CR2-2):
-    draft_composer's AwaitHuman parks at step_index 6, strictly greater than the fresh-run
-    position of 4."""
-    parked = await bundle.engine.run(
+    """Enqueue the draft item BEFORE the run ever starts, then drive a single fresh run —
+    post-DEC-41 an empty queue is no longer reachable as an idle detour (it COMPLETES, it does
+    not self-park), so this parks AWAITING_HUMAN directly at the fresh-run position (TK-255)."""
+    bundle.queue.enqueue(_draft_queue_item(reply))
+
+    surfaced = await bundle.engine.run(
         run_id=run_id,
         session_id=run_id,
         pathway_id=bundle.drain_pathway_id,
         initial=_initial_artifact(),
     )
-    assert parked.status is RunStatus.WAITING  # the boot Wait — queue starts empty
-
-    idled_again = await bundle.engine.fire_timer(run_id)
-    assert idled_again.status is RunStatus.WAITING  # a Sweeper poll finding the queue STILL empty
-
-    bundle.queue.enqueue(_draft_queue_item(reply))
-
-    surfaced = await bundle.engine.fire_timer(run_id)
     return surfaced
 
 
-async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_lookup(
+async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_lookup_pg(
     clean_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert _DSN is not None
@@ -474,6 +470,7 @@ async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_looku
         params=op,
         tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
+        gcal_token_store=_FakeTokenStore(initial="fake-stored-token"),
     )
     try:
         reply = ReplyIntent(
@@ -489,10 +486,12 @@ async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_looku
         surfaced = await _idle_then_surface_draft(bundle, run_id, reply)
         assert surfaced.status is RunStatus.AWAITING_HUMAN
         assert len(fake_session.calls) == 1
-        # The park lands STRICTLY GREATER than the fresh-run position (4) proven above — the
-        # exact CR2-2 shape (idle Sweeper polls before the draft item ever surfaces).
+        # DEC-41/TK-255: the drain graph is strictly linear (drain_queue(0)/gate(1)/
+        # review_or_speak(2)/compose_dispatch(3)/draft_composer(4)); an empty-queue run now
+        # COMPLETES rather than self-parking, so a terminal run can never be fire_timer'd to a
+        # higher position — index 4 is the ONLY reachable park.
         park_step = next(s for s in surfaced.steps if s.stage_name == "draft_composer")
-        assert park_step.step_index > 4
+        assert park_step.step_index == 4
 
         final = await bundle.engine.provide_human_input(run_id, payload={"decision": "approve"})
 
@@ -518,7 +517,7 @@ async def test_tk179_ac1_idled_drain_approve_dispatches_via_stage_identity_looku
         bundle.pending_journal.close()
 
 
-async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup(
+async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup_pg(
     clean_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert _DSN is not None
@@ -532,6 +531,7 @@ async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup(
         params=op,
         tz=ZoneInfo("UTC"),
         gmail_token_store=_FakeTokenStore(initial="fake-stored-token"),
+        gcal_token_store=_FakeTokenStore(initial="fake-stored-token"),
     )
     try:
         reply = ReplyIntent(
@@ -547,8 +547,9 @@ async def test_tk179_ac2_idled_drain_reject_cancels_via_stage_identity_lookup(
         surfaced = await _idle_then_surface_draft(bundle, run_id, reply)
         assert surfaced.status is RunStatus.AWAITING_HUMAN
         assert len(fake_session.calls) == 1
+        # DEC-41/TK-255: index 4 is the ONLY reachable park (see AC1's comment above).
         park_step = next(s for s in surfaced.steps if s.stage_name == "draft_composer")
-        assert park_step.step_index > 4
+        assert park_step.step_index == 4
 
         final = await bundle.engine.provide_human_input(run_id, payload={"decision": "reject"})
 
