@@ -342,6 +342,42 @@ _requires_live_gmail = pytest.mark.skipif(
 )
 
 
+# --------------------------------------------------------------------------------- TK-258 / DEC-51
+
+
+def test_main_clears_stored_token_then_completes_interactive_consent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DEC-51 CLI parity: ``main()`` clears any stored (possibly revoked) token BEFORE calling
+    ``get_credentials()``, so a stored-but-revoked token can never make it take the
+    non-interactive refresh branch — it always re-consents."""
+    token_store = _FakeTokenStore(initial=json.dumps({"token": "stale", "scopes": []}))
+    clear_calls: list[None] = []
+    original_clear = token_store.clear
+
+    def _spied_clear() -> None:
+        clear_calls.append(None)
+        original_clear()
+
+    monkeypatch.setattr(token_store, "clear", _spied_clear)
+    monkeypatch.setattr(auth_module, "KeyringTokenStore", lambda **kwargs: token_store)
+    monkeypatch.setattr(
+        InstalledAppFlow,
+        "from_client_config",
+        lambda *a, **kw: _FakeFlow({}, list(GMAIL_SCOPES)),
+    )
+    monkeypatch.setattr(
+        auth_module,
+        "load_config",
+        lambda: _make_config(),
+    )
+
+    auth_module.main()
+
+    assert clear_calls == [None]  # cleared before consent, exactly once
+    assert token_store.load() is not None  # a fresh token was saved by the interactive flow
+
+
 @_requires_live_gmail
 def test_live_refresh_against_real_google_token_endpoint() -> None:
     """Loads the vault credential, refreshes against the REAL Google token endpoint, and

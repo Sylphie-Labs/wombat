@@ -16,13 +16,19 @@ are REUSED VERBATIM here, never modified. This module owns exactly two things pe
     probing via ``get_credentials()`` is browser-safe EXACTLY when ``load()`` is not ``None``.
     Otherwise ``get_credentials()`` runs inside a broad ``try``: success -> ``connected``, any
     ``Exception`` -> ``expired``. This probe never raises.
-  * ``GoogleServiceConnection.connect()`` — the background CONSENT TRIGGER. Runs the SAME
-    ``get_credentials()`` on a daemon thread (``run_local_server`` blocks for minutes while the
-    system browser pops for Jim — CON-5 — so it must never run on the request thread). Per-service
-    consent state (``idle``/``in_progress``/``error``) lives in process memory only; a second
-    ``connect()`` while ``in_progress`` raises ``ConsentInProgressError`` (the route's 409). The
-    token lands in the shared OS keyring via the auth object's OWN ``token_store.save`` — custody
-    is unchanged.
+  * ``GoogleServiceConnection.connect()`` — the background CONSENT TRIGGER. DEC-51: Connect/
+    Reconnect ALWAYS starts fresh consent — the token store is ``clear()``-ed on the consent
+    thread BEFORE ``get_credentials()`` runs, so a stored-but-revoked token (which would
+    otherwise always hit ``creds.refresh`` and raise ``RefreshError``) provably takes the
+    interactive ``InstalledAppFlow`` branch instead. Runs on a daemon thread (``run_local_server``
+    blocks for minutes while the system browser pops for Jim — CON-5 — so it must never run on
+    the request thread). Per-service consent state (``idle``/``in_progress``/``error``) lives in
+    process memory only; a second ``connect()`` while ``in_progress`` raises
+    ``ConsentInProgressError`` (the route's 409). A ``RefreshError`` failure sets the human
+    ``CONSENT_EXPIRED_ERROR`` message; any other failure gets a concise, non-raw message — the
+    raw exception text goes only to ``logger.warning(..., exc_info=True)``, never the status
+    payload. The token lands in the shared OS keyring via the auth object's OWN
+    ``token_store.save`` — custody is unchanged.
 
 ``token_store``/``auth_factory`` are injected per service so every test runs on fakes; production
 wiring (``wombat.settings_app.__main__``) passes real ``GmailAuth``/``CalendarAuth`` instances
@@ -37,7 +43,18 @@ import threading
 from collections.abc import Callable
 from typing import Literal, Protocol
 
+from google.auth.exceptions import RefreshError
+
 logger = logging.getLogger(__name__)
+
+# DEC-51: the exact, human status-payload message for a stored-but-revoked/expired token whose
+# refresh raised ``RefreshError`` (invalid_grant) — the raw exception text NEVER reaches the
+# payload, only this constant does (it goes to ``logger.warning(..., exc_info=True)`` instead).
+CONSENT_EXPIRED_ERROR = "Google connection expired or was revoked - reconnect to continue."
+
+# DEC-51: the concise, non-raw message for any OTHER consent-flow failure (e.g. the user closed
+# the browser without granting consent) — never the raw exception text either.
+_CONSENT_GENERIC_ERROR = "Google consent flow failed - see the application logs for details."
 
 ServiceName = Literal["gmail", "gcal"]
 
@@ -57,10 +74,13 @@ class GoogleAuthLike(Protocol):
 
 
 class GoogleTokenStoreLike(Protocol):
-    """The ONE seam this module reads directly from a token store — ``load`` — mirroring the
-    ``TokenStore`` Protocol in ``wombat.integrations.gcal.token_store``."""
+    """The seam this module reads/clears directly on a token store — ``load`` (the status probe)
+    and ``clear`` (the consent trigger, DEC-51) — mirroring the ``TokenStore`` Protocol in
+    ``wombat.integrations.gcal.token_store``."""
 
     def load(self) -> str | None: ...
+
+    def clear(self) -> None: ...
 
 
 class ConsentInProgressError(RuntimeError):
@@ -137,13 +157,25 @@ class GoogleServiceConnection:
         threading.Thread(target=self._run_consent, daemon=True).start()
 
     def _run_consent(self) -> None:
+        """DEC-51: Connect/Reconnect ALWAYS starts fresh consent. Clears any stored token BEFORE
+        ``get_credentials()`` so a stored-but-revoked token can never make this fall into the
+        non-interactive refresh branch (which would just raise the same ``RefreshError`` again,
+        forever) — clearing first provably forces the interactive ``InstalledAppFlow`` branch.
+        The clear happens ONLY here (never in ``status()``/``_connection_status()``)."""
         try:
+            self._token_store.clear()
             self._auth_factory().get_credentials()
-        except Exception as exc:
-            logger.warning("google consent flow failed: %s", exc)
+        except RefreshError as exc:
+            logger.warning("google consent flow failed: %s", exc, exc_info=True)
             with self._lock:
                 self._consent_state = "error"
-                self._consent_error = str(exc)
+                self._consent_error = CONSENT_EXPIRED_ERROR
+            return
+        except Exception as exc:
+            logger.warning("google consent flow failed: %s", exc, exc_info=True)
+            with self._lock:
+                self._consent_state = "error"
+                self._consent_error = _CONSENT_GENERIC_ERROR
             return
         with self._lock:
             self._consent_state = "idle"
@@ -166,6 +198,7 @@ class GoogleConnectionManager:
 
 
 __all__ = [
+    "CONSENT_EXPIRED_ERROR",
     "GOOGLE_SERVICES",
     "ConnectionStatus",
     "ConsentInProgressError",

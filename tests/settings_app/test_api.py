@@ -616,6 +616,9 @@ class _InMemoryTokenStore:
     def save(self, value: str) -> None:
         self.token = value
 
+    def clear(self) -> None:
+        self.token = None
+
 
 def test_get_google_status_no_connections_returns_not_configured_for_both() -> None:
     """TK-256: create_app(google_connections=None) mirrors the store=None degrade — an honest
@@ -771,7 +774,10 @@ def test_post_google_connect_raising_runner_surfaces_error_and_process_stays_up(
             break
         time.sleep(0.01)
     assert body["gmail"]["consent"] == "error"
-    assert "consent flow failed" in str(body["gmail"]["error"])
+    # DEC-51: a concise, non-raw message — the raw exception text never reaches the payload.
+    assert body["gmail"]["error"] == (
+        "Google consent flow failed - see the application logs for details."
+    )
 
     # the process stays up — a plain, unrelated request still works.
     still_up = client.get("/settings", headers={"X-Wombat-Token": TOKEN})

@@ -158,12 +158,16 @@ class CalendarAuth:
 
 
 def main() -> None:
-    """The one-time interactive consent CLI: ``python -m wombat.integrations.gcal.auth``.
-    Jim's bring-up step (not a test) — obtains a fresh credential (prompting for consent if
-    none is stored yet) and stores it in the OS keyring vault."""
+    """The interactive consent CLI: ``python -m wombat.integrations.gcal.auth``.
+    Jim's bring-up/RE-consent step (not a test, DEC-51) — ALWAYS clears any stored token first,
+    then runs the interactive consent flow, so this reliably re-grants consent even when a
+    stored-but-revoked token exists (which would otherwise take the non-interactive refresh
+    branch and raise). Stores the fresh credential in the OS keyring vault."""
     logging.basicConfig(level=logging.INFO)
     config = load_config()
-    creds = CalendarAuth(config=config).get_credentials()
+    token_store = KeyringTokenStore()
+    token_store.clear()
+    creds = CalendarAuth(config=config, token_store=token_store).get_credentials()
     granted = sorted(creds.scopes or list(GCAL_SCOPES))
     logger.info("gcal OAuth consent complete; granted scopes: %s", granted)
 

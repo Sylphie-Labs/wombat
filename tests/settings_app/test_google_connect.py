@@ -1,4 +1,4 @@
-"""TK-256 acceptance criteria — wombat.settings_app.google_connect (DEC-50).
+"""TK-256/TK-258 acceptance criteria — wombat.settings_app.google_connect (DEC-50/DEC-51).
 
 AC1 (status probe, honest + non-crashing): ``test_not_configured_never_calls_auth_factory``,
     ``test_not_connected_never_calls_auth_factory``,
@@ -9,6 +9,12 @@ AC2 (background consent trigger): ``test_connect_returns_immediately_and_reports
     ``test_connect_flips_to_connected_after_the_fake_save``,
     ``test_second_connect_while_in_progress_raises``,
     ``test_raising_consent_runner_surfaces_error_and_stays_up``.
+
+TK-258/DEC-51 (clear-then-consent + error humanization):
+    ``test_connect_clears_stored_token_before_get_credentials_then_succeeds``,
+    ``test_status_never_clears_the_token_store``,
+    ``test_connect_after_clear_raising_refresh_error_gives_human_expired_message``,
+    ``test_connect_after_clear_raising_other_error_gives_concise_non_raw_message``.
 """
 
 from __future__ import annotations
@@ -19,8 +25,10 @@ from collections.abc import Callable
 from typing import NoReturn
 
 import pytest
+from google.auth.exceptions import RefreshError
 
 from wombat.settings_app.google_connect import (
+    CONSENT_EXPIRED_ERROR,
     ConsentInProgressError,
     GoogleConnectionManager,
     GoogleServiceConnection,
@@ -39,12 +47,17 @@ def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
 class _FakeTokenStore:
     def __init__(self, initial: str | None = None) -> None:
         self.token = initial
+        self.clear_calls = 0
 
     def load(self) -> str | None:
         return self.token
 
     def save(self, value: str) -> None:
         self.token = value
+
+    def clear(self) -> None:
+        self.clear_calls += 1
+        self.token = None
 
 
 class _StaticAuth:
@@ -90,8 +103,6 @@ def test_stored_token_and_successful_get_credentials_is_connected() -> None:
 
 
 def test_stored_token_and_raising_get_credentials_is_expired() -> None:
-    from google.auth.exceptions import RefreshError
-
     error = RefreshError("token revoked")  # type: ignore[no-untyped-call]
     conn = GoogleServiceConnection(
         configured=True,
@@ -208,8 +219,95 @@ def test_raising_consent_runner_surfaces_error_and_stays_up() -> None:
     status = conn.status()
     assert status["status"] == "not_connected"
     assert status["consent"] == "error"
-    assert "consent flow failed" in str(status["error"])
+    # DEC-51: a concise, non-raw message — the raw exception text never reaches the payload.
+    assert status["error"] == "Google consent flow failed - see the application logs for details."
+    assert "user closed the browser" not in str(status["error"])
 
     # the process stays up: a fresh connect() attempt is accepted (not permanently wedged).
     conn.connect()
     _wait_until(lambda: conn.status()["consent"] == "error")
+
+
+# ------------------------------------------------------------------------------- TK-258 / DEC-51
+
+
+class _ClearThenSucceedAuth:
+    """Fake auth factory whose ``get_credentials`` raises ``RefreshError`` if the store still
+    holds the ORIGINAL revoked token, and succeeds-by-saving-fresh otherwise — the fixture AC1
+    asks for: it proves ``connect()`` calls ``clear()`` BEFORE ``get_credentials()``. Once a
+    fresh token is saved, subsequent calls (e.g. a later ``status()`` probe) succeed too."""
+
+    def __init__(self, token_store: _FakeTokenStore) -> None:
+        self._token_store = token_store
+
+    def get_credentials(self) -> object:
+        if self._token_store.load() == "stored-but-revoked-token":
+            raise RefreshError("invalid_grant: token expired or revoked")  # type: ignore[no-untyped-call]
+        self._token_store.save("fresh-consented-token")
+        return object()
+
+
+def test_connect_clears_stored_token_before_get_credentials_then_succeeds() -> None:
+    token_store = _FakeTokenStore("stored-but-revoked-token")
+    conn = GoogleServiceConnection(
+        configured=True,
+        token_store=token_store,
+        auth_factory=lambda: _ClearThenSucceedAuth(token_store),
+    )
+
+    conn.connect()
+    _wait_until(lambda: conn.status()["consent"] != "in_progress")
+
+    assert token_store.clear_calls == 1
+    assert token_store.load() == "fresh-consented-token"
+    assert conn.status() == {"status": "connected", "consent": "idle"}
+
+
+def test_status_never_clears_the_token_store() -> None:
+    token_store = _FakeTokenStore("some-token")
+    conn = GoogleServiceConnection(
+        configured=True, token_store=token_store, auth_factory=lambda: _StaticAuth()
+    )
+
+    for _ in range(3):
+        conn.status()
+
+    assert token_store.clear_calls == 0
+    assert token_store.load() == "some-token"
+
+
+def test_connect_after_clear_raising_refresh_error_gives_human_expired_message() -> None:
+    token_store = _FakeTokenStore("stored-but-revoked-token")
+    conn = GoogleServiceConnection(
+        configured=True,
+        token_store=token_store,
+        auth_factory=lambda: _StaticAuth(error=RefreshError("invalid_grant")),  # type: ignore[no-untyped-call]
+    )
+
+    conn.connect()
+    _wait_until(lambda: conn.status()["consent"] == "error")
+
+    assert token_store.clear_calls == 1  # cleared before the raising get_credentials() call
+    status = conn.status()
+    assert status["status"] == "not_connected"
+    assert status["error"] == CONSENT_EXPIRED_ERROR
+
+
+def test_connect_after_clear_raising_other_error_gives_concise_non_raw_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    token_store = _FakeTokenStore("stored-token")
+    conn = GoogleServiceConnection(
+        configured=True,
+        token_store=token_store,
+        auth_factory=lambda: _StaticAuth(error=RuntimeError("sentinel-raw-detail-abc123")),
+    )
+
+    with caplog.at_level("WARNING"):
+        conn.connect()
+        _wait_until(lambda: conn.status()["consent"] == "error")
+
+    status = conn.status()
+    assert status["error"] == "Google consent flow failed - see the application logs for details."
+    assert "sentinel-raw-detail-abc123" not in str(status["error"])
+    assert "sentinel-raw-detail-abc123" in caplog.text  # raw text reaches the logger only
