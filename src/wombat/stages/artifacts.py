@@ -160,22 +160,42 @@ def gate_decisions_from_artifact_data(data: dict[str, Any]) -> list[GateDecision
 
 
 def compose_request_to_artifact_data(
-    item_id: str, item_kind: ItemKind, payload: dict[str, Any]
+    item_id: str, item_kind: ItemKind, payload: dict[str, Any], *, held_chat: bool = False
 ) -> dict[str, Any]:
     """Serialize a single compose request into an Artifact ``data`` payload (TK-8, Q-50).
 
     ``{"item_id", "item_kind": <ItemKind .value string>, "payload"}`` — ONE surfaced item per
     compose invocation. NO scores, NO ``GateAction``, NO queue internals: the model may only ever
     see the fields that cross this wire.
+
+    ``held_chat`` is an ADDITIVE optional field (TK-272, DEC-57), threaded through by
+    ``ComposeDispatchRouter`` from the surfaced-item wire. Defaults ``False``.
     """
-    return {"item_id": item_id, "item_kind": item_kind.value, "payload": payload}
+    return {
+        "item_id": item_id,
+        "item_kind": item_kind.value,
+        "payload": payload,
+        "held_chat": held_chat,
+    }
 
 
 def compose_request_from_artifact_data(
     data: dict[str, Any],
 ) -> tuple[str, ItemKind, dict[str, Any]]:
-    """The inverse of ``compose_request_to_artifact_data`` — the ONLY path back (TK-8, Q-50)."""
+    """The inverse of ``compose_request_to_artifact_data`` — the ONLY path back (TK-8, Q-50).
+
+    Kept to its original 3-tuple shape (TK-8 regression guard); use
+    ``compose_request_held_chat_from_artifact_data`` for the additive TK-272 ``held_chat`` field.
+    """
     return data["item_id"], ItemKind(data["item_kind"]), data["payload"]
+
+
+def compose_request_held_chat_from_artifact_data(data: dict[str, Any]) -> bool:
+    """Read the ADDITIVE optional ``held_chat`` field back off a compose-request wire (TK-272).
+
+    Absent on data written before TK-272 -> ``False``, never a ``KeyError``.
+    """
+    return bool(data.get("held_chat", False))
 
 
 def composed_output_to_artifact_data(
@@ -184,6 +204,8 @@ def composed_output_to_artifact_data(
     item_kind: ItemKind,
     degraded: bool,
     tokens_spent: int | None = None,
+    *,
+    held_chat: bool = False,
 ) -> dict[str, Any]:
     """Serialize ``ComposeStage``'s terminal output into an Artifact ``data`` payload (TK-8, Q-50).
 
@@ -191,6 +213,10 @@ def composed_output_to_artifact_data(
     ``tokens_spent`` is ADDITIVE (TK-9, Q-68) — ``None`` for a degraded call (no successful,
     accounted model call happened) or for any caller that predates TK-9; a successful,
     non-degraded call passes ``response.usage.prompt_tokens + completion_tokens``.
+
+    ``held_chat`` is a SECOND additive field (TK-272, DEC-57) — threaded through from the compose
+    request so ``speech_shape``/``speak`` downstream can suppress voice for a held chat reply
+    without a second gate-decision read. Defaults ``False``.
     """
     return {
         "text": text,
@@ -198,6 +224,7 @@ def composed_output_to_artifact_data(
         "item_kind": item_kind.value,
         "degraded": degraded,
         "tokens_spent": tokens_spent,
+        "held_chat": held_chat,
     }
 
 
@@ -220,8 +247,20 @@ def composed_output_tokens_spent_from_artifact_data(data: dict[str, Any]) -> int
     return None if tokens_spent is None else int(tokens_spent)
 
 
+def composed_output_held_chat_from_artifact_data(data: dict[str, Any]) -> bool:
+    """Read the ADDITIVE optional ``held_chat`` field back off a composed-output wire (TK-272).
+
+    Absent on data written before TK-272 -> ``False``, never a ``KeyError``.
+    """
+    return bool(data.get("held_chat", False))
+
+
 def surfaced_item_to_artifact_data(
-    action: GateAction, scored_item: ScoredItem, queue_item: QueueItem
+    action: GateAction,
+    scored_item: ScoredItem,
+    queue_item: QueueItem,
+    *,
+    held_chat: bool = False,
 ) -> dict[str, Any]:
     """Serialize ONE surfaced gate entry into an Artifact ``data`` payload (TK-10, Q-51).
 
@@ -229,6 +268,11 @@ def surfaced_item_to_artifact_data(
     "queue_item": <QueueItem asdict>}`` — the single-item wire ``review_or_speak`` (TK-7) produces
     once it single-izes a gate-decisions batch; ``ComposeDispatchRouter`` (TK-10) is the first
     consumer. Mirrors the ``gate_decisions_to_artifact_data`` per-entry shape exactly.
+
+    ``held_chat`` is an ADDITIVE optional field (TK-272, DEC-57) — ``True`` only for a chat item
+    ``review_or_speak`` forwarded from its HOLD branch (Q-50 payload boundary forbids carrying
+    this on ``queue_item.payload``, so it rides the artifact instead). Defaults ``False``, so
+    every caller predating TK-272 is unaffected.
     """
     scored_dict = asdict(scored_item)
     scored_dict["item_kind"] = scored_item.item_kind.value
@@ -236,13 +280,18 @@ def surfaced_item_to_artifact_data(
         "action": action.value,
         "scored_item": scored_dict,
         "queue_item": asdict(queue_item),
+        "held_chat": held_chat,
     }
 
 
 def surfaced_item_from_artifact_data(
     data: dict[str, Any],
 ) -> tuple[GateAction, ScoredItem, QueueItem]:
-    """The inverse of ``surfaced_item_to_artifact_data`` — the ONLY path back (TK-10, Q-51)."""
+    """The inverse of ``surfaced_item_to_artifact_data`` — the ONLY path back (TK-10, Q-51).
+
+    Kept to its original 3-tuple shape (TK-10 regression guard); use
+    ``surfaced_item_held_chat_from_artifact_data`` for the additive TK-272 ``held_chat`` field.
+    """
     scored_raw = data["scored_item"]
     scored_item = ScoredItem(
         item_id=scored_raw["item_id"],
@@ -252,6 +301,14 @@ def surfaced_item_from_artifact_data(
     )
     queue_item = QueueItem(**data["queue_item"])
     return GateAction(data["action"]), scored_item, queue_item
+
+
+def surfaced_item_held_chat_from_artifact_data(data: dict[str, Any]) -> bool:
+    """Read the ADDITIVE optional ``held_chat`` field back off a surfaced-item wire (TK-272).
+
+    Absent on data written before TK-272 -> ``False``, never a ``KeyError``.
+    """
+    return bool(data.get("held_chat", False))
 
 
 def hold_report_to_artifact_data(holds: list[dict[str, Any]]) -> dict[str, Any]:
@@ -382,8 +439,10 @@ __all__ = [
     "brief_text_from_artifact_data",
     "brief_text_to_artifact_data",
     "compose_request_from_artifact_data",
+    "compose_request_held_chat_from_artifact_data",
     "compose_request_to_artifact_data",
     "composed_output_from_artifact_data",
+    "composed_output_held_chat_from_artifact_data",
     "composed_output_to_artifact_data",
     "composed_output_tokens_spent_from_artifact_data",
     "gate_decisions_from_artifact_data",
@@ -397,5 +456,6 @@ __all__ = [
     "spoken_output_from_artifact_data",
     "spoken_output_to_artifact_data",
     "surfaced_item_from_artifact_data",
+    "surfaced_item_held_chat_from_artifact_data",
     "surfaced_item_to_artifact_data",
 ]

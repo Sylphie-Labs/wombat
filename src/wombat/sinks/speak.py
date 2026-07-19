@@ -30,6 +30,12 @@ voice reason; ``asyncio.CancelledError`` is re-raised explicitly, ahead of the b
 
 No model call, no ``ctx.journal`` touch, no ``StageToolPolicy`` — ``ctx`` surface is exactly
 ``ctx.last_output("compose")`` + ``ctx.clock`` (provenance only).
+
+DEC-57/TK-272: a SURFACED chat item reaches this sink exactly as any other item does (a real
+``compose`` -> ``speech_shape`` -> ``speak`` run). A HELD chat item ALSO reaches ``compose`` (Q-50
+routing is unaffected by hold-vs-surface) but carries ``held_chat=True`` on the composed-output
+artifact; this sink folds that flag into the SAME voice-off branch above — quiet-by-design, never
+the speech-text-None ``Degraded`` outcome below.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ from wombat.sinks.tts_adapter import TTSAdapter
 from wombat.stages.artifacts import (
     SPOKEN_OUTPUT,
     composed_output_from_artifact_data,
+    composed_output_held_chat_from_artifact_data,
     speech_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
@@ -68,21 +75,21 @@ class SpeakSink:
         if art is None:
             msg = "speak: no compose output available yet"
             raise RuntimeError(msg)
-        _composed_text, item_id, item_kind, _degraded = composed_output_from_artifact_data(
-            art.data
-        )
+        _composed_text, item_id, item_kind, _degraded = composed_output_from_artifact_data(art.data)
+        held_chat = composed_output_held_chat_from_artifact_data(art.data)
 
-        if not self._voice_enabled or self._adapter is None:
+        if not self._voice_enabled or self._adapter is None or held_chat:
             # Voice-off (or no adapter wired) is a silent no-op — the text path is unaffected;
             # voice is additive only (CON-3). Byte-identical to before TK-267 (speech_shape is
-            # never even consulted on this branch).
+            # never even consulted on this branch). DEC-57/TK-272: a held chat reply takes this
+            # SAME silent Done(spoken=False, degraded=False) shape — quiet-by-design is not
+            # degradation, so it must NEVER fall through to the speech-text-None Degraded branch
+            # below.
             return Done(
                 output=Artifact(
                     kind=SPOKEN_OUTPUT,
                     produced_by=self.name,
-                    provenance=Provenance(
-                        source="system", confidence=1.0, recorded_at=ctx.clock()
-                    ),
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                     data=spoken_output_to_artifact_data(
                         item_id=item_id, item_kind=item_kind, spoken=False, degraded=False
                     ),
@@ -101,17 +108,14 @@ class SpeakSink:
 
         if speech_text is None:
             logger.warning(
-                "speak: speech_shape produced no speech text; degrading "
-                "(text delivery unaffected)"
+                "speak: speech_shape produced no speech text; degrading (text delivery unaffected)"
             )
             return Degraded(
                 reason="speak: speech_shape produced no speech text (degraded or absent output)",
                 output=Artifact(
                     kind=SPOKEN_OUTPUT,
                     produced_by=self.name,
-                    provenance=Provenance(
-                        source="system", confidence=1.0, recorded_at=ctx.clock()
-                    ),
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                     data=spoken_output_to_artifact_data(
                         item_id=item_id, item_kind=item_kind, spoken=False, degraded=True
                     ),
@@ -135,9 +139,7 @@ class SpeakSink:
                 output=Artifact(
                     kind=SPOKEN_OUTPUT,
                     produced_by=self.name,
-                    provenance=Provenance(
-                        source="system", confidence=1.0, recorded_at=ctx.clock()
-                    ),
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                     data=spoken_output_to_artifact_data(
                         item_id=item_id, item_kind=item_kind, spoken=False, degraded=True
                     ),

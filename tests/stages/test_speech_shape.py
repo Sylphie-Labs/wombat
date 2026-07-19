@@ -36,12 +36,14 @@ def _config(api_key: str = "sk-test") -> WombatConfig:
     return WombatConfig(deepseek_api_key=api_key, deepseek_base_url="https://api.deepseek.com")
 
 
-def _compose_output_artifact(text: str = _COMPOSED_TEXT) -> Artifact:
+def _compose_output_artifact(text: str = _COMPOSED_TEXT, *, held_chat: bool = False) -> Artifact:
     return Artifact(
         kind=COMPOSED_OUTPUT,
         produced_by="compose",
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
-        data=composed_output_to_artifact_data(text, _ITEM_ID, _ITEM_KIND, False),
+        data=composed_output_to_artifact_data(
+            text, _ITEM_ID, _ITEM_KIND, False, held_chat=held_chat
+        ),
     )
 
 
@@ -110,6 +112,26 @@ async def test_ac1_voice_on_and_adapter_calls_model_once_and_carries_the_summary
     assert system_msg.content.endswith("No preamble.")
     # the model sees the FULL composed text (it summarizes it), never sees anything else
     assert user_msg.content == _COMPOSED_TEXT
+
+
+# --- DEC-57/TK-272: held_chat=True takes the EXACT voice-off pass-through, zero model calls -------
+
+
+async def test_held_chat_is_a_zero_model_call_pass_through_even_with_voice_fully_wired() -> None:
+    model = FakeModel(response=_response("this would have been the summary"))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
+    ctx = _ctx(model, compose_output=_compose_output_artifact(held_chat=True))
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert result.to == "speak"
+    item_id, item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert item_id == _ITEM_ID
+    assert item_kind is _ITEM_KIND
+    assert text is None
+    assert degraded is False  # quiet-by-design, never a degraded outcome
+    assert model.calls == []  # ZERO model calls
 
 
 # --- AC2: the no-placebo validator, one case per enumerated closed token class + overlong ---------

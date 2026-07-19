@@ -28,6 +28,7 @@ from wombat.stages.artifacts import (
     hold_report_from_artifact_data,
     hold_report_to_artifact_data,
     surfaced_item_from_artifact_data,
+    surfaced_item_held_chat_from_artifact_data,
 )
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
 
@@ -151,6 +152,48 @@ async def test_ac2_hold_returns_done_hold_report_and_acks_once() -> None:
     assert hold["item_kind"] == "generic"
     assert "urgency=0.10" in hold["reason"]
     assert "load=0.20" in hold["reason"]
+
+
+# --- DEC-57/TK-272: a HOLD entry whose item is CHAT forwards as surfaced, held_chat=True ----------
+
+
+async def test_held_chat_forwards_as_surfaced_not_a_hold_report() -> None:
+    scored = ScoredItem(item_id="c-1", item_kind=ItemKind.CHAT, urgency=0.1, load=0.1)
+    decision = GateDecision(action=GateAction.HOLD, items=(scored,))
+    queue_item = QueueItem(
+        idempotency_key="c-1", payload={"item_kind": "chat", "text": "hi"}, item_id=5
+    )
+    queue = _FakeQueue()
+    stage = ReviewOrSpeakStage(queue=queue)
+    ctx = _ctx([(decision, queue_item)])
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert result.to == "compose_dispatch"
+    assert queue.acked == [5]
+
+    action, scored_item, round_queue_item = surfaced_item_from_artifact_data(result.output.data)
+    assert action is GateAction.HOLD
+    assert scored_item == scored
+    assert round_queue_item == queue_item
+    assert surfaced_item_held_chat_from_artifact_data(result.output.data) is True
+
+
+async def test_held_non_chat_stays_a_hold_report_held_chat_never_set() -> None:
+    """DEC-57e: every other kind's HOLD stays byte-identical — no held_chat forwarding."""
+    entry = _hold_entry(item_id="h-2", queue_item_id=4)
+    queue = _FakeQueue()
+    stage = ReviewOrSpeakStage(queue=queue)
+    ctx = _ctx([entry])
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert result.output.kind == "wombat.hold_report"
+    holds = hold_report_from_artifact_data(result.output.data)
+    assert len(holds) == 1
+    assert holds[0]["item_id"] == "h-2"
 
 
 # --- hold_report wire: json.dumps round-trip regression (Q-49) ------------------------------------

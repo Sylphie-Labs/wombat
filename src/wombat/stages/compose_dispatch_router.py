@@ -39,6 +39,7 @@ from wombat.stages.artifacts import (
     COMPOSE_REQUEST,
     compose_request_to_artifact_data,
     surfaced_item_from_artifact_data,
+    surfaced_item_held_chat_from_artifact_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class ComposeDispatchRouter:
             msg = "compose_dispatch: no review_or_speak output available yet"
             raise RuntimeError(msg)
         _action, scored_item, queue_item = surfaced_item_from_artifact_data(art.data)
+        held_chat = surfaced_item_held_chat_from_artifact_data(art.data)
 
         composer_name = self._composer_by_kind.get(scored_item.item_kind)
         if composer_name is None:
@@ -81,7 +83,9 @@ class ComposeDispatchRouter:
 
         # PAYLOAD BOUNDARY (CON-1): payload is queue_item.payload ONLY — never scored_item/action.
         item_id = queue_item.idempotency_key
-        data = compose_request_to_artifact_data(item_id, scored_item.item_kind, queue_item.payload)
+        data = compose_request_to_artifact_data(
+            item_id, scored_item.item_kind, queue_item.payload, held_chat=held_chat
+        )
 
         return Transition(
             to=composer_name,

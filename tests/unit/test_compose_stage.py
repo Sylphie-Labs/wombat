@@ -30,6 +30,7 @@ from wombat.stages.artifacts import (
     compose_request_from_artifact_data,
     compose_request_to_artifact_data,
     composed_output_from_artifact_data,
+    composed_output_held_chat_from_artifact_data,
     composed_output_to_artifact_data,
 )
 from wombat.stages.compose import ComposeStage
@@ -349,6 +350,26 @@ def test_composed_output_artifact_data_is_json_native_and_round_trips() -> None:
         ItemKind.REFLECTION,
         True,
     )
+    # AC4 (TK-272, DEC-57): held_chat is ADDITIVE — absent/omitted defaults False, never a
+    # KeyError, and every caller predating TK-272 (like the positional call above) is unaffected.
+    assert composed_output_held_chat_from_artifact_data(json.loads(serialized)) is False
+
+
+def test_composed_output_held_chat_is_additive_and_round_trips() -> None:
+    """AC4 (TK-272, DEC-57): held_chat=True rides the composed-output wire plain-JSON-native."""
+    data = composed_output_to_artifact_data(
+        "quiet reply", _ITEM_ID, ItemKind.CHAT, False, held_chat=True
+    )
+
+    serialized = json.dumps(data)
+    round_tripped = json.loads(serialized)
+    assert composed_output_from_artifact_data(round_tripped) == (
+        "quiet reply",
+        _ITEM_ID,
+        ItemKind.CHAT,
+        False,
+    )
+    assert composed_output_held_chat_from_artifact_data(round_tripped) is True
 
 
 # --- TemplateComposer.render is pure/deterministic ------------------------------------------------

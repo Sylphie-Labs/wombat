@@ -64,10 +64,12 @@ from wombat.persona.live import LivePersona
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     compose_request_from_artifact_data,
+    compose_request_held_chat_from_artifact_data,
     composed_output_to_artifact_data,
 )
 
 logger = logging.getLogger(__name__)
+
 
 # A fixed, terse steward instruction (AC1) — no prompt iteration (mvp, TK-8 non_goal). TK-194
 # (Q-105e) slots config.wombat_assistant_name into the name position ONLY; the remainder of the
@@ -78,6 +80,7 @@ def _system_instruction(name: str = "Steward") -> str:
         f"You are {name}, a quiet steward. Phrase this one item for the user in one terse, "
         "calm line. No preamble."
     )
+
 
 # AC-FIXED (Q-50) — not a TK-13 tunable.
 _DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -129,6 +132,7 @@ class ComposeStage:
             msg = "compose: no compose_dispatch output available yet"
             raise RuntimeError(msg)
         item_id, item_kind, payload = compose_request_from_artifact_data(art.data)
+        held_chat = compose_request_held_chat_from_artifact_data(art.data)
 
         # TK-209: render-time read when a LivePersona is wired — a matrix change applies on the
         # NEXT rendered turn, no restart. None -> the frozen-at-__init__ instruction (unchanged).
@@ -225,7 +229,12 @@ class ComposeStage:
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data=composed_output_to_artifact_data(
-                    text, item_id, item_kind, degraded, tokens_spent=tokens_spent
+                    text,
+                    item_id,
+                    item_kind,
+                    degraded,
+                    tokens_spent=tokens_spent,
+                    held_chat=held_chat,
                 ),
             ),
         )

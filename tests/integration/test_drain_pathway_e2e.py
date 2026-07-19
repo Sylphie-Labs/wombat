@@ -36,6 +36,7 @@ from cogworx.runtime.engine import Engine
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from tests.support.stage_context_fake import FakeModel
+from wombat.chat.surface import ChatReplyBroker
 from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
@@ -48,12 +49,16 @@ from wombat.gate.pipeline import Gate
 from wombat.pathways.drain_pathway import build_drain_pathway
 from wombat.queue import QueueItem, WombatQueue, ensure_schema
 from wombat.sinks.speak import SpeakSink
+from wombat.sinks.tts_adapter import TTSAdapter
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     DRAIN_HEARTBEAT,
     HOLD_REPORT,
     composed_output_from_artifact_data,
+    composed_output_held_chat_from_artifact_data,
+    speech_output_from_artifact_data,
+    spoken_output_from_artifact_data,
 )
 from wombat.stages.chat_reply import ChatReplyStage
 from wombat.stages.compose import ComposeStage
@@ -195,7 +200,13 @@ def clean_table() -> None:
         conn.commit()
 
 
-def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueue, DailyLedger]:
+def _build_real_gate_stack(
+    *,
+    model_factory: object,
+    voice_enabled: bool = False,
+    adapter: TTSAdapter | None = None,
+    chat_broker: ChatReplyBroker | None = None,
+) -> tuple[Engine, WombatQueue, DailyLedger, PendingSet]:
     """Assemble the drain pathway with the REAL production ``Gate`` (TK-27) wired in via
     ``make_gate_evaluator`` (Q-55) — mirrors ``_build_stack`` exactly except for the gate itself:
 
@@ -241,14 +252,16 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
     compose_dispatch_router = ComposeDispatchRouter(composer_by_kind={ItemKind.GENERIC: "compose"})
     compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
     # TK-164 (Q-96): compose transitions onward to "chat_reply" (TK-222) — voice-off here (see
-    # _build_stack). chat_reply is wired with broker=None (chat-disabled shape).
-    chat_reply_stage = ChatReplyStage(broker=None)
+    # _build_stack) unless overridden. chat_reply is wired with broker=None (chat-disabled shape)
+    # by default; TK-272 chat tests pass a real broker.
+    chat_reply_stage = ChatReplyStage(broker=chat_broker)
     # TK-267 (DEC-55): chat_reply now transitions onward to "speech_shape" (not "speak" directly).
-    # voice-off/no-adapter here (mirrors chat_reply's own voice-off posture above).
+    # voice-off/no-adapter here (mirrors chat_reply's own voice-off posture above) unless the
+    # caller (TK-272 chat tests) explicitly wires voice on.
     speech_shape_stage = SpeechShapeStage(
-        config=_config(), voice_enabled=False, adapter_present=False
+        config=_config(), voice_enabled=voice_enabled, adapter_present=adapter is not None
     )
-    speak_stage = SpeakSink(voice_enabled=False, adapter=None)
+    speak_stage = SpeakSink(voice_enabled=voice_enabled, adapter=adapter)
 
     graph = build_drain_pathway(
         drain_queue_stage,
@@ -276,7 +289,7 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
         model_profile="deepseek",
         clock=lambda: _FIXED_NOW,
     )
-    return engine, queue, daily_ledger
+    return engine, queue, daily_ledger, pending_set
 
 
 @pytest.fixture
@@ -454,7 +467,7 @@ async def test_real_gate_surfaces_a_high_urgency_item_and_composes(
             text="VIP meeting starting now.", model_id="fake", finish_reason="stop"
         )
     )
-    engine, queue, daily_ledger = _build_real_gate_stack(model_factory=success_model)
+    engine, queue, daily_ledger, _pending_set = _build_real_gate_stack(model_factory=success_model)
     try:
         queue.enqueue(
             QueueItem(
@@ -502,7 +515,9 @@ async def test_real_gate_holds_a_low_urgency_item_and_accumulates_in_pending(
     never_called_model = lambda guard: FakeModel(  # noqa: E731
         raises=AssertionError("the mouth must never be called on the real-gate hold path")
     )
-    engine, queue, daily_ledger = _build_real_gate_stack(model_factory=never_called_model)
+    engine, queue, daily_ledger, _pending_set = _build_real_gate_stack(
+        model_factory=never_called_model
+    )
     try:
         queue.enqueue(
             QueueItem(
@@ -540,6 +555,191 @@ async def test_real_gate_holds_a_low_urgency_item_and_accumulates_in_pending(
         assert holds[0]["load"] is None
 
         assert not any(s.stage_name in ("compose_dispatch", "compose") for s in final.steps)
+    finally:
+        queue.close()
+        daily_ledger.close()
+
+
+# --- DEC-57/TK-272: chat always earns a composed text reply ---------------------------------------
+
+
+class _RecordingTTSAdapter:
+    """A TTS adapter fake that records every ``speak()`` call verbatim (TK-272)."""
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+
+async def test_ac1_held_chat_composes_text_only_never_speaks(
+    clean_table_and_ledger: None,
+) -> None:
+    """A CHAT item that never clears the real Gate's urgency bar still reaches ``compose`` (a
+    real text reply, delivered to the chat broker) — but ``speech_shape`` makes ZERO model calls
+    and the TTS adapter speaks NOTHING, even with voice fully wired on. The pending set receives
+    NO add (DEC-57/R1) and the run completes cleanly."""
+    shared_model = FakeModel(
+        response=ModelResponse(text="Got it, on it.", model_id="fake", finish_reason="stop")
+    )
+    model_factory = lambda guard: shared_model  # noqa: E731
+    adapter = _RecordingTTSAdapter()
+    broker = ChatReplyBroker()
+    engine, queue, daily_ledger, pending_set = _build_real_gate_stack(
+        model_factory=model_factory,
+        voice_enabled=True,
+        adapter=adapter,
+        chat_broker=broker,
+    )
+    try:
+        item_id = "chat-held-1"
+        future = broker.register(item_id)
+        queue.enqueue(
+            QueueItem(
+                idempotency_key=item_id,
+                payload={
+                    "item_kind": "chat",
+                    "subject": "what's on my calendar",
+                    "is_timed": False,
+                    "sender_class": "automated",
+                },
+            )
+        )
+
+        final = await engine.run(
+            run_id="run-chat-held",
+            session_id="sess-chat-held",
+            pathway_id=_PATHWAY_ID,
+            initial=_initial_artifact(),
+        )
+
+        assert final.status is RunStatus.COMPLETED
+        assert queue.drain() == []  # acked
+
+        # compose ran — a real text reply, resolved to the chat broker.
+        compose_steps = [s for s in final.steps if s.stage_name == "compose"]
+        assert len(compose_steps) == 1
+        composed_artifact = compose_steps[0].result.output
+        assert composed_artifact is not None
+        text, _item_id, item_kind, degraded = composed_output_from_artifact_data(
+            composed_artifact.data
+        )
+        assert text
+        assert item_kind is ItemKind.CHAT
+        assert degraded is False
+        assert composed_output_held_chat_from_artifact_data(composed_artifact.data) is True
+
+        assert future.done()
+        assert future.result() == text  # chat_reply resolved the broker with the reply text
+
+        # speech_shape made ZERO model calls beyond the one compose already made.
+        assert len(shared_model.calls) == 1
+        speech_steps = [s for s in final.steps if s.stage_name == "speech_shape"]
+        assert len(speech_steps) == 1
+        speech_artifact = speech_steps[0].result.output
+        assert speech_artifact is not None
+        _sp_item_id, _sp_item_kind, speech_text, speech_degraded = speech_output_from_artifact_data(
+            speech_artifact.data
+        )
+        assert speech_text is None
+        assert speech_degraded is False
+
+        # the TTS adapter spoke NOTHING; speak's terminal output says so, cleanly (not degraded).
+        assert adapter.spoken == []
+        speak_steps = [s for s in final.steps if s.stage_name == "speak"]
+        assert len(speak_steps) == 1
+        spoken_artifact = speak_steps[0].result.output
+        assert spoken_artifact is not None
+        _sk_item_id, _sk_item_kind, spoken, spoken_degraded = spoken_output_from_artifact_data(
+            spoken_artifact.data
+        )
+        assert spoken is False
+        assert spoken_degraded is False  # quiet-by-design, never the degraded-warning branch
+
+        # DEC-57/R1: the chat item never absorbed into the durable pending set.
+        assert len(pending_set) == 0
+    finally:
+        queue.close()
+        daily_ledger.close()
+
+
+async def test_ac2_surfaced_chat_is_byte_identical_to_today(
+    clean_table_and_ledger: None,
+) -> None:
+    """A CHAT item that DOES clear the real Gate's urgency bar surfaces exactly like any other
+    surfaced item: compose runs, speech_shape makes exactly ONE model call, and the TTS adapter
+    speaks the shaped summary — held_chat is False throughout."""
+    shared_model = FakeModel(
+        response=ModelResponse(
+            text="Your meeting starts now.", model_id="fake", finish_reason="stop"
+        )
+    )
+    model_factory = lambda guard: shared_model  # noqa: E731
+    adapter = _RecordingTTSAdapter()
+    broker = ChatReplyBroker()
+    engine, queue, daily_ledger, _pending_set = _build_real_gate_stack(
+        model_factory=model_factory,
+        voice_enabled=True,
+        adapter=adapter,
+        chat_broker=broker,
+    )
+    try:
+        item_id = "chat-surface-1"
+        future = broker.register(item_id)
+        queue.enqueue(
+            QueueItem(
+                idempotency_key=item_id,
+                payload={
+                    "item_kind": "chat",
+                    "subject": "VIP meeting starting now",
+                    "is_timed": True,
+                    "seconds_to_event": 0.0,
+                    "sender_class": "vip",
+                },
+            )
+        )
+
+        final = await engine.run(
+            run_id="run-chat-surface",
+            session_id="sess-chat-surface",
+            pathway_id=_PATHWAY_ID,
+            initial=_initial_artifact(),
+        )
+
+        assert final.status is RunStatus.COMPLETED
+        assert queue.drain() == []
+
+        compose_steps = [s for s in final.steps if s.stage_name == "compose"]
+        assert len(compose_steps) == 1
+        composed_artifact = compose_steps[0].result.output
+        assert composed_artifact is not None
+        text, _item_id, item_kind, degraded = composed_output_from_artifact_data(
+            composed_artifact.data
+        )
+        assert text
+        assert item_kind is ItemKind.CHAT
+        assert degraded is False
+        assert composed_output_held_chat_from_artifact_data(composed_artifact.data) is False
+
+        assert future.done()
+        assert future.result() == text
+
+        speech_steps = [s for s in final.steps if s.stage_name == "speech_shape"]
+        assert len(speech_steps) == 1
+
+        speak_steps = [s for s in final.steps if s.stage_name == "speak"]
+        assert len(speak_steps) == 1
+        spoken_artifact = speak_steps[0].result.output
+        assert spoken_artifact is not None
+        _sk_item_id, _sk_item_kind, spoken, spoken_degraded = spoken_output_from_artifact_data(
+            spoken_artifact.data
+        )
+        # A full, real speak — the adapter was actually called (byte-identical to any other
+        # surfaced item's voice path; held_chat never suppresses this branch).
+        assert spoken is True
+        assert spoken_degraded is False
+        assert len(adapter.spoken) == 1
     finally:
         queue.close()
         daily_ledger.close()

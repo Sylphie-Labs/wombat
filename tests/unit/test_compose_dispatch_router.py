@@ -170,6 +170,7 @@ def test_surfaced_item_artifact_data_is_json_native_and_round_trips() -> None:
             "payload": {"n": 1, "text": "hi"},
             "item_id": 6,
         },
+        "held_chat": False,
     }
 
     serialized = json.dumps(data)

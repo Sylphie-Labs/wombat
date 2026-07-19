@@ -29,9 +29,15 @@ TK-6 stub's ``HOLD`` always carries the one scored item. A hold record is built 
 load reported as ``None``) reconstructed from the queue item alone when not — never an
 ``IndexError``.
 
-This stage NEVER branches on ``item_kind`` and NEVER references a concrete composer — routing to
-the right composer by kind is entirely TK-10's job (ISS-5); ``ctx`` surface is exactly
-``last_output("gate")`` + ``clock`` (provenance only).
+This stage NEVER references a concrete composer — routing to the right composer by kind is
+entirely TK-10's job (ISS-5); ``ctx`` surface is exactly ``last_output("gate")`` + ``clock``
+(provenance only).
+
+DEC-57/TK-272: the ONE exception to "never branches on item_kind" — a HOLD entry whose queue item
+is ``ItemKind.CHAT`` (``gate_item_from_queue_item(queue_item).item_kind``) is forwarded exactly
+like a surfaced item (``held_chat=True`` on the wire) instead of becoming a hold-report record, so
+chat always reaches ``compose`` for a text reply even when the gate keeps voice authority quiet.
+Every other kind's HOLD stays byte-identical (DEC-57e).
 """
 
 from __future__ import annotations
@@ -53,6 +59,16 @@ from wombat.stages.artifacts import (
     hold_report_to_artifact_data,
     surfaced_item_to_artifact_data,
 )
+
+
+# DEC-57/TK-272: a synthesized ScoredItem for the (structurally unreachable given the
+# Gate.pipeline R1 change) defensive case where a held chat item's score wasn't carried — never
+# fabricates a nonzero urgency/load, mirroring _hold_record's own honest placeholder.
+def _held_chat_scored_item(queue_item: QueueItem) -> ScoredItem:
+    return ScoredItem(
+        item_id=queue_item.idempotency_key, item_kind=ItemKind.CHAT, urgency=0.0, load=0.0
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +167,7 @@ class ReviewOrSpeakStage:
             raise RuntimeError(msg)
         entries = gate_decisions_from_artifact_data(art.data)
 
-        surfaced: list[tuple[GateAction, ScoredItem, QueueItem]] = []
+        surfaced: list[tuple[GateAction, ScoredItem, QueueItem, bool]] = []
         holds: list[dict[str, object]] = []
         for decision, queue_item in entries:
             assert queue_item.item_id is not None, (
@@ -164,23 +180,34 @@ class ReviewOrSpeakStage:
                 # to ONE synthesized digest surfaced_item, never one compose_request per item.
                 digest_scored = _digest_scored_item(decision.items)
                 digest_queue_item = _digest_queue_item(decision.items, queue_item)
-                surfaced.append((decision.action, digest_scored, digest_queue_item))
+                surfaced.append((decision.action, digest_scored, digest_queue_item, False))
             elif decision.action in _SURFACE_ACTIONS:
                 # SURFACE_IMMEDIATE: exactly one item, both under the stub and the production
                 # Gate (``Gate.pipeline`` only ever returns this action with items=(scored,)).
                 scored_item = decision.items[0]
-                surfaced.append((decision.action, scored_item, queue_item))
+                surfaced.append((decision.action, scored_item, queue_item, False))
+            elif gate_item_from_queue_item(queue_item).item_kind is ItemKind.CHAT:
+                # DEC-57/TK-272: chat NEVER absorbs into a hold record — forward exactly like a
+                # surfaced item (compose still runs, text-only; voice is suppressed downstream at
+                # speech_shape/speak) rather than journaling a terminal hold_report for it.
+                hold_scored_item = decision.items[0] if decision.items else None
+                chat_scored = (
+                    hold_scored_item
+                    if hold_scored_item is not None
+                    else _held_chat_scored_item(queue_item)
+                )
+                surfaced.append((GateAction.HOLD, chat_scored, queue_item, True))
             else:
                 hold_scored_item = decision.items[0] if decision.items else None
                 holds.append(_hold_record(hold_scored_item, queue_item))
 
         if surfaced:
-            action, scored_item, queue_item = surfaced[0]
+            action, scored_item, queue_item, held_chat = surfaced[0]
             if len(entries) > 1:
                 # DEFENSIVE (structurally unreachable at batch_size=1): every entry past the
                 # forwarded one is dropped from this StepResult (a StageResult carries exactly
                 # one artifact) — log LOUD so nothing goes missing silently.
-                for _, _, extra_item in surfaced[1:]:
+                for _, _, extra_item, _ in surfaced[1:]:
                     logger.warning(
                         "review_or_speak: defensive >1 batch — surplus surfaced item %r "
                         "acked but NOT forwarded (only the first surfaced entry routes on)",
@@ -199,10 +226,10 @@ class ReviewOrSpeakStage:
                 output=Artifact(
                     kind=SURFACED_ITEM,
                     produced_by=self.name,
-                    provenance=Provenance(
-                        source="system", confidence=1.0, recorded_at=ctx.clock()
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                    data=surfaced_item_to_artifact_data(
+                        action, scored_item, queue_item, held_chat=held_chat
                     ),
-                    data=surfaced_item_to_artifact_data(action, scored_item, queue_item),
                 ),
             )
 

@@ -50,7 +50,7 @@ from collections.abc import Callable, Iterable
 from typing import Protocol, runtime_checkable
 
 from wombat.gate.decay import DayRolloverProtocol, decay_stale
-from wombat.gate.models import DecayEvent, GateAction, GateDecision, GateItem, ScoredItem
+from wombat.gate.models import DecayEvent, GateAction, GateDecision, GateItem, ItemKind, ScoredItem
 from wombat.gate.pending_set import PendingSet
 from wombat.gate.scoring import cognitive_load, urgency
 from wombat.gate.trigger import CeilingHit, CeilingProtocol, is_surfacing_worthy
@@ -188,6 +188,14 @@ class Gate:
             if worthy:
                 # Ceiling denies an otherwise-worthy item: emit, then fall through to hold.
                 self._on_event(CeilingHit(item_id=scored.item_id, event_class=event_class))
+
+            # DEC-57/TK-272: chat NEVER absorbs into the durable pending set. A held chat item
+            # holds for VOICE purposes only (compose_dispatch still runs it text-only) — it must
+            # carry its REAL score forward, so return immediately with the scored item attached
+            # rather than adding it and returning the (score-discarding) empty-items HOLD below.
+            # Q-51's batch_size=1 means at most one item reaches this point per pipeline() call.
+            if scored.item_kind is ItemKind.CHAT:
+                return GateDecision(action=GateAction.HOLD, items=(scored,))
 
             eviction = self._pending_set.add(scored, added_at=self._clock())
             if eviction is not None:

@@ -130,6 +130,27 @@ async def test_held_item_accumulates_into_the_injected_pending_set() -> None:
     assert {scored.item_id for scored in pending_set.list()} == {"a"}
 
 
+async def test_held_chat_item_never_absorbs_into_the_pending_set_and_carries_its_score() -> None:
+    """DEC-57/TK-272 (R1): a CHAT item that would otherwise HOLD never reaches
+    ``pending_set.add`` — it returns HOLD immediately, carrying the REAL scored item."""
+    rating_params = RatingParams(urgency_base=0.0, urgency_gain=0.0, load_base=0.1, load_gain=0.0)
+    pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=50)
+    gate = _gate(rating_params=rating_params, pending_set=pending_set, load_flush_threshold=10.0)
+    chat_item = GateItem(
+        item_id="chat-1",
+        item_kind=ItemKind.CHAT,
+        created_at=0.0,
+        payload={"is_timed": False, "sender_class": "automated"},
+    )
+
+    decision = await gate.pipeline([chat_item])
+
+    assert decision.action is GateAction.HOLD
+    assert [scored.item_id for scored in decision.items] == ["chat-1"]
+    assert decision.items[0].item_kind is ItemKind.CHAT
+    assert pending_set.list() == []  # never absorbed
+
+
 async def test_pipeline_of_empty_items_is_a_valid_heartbeat_tick() -> None:
     rating_params = RatingParams(urgency_base=0.0, urgency_gain=0.0, load_base=0.0, load_gain=0.0)
     gate = _gate(rating_params=rating_params)

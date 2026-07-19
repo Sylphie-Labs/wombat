@@ -68,13 +68,15 @@ class _RaisingAdapter:
         raise self._exc
 
 
-def _composed_output_artifact() -> Artifact:
+def _composed_output_artifact(*, held_chat: bool = False) -> Artifact:
     """A gate-surfaced item's composed output — read ONLY for item identity now (TK-267)."""
     return Artifact(
         kind=COMPOSED_OUTPUT,
         produced_by="compose",
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
-        data=composed_output_to_artifact_data(_COMPOSED_TEXT, _ITEM_ID, _ITEM_KIND, False),
+        data=composed_output_to_artifact_data(
+            _COMPOSED_TEXT, _ITEM_ID, _ITEM_KIND, False, held_chat=held_chat
+        ),
     )
 
 
@@ -247,6 +249,23 @@ async def test_absent_speech_shape_output_degrades_speak_and_never_touches_the_a
     _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
     assert spoken is False
     assert degraded is True
+
+
+async def test_held_chat_never_speaks_and_never_degrades() -> None:
+    """DEC-57/TK-272: held_chat=True takes the SAME silent Done(spoken=False, degraded=False)
+    shape as voice-off, even with voice fully wired on — quiet-by-design is not degradation, so
+    this must NEVER fall through to the speech-text-None Degraded branch."""
+    stub = _StubAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=stub)
+    ctx = _ctx(compose_output=_composed_output_artifact(held_chat=True), speech_output=None)
+
+    result = await stage.run(ctx)
+
+    assert stub.call_count == 0  # never speaks
+    assert isinstance(result, Done)  # never Degraded
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is False
 
 
 async def test_voice_disabled_never_reads_speech_shape_output_stays_byte_identical() -> None:

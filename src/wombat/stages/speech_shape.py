@@ -31,6 +31,11 @@ no template/verbatim fallback for this mouth, unlike ``ComposeStage``'s degrade-
 NO fifth 'speech' persona mouth (DEC-55e, deferred): the prompt is a FIXED module constant with
 ``persona.expression.guard_suffix(Mouth.COMPOSE)`` appended verbatim (a read-only import) — zero
 persona-package diff.
+
+DEC-57/TK-272: when the composed-output artifact carries ``held_chat=True`` (a chat item the gate
+held for voice purposes only), ``run()`` takes the EXACT SAME voice-off pass-through shape as
+today — ZERO model calls, ``speech_text=None``, ``degraded=False`` — regardless of
+``voice_enabled``/``adapter_present``. A held chat reply is quiet by design, never degraded.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from wombat.persona.expression import guard_suffix
 from wombat.stages.artifacts import (
     SPEECH_OUTPUT,
     composed_output_from_artifact_data,
+    composed_output_held_chat_from_artifact_data,
     speech_output_to_artifact_data,
 )
 
@@ -141,18 +147,19 @@ class SpeechShapeStage:
             msg = "speech_shape: no compose output available yet"
             raise RuntimeError(msg)
         composed_text, item_id, item_kind, _degraded = composed_output_from_artifact_data(art.data)
+        held_chat = composed_output_held_chat_from_artifact_data(art.data)
 
-        if not self._voice_enabled or not self._adapter_present:
+        if not self._voice_enabled or not self._adapter_present or held_chat:
             # ZERO model calls (AC4): a silent pass-through — the voice-off/no-adapter outcome at
-            # speak stays byte-identical to today.
+            # speak stays byte-identical to today. DEC-57/TK-272: a held chat reply takes this
+            # EXACT same voice-off shape (speech_text=None, degraded=False) — quiet-by-design,
+            # never a model call, never routed through the degraded-warning branch downstream.
             return Transition(
                 to="speak",
                 output=Artifact(
                     kind=SPEECH_OUTPUT,
                     produced_by=self.name,
-                    provenance=Provenance(
-                        source="system", confidence=1.0, recorded_at=ctx.clock()
-                    ),
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                     data=speech_output_to_artifact_data(item_id, item_kind, None, False),
                 ),
             )
