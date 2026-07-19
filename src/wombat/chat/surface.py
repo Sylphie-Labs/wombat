@@ -135,11 +135,21 @@ class ChatReplyBroker:
         lets ``chat_reply`` call this unconditionally for every composed item, chat or not, and
         never raise for one it doesn't recognize."""
         future = self._pending.pop(item_id, None)
-        if future is not None:
-            if not future.done():
-                future.set_result(text)
+        if future is not None and not future.done():
+            future.set_result(text)
             return
         self._prune_late()
+        if future is not None:
+            # The future existed but was already done (cancelled) — e.g. the timeout handler's
+            # asyncio.wait_for cancelled it and this resolve landed in the await boundary before
+            # discard() ran (TK-271/ISS-22). A cancelled future proves the connection gave up, so
+            # the text is by definition late-expected: park it unconditionally, applying the same
+            # oldest-first eviction as discard() so boundedness holds on this insertion path too.
+            if item_id not in self._late and len(self._late) >= LATE_SLOT_MAX_SIZE:
+                oldest_id = next(iter(self._late))
+                del self._late[oldest_id]
+            self._late[item_id] = (text, time.monotonic())
+            return
         if item_id in self._late:
             # Refresh the timestamp on arrival so a genuinely-late reply gets its own full TTL
             # window to be picked up, rather than inheriting the age of the original timeout.
@@ -151,10 +161,15 @@ class ChatReplyBroker:
         and ``GET /chat/reply/<item_id>`` can report it once it arrives."""
         self._pending.pop(item_id, None)
         self._prune_late()
-        if item_id not in self._late and len(self._late) >= LATE_SLOT_MAX_SIZE:
-            oldest_id = next(iter(self._late))
-            del self._late[oldest_id]
-        self._late[item_id] = (None, time.monotonic())
+        if item_id not in self._late:
+            # TK-271/ISS-22: never clobber a text a resolve() already parked here (which can
+            # happen when resolve() lands in the await boundary between wait_for's timeout
+            # cancellation and this discard() call) — only insert the late-expected-but-empty
+            # placeholder when nothing is parked yet.
+            if len(self._late) >= LATE_SLOT_MAX_SIZE:
+                oldest_id = next(iter(self._late))
+                del self._late[oldest_id]
+            self._late[item_id] = (None, time.monotonic())
 
     def poll_late(self, item_id: str) -> str | None:
         """``GET /chat/reply/<item_id>`` semantics: ``None`` means "pending" — either genuinely

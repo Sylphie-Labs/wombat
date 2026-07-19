@@ -625,3 +625,75 @@ def test_ac2_late_slot_expires_entries_past_ttl(monkeypatch: pytest.MonkeyPatch)
     assert "stale-item" not in broker._late
     assert "fresh-item" in broker._late
     assert broker.poll_late("stale-item") is None
+
+
+# --- TK-271 / ISS-22: resolve()/discard() order-independence around a cancelled future ----------
+
+
+async def _register_and_cancel(broker: ChatReplyBroker, item_id: str) -> None:
+    """Reproduce exactly what asyncio.wait_for does at timeout: cancel the future it was
+    awaiting. This leaves the future popped-out-of-pending-but-done, the same state a resolve()
+    landing in the await boundary before the timeout handler's discard() call would see."""
+    future = broker.register(item_id)
+    future.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await future
+
+
+async def test_ac1_resolve_before_discard_survives_the_parked_text() -> None:
+    """The exact live interleaving (ISS-22): resolve() lands in the await boundary before the
+    timeout handler's discard() runs. The parked text must survive the subsequent discard()."""
+    broker = ChatReplyBroker()
+    await _register_and_cancel(broker, "item-1")
+
+    broker.resolve("item-1", "composed while cancelled")
+    broker.discard("item-1")
+
+    assert broker.poll_late("item-1") == "composed while cancelled"
+    assert broker.poll_late("item-1") is None  # pop-on-read
+
+
+async def test_ac2_discard_before_resolve_still_delivers_the_same_text() -> None:
+    """The reverse ordering — the normal case, discard() then a genuinely late resolve() —
+    proves order-independence together with the prior test's assertions."""
+    broker = ChatReplyBroker()
+    await _register_and_cancel(broker, "item-2")
+
+    broker.discard("item-2")
+    broker.resolve("item-2", "composed while cancelled")
+
+    assert broker.poll_late("item-2") == "composed while cancelled"
+    assert broker.poll_late("item-2") is None  # pop-on-read
+
+
+async def test_ac3_in_window_resolve_still_delivers_via_set_result() -> None:
+    broker = ChatReplyBroker()
+    future = broker.register("item-3")
+
+    broker.resolve("item-3", "in window")
+
+    assert future.done()
+    assert future.result() == "in window"
+    assert "item-3" not in broker._late
+
+
+def test_ac3_unknown_id_resolve_stays_a_strict_noop_with_no_late_entry() -> None:
+    broker = ChatReplyBroker()
+    broker.resolve("never-registered", "dropped")  # must not raise
+    assert "never-registered" not in broker._late
+    assert broker.poll_late("never-registered") is None
+
+
+async def test_ac4_cancelled_future_resolve_evicts_the_oldest_entry_at_the_size_cap() -> None:
+    broker = ChatReplyBroker()
+    ids = [f"item-{i}" for i in range(chat_surface.LATE_SLOT_MAX_SIZE)]
+    for item_id in ids:
+        broker.discard(item_id)
+    assert len(broker._late) == chat_surface.LATE_SLOT_MAX_SIZE
+
+    await _register_and_cancel(broker, "overflow-item")
+    broker.resolve("overflow-item", "text")
+
+    assert len(broker._late) == chat_surface.LATE_SLOT_MAX_SIZE
+    assert ids[0] not in broker._late
+    assert broker.poll_late("overflow-item") == "text"
