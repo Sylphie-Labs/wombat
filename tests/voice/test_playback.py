@@ -1,25 +1,45 @@
-"""TK-191 acceptance criteria (playback half) — ``AudioPlayer`` protocol + ``WinsoundPlayer``
-(EP-31, CST-1).
+"""TK-191/TK-262 acceptance criteria (playback half) — ``AudioPlayer`` protocol +
+``WinsoundPlayer`` (EP-31, CST-1, DEC-53a).
 
 AC3 (clean-checkout import bar / lazy winsound; construction + play on win32):
 ``test_playback_module_imports_without_winsound_installed``,
 ``test_winsound_player_constructs_on_win32``,
 ``test_winsound_player_play_calls_winsound_playsound_with_snd_memory``.
 
-No audible playback in tests — ``winsound.PlaySound`` itself is monkeypatched in the play test.
+TK-262 (DEC-53a, ISS-15): ``play()`` validates ``wav_bytes`` BEFORE ever calling
+``winsound.PlaySound`` — malformed/truncated audio raises ``ValueError`` instead of taking a
+native access violation. ``test_play_rejects_*`` (empty / non-RIFF / truncated) and
+``test_play_accepts_well_formed_wav_and_forwards_byte_identical``. The SpeakSink regression
+(voice-enabled, adapter raising the new ``ValueError``, still degrades cleanly) is
+``test_speak_sink_degrades_cleanly_when_adapter_raises_wav_validation_error``.
+
+No audible playback in tests — ``winsound.PlaySound`` itself is monkeypatched in the play tests.
 """
 
 from __future__ import annotations
 
 import importlib
+import io
 import sys
+import wave
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from importlib.abc import MetaPathFinder
 from importlib.machinery import ModuleSpec
 from types import ModuleType
 
 import pytest
+from cogworx.claims.provenance import Artifact, Provenance
+from cogworx.loop.result import Degraded
 
+from tests.support.stage_context_fake import StageContextFake
+from wombat.gate.models import ItemKind
+from wombat.sinks.speak import SpeakSink
+from wombat.stages.artifacts import (
+    COMPOSED_OUTPUT,
+    composed_output_to_artifact_data,
+    spoken_output_from_artifact_data,
+)
 from wombat.voice.playback import AudioPlayer, WinsoundPlayer
 
 
@@ -62,12 +82,56 @@ def test_winsound_player_constructs_on_win32() -> None:
     assert isinstance(player, WinsoundPlayer)
 
 
+def _make_wav_bytes(*, nframes: int = 8, nchannels: int = 1, sampwidth: int = 2) -> bytes:
+    """A small, well-formed WAV buffer, built via the stdlib ``wave`` module (never hand-rolled)."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(nchannels)
+        wav.setsampwidth(sampwidth)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00" * (nframes * nchannels * sampwidth))
+    return buf.getvalue()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="winsound is Windows-only (CST-1)")
 def test_winsound_player_play_calls_winsound_playsound_with_snd_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC3: ``play()`` reaches ``winsound.PlaySound`` with the ``SND_MEMORY`` flag and the raw
-    bytes — monkeypatched, so no audible playback happens in tests."""
+    """AC3/AC2 (TK-262): a well-formed WAV reaches ``winsound.PlaySound`` with the ``SND_MEMORY``
+    flag and the ORIGINAL bytes, byte-identical — monkeypatched, so no audible playback happens in
+    tests."""
+    import winsound
+
+    calls: list[tuple[bytes, int]] = []
+    monkeypatch.setattr(
+        winsound, "PlaySound", lambda sound, flags: calls.append((sound, flags))
+    )
+
+    wav_bytes = _make_wav_bytes()
+    player = WinsoundPlayer()
+    player.play(wav_bytes)
+
+    assert calls == [(wav_bytes, winsound.SND_MEMORY)]
+
+
+# --- TK-262 (DEC-53a, ISS-15): malformed WAV bytes raise before winsound.PlaySound -------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="winsound is Windows-only (CST-1)")
+@pytest.mark.parametrize(
+    "wav_bytes",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(b"not a wav file at all, just random junk bytes" * 4, id="non-riff"),
+        pytest.param(_make_wav_bytes(nframes=100)[:60], id="truncated-overrunning-declaration"),
+    ],
+)
+def test_play_rejects_malformed_wav_bytes_without_ever_calling_playsound(
+    monkeypatch: pytest.MonkeyPatch, wav_bytes: bytes
+) -> None:
+    """AC1: empty bytes, non-RIFF bytes, and a WAV whose declared data overruns the actual buffer
+    each raise ``ValueError`` naming the defect class and the byte length — and the spy proves
+    ``winsound.PlaySound`` was NEVER invoked."""
     import winsound
 
     calls: list[tuple[bytes, int]] = []
@@ -76,6 +140,62 @@ def test_winsound_player_play_calls_winsound_playsound_with_snd_memory(
     )
 
     player = WinsoundPlayer()
-    player.play(b"RIFF....WAVEfmt ")
+    with pytest.raises(ValueError, match=str(len(wav_bytes))):
+        player.play(wav_bytes)
 
-    assert calls == [(b"RIFF....WAVEfmt ", winsound.SND_MEMORY)]
+    assert calls == []
+
+
+# --- AC3 (TK-262): SpeakSink already contains any adapter exception (regression, no new code) --
+
+
+_FIXED_NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
+_ITEM_ID = "gate-item-1"
+_ITEM_KIND = ItemKind.GENERIC
+_TEXT = "You have a new alert."
+
+
+class _WavValidationRaisingAdapter:
+    """A ``TTSAdapter`` double whose ``speak()`` raises the same ``ValueError`` shape
+    ``WinsoundPlayer.play()`` now raises on poisoned WAV bytes (TK-262)."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def speak(self, text: str) -> None:
+        self.call_count += 1
+        raise ValueError("truncated WAV audio (20 bytes): declared frame data overruns buffer")
+
+
+async def test_speak_sink_degrades_cleanly_when_adapter_raises_wav_validation_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC3 (regression, no new sink code): SpeakSink wired voice-enabled with a fake adapter whose
+    ``speak()`` raises the validation ``ValueError`` returns the existing terminal ``Degraded``
+    artifact (spoken=False, degraded=True); nothing raises, and a warning is logged."""
+    adapter = _WavValidationRaisingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    compose_artifact = Artifact(
+        kind=COMPOSED_OUTPUT,
+        produced_by="compose",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=composed_output_to_artifact_data(_TEXT, _ITEM_ID, _ITEM_KIND, False),
+    )
+    ctx = StageContextFake(
+        now_fn=lambda: _FIXED_NOW,
+        last_output_map={"compose": compose_artifact},
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await stage.run(ctx)  # must not raise
+
+    assert adapter.call_count == 1
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True
+    assert any(
+        record.levelname == "WARNING" and "TTS adapter failed" in record.message
+        for record in caplog.records
+    )
