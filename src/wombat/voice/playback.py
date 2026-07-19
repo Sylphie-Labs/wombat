@@ -21,6 +21,15 @@ params; an explicit check on top of that proves the declared frame data does not
 actual buffer length (``wave`` itself does not check this — it will happily report parameters read
 from a truncated header). Any defect raises ``ValueError`` naming the defect class and the byte
 length, before ``PlaySound`` is ever called.
+
+Before that validation runs, ``play()`` first calls ``_normalize_sentinel_sizes`` (TK-264, ISS-17):
+Fish.audio's streaming WAV encoder writes an unknown-length SENTINEL into the RIFF and/or ``data``
+chunk size fields (observed live: ``0xFFFFFF00``) over an otherwise complete, self-consistent body.
+``wave.open`` does not reject this — it derives a huge ``nframes`` from the sentinel and *succeeds*,
+so it is the TK-262 overrun check that would otherwise reject every such response. If (and only if)
+a size field's value is exactly one of the known sentinel values, it is rewritten to the buffer's
+actual length; any other value (including a genuinely truncated declaration) is left untouched and
+still flows into validation unmodified — the TK-262 rejection contract stands verbatim.
 """
 
 from __future__ import annotations
@@ -28,6 +37,10 @@ from __future__ import annotations
 import io
 import wave
 from typing import Protocol
+
+#: Streaming-encoder unknown-length sentinels (TK-264, ISS-17) — the all-ones-truncated class.
+#: Kept as an explicit, closed set (no range heuristics): only these exact values are rewritten.
+_SENTINEL_SIZES = frozenset({0xFFFFFFFF, 0xFFFFFF00})
 
 
 class AudioPlayer(Protocol):
@@ -49,12 +62,59 @@ class WinsoundPlayer:
     def play(self, wav_bytes: bytes) -> None:
         """Play ``wav_bytes`` once, blocking until playback finishes.
 
-        Raises ``ValueError`` (TK-262, DEC-53a) — naming the defect class and the byte length —
-        before ``winsound.PlaySound`` is ever called, iff ``wav_bytes`` is empty, is not valid
-        RIFF/WAVE framing, or declares frame data that overruns the buffer's actual length.
+        First patches any unknown-length SENTINEL RIFF/``data`` size fields to the buffer's
+        actual lengths (TK-264, ISS-17). Then raises ``ValueError`` (TK-262, DEC-53a) — naming
+        the defect class and the byte length — before ``winsound.PlaySound`` is ever called, iff
+        the (possibly-patched) bytes are empty, are not valid RIFF/WAVE framing, or declare frame
+        data that overruns the buffer's actual length.
         """
+        wav_bytes = _normalize_sentinel_sizes(wav_bytes)
         _validate_wav_bytes(wav_bytes)
         self._winsound.PlaySound(wav_bytes, self._winsound.SND_MEMORY)
+
+
+def _normalize_sentinel_sizes(wav_bytes: bytes) -> bytes:
+    """Rewrite RIFF/``data`` chunk size fields that carry a known unknown-length SENTINEL
+    (TK-264, ISS-17) to the buffer's actual byte lengths; every other value — including a
+    genuinely truncated declaration — passes through untouched.
+
+    Returns ``wav_bytes`` UNCHANGED (same object) when the buffer is not parseable as RIFF/WAVE,
+    when no ``data`` sub-chunk can be located, or when neither size field carries a sentinel
+    value — so validation raises its existing, unmodified errors on anything this cannot repair.
+    """
+    if len(wav_bytes) < 12 or wav_bytes[0:4] != b"RIFF" or wav_bytes[8:12] != b"WAVE":
+        return wav_bytes
+
+    pos = 12
+    data_size_offset: int | None = None
+    data_start: int | None = None
+    while pos + 8 <= len(wav_bytes):
+        chunk_id = wav_bytes[pos : pos + 4]
+        chunk_size = int.from_bytes(wav_bytes[pos + 4 : pos + 8], "little")
+        chunk_data_start = pos + 8
+        if chunk_id == b"data":
+            data_size_offset = pos + 4
+            data_start = chunk_data_start
+            break
+        pos = chunk_data_start + chunk_size + (chunk_size % 2)  # chunks are word-padded
+
+    if data_size_offset is None or data_start is None:
+        return wav_bytes
+
+    riff_size = int.from_bytes(wav_bytes[4:8], "little")
+    data_size = int.from_bytes(wav_bytes[data_size_offset : data_size_offset + 4], "little")
+    patch_riff = riff_size in _SENTINEL_SIZES
+    patch_data = data_size in _SENTINEL_SIZES
+    if not patch_riff and not patch_data:
+        return wav_bytes
+
+    patched = bytearray(wav_bytes)
+    if patch_riff:
+        patched[4:8] = (len(wav_bytes) - 8).to_bytes(4, "little")
+    if patch_data:
+        actual_data_bytes = len(wav_bytes) - data_start
+        patched[data_size_offset : data_size_offset + 4] = actual_data_bytes.to_bytes(4, "little")
+    return bytes(patched)
 
 
 def _validate_wav_bytes(wav_bytes: bytes) -> None:

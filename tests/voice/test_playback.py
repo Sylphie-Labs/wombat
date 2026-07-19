@@ -1,5 +1,11 @@
-"""TK-191/TK-262 acceptance criteria (playback half) — ``AudioPlayer`` protocol +
-``WinsoundPlayer`` (EP-31, CST-1, DEC-53a).
+"""TK-191/TK-262/TK-264 acceptance criteria (playback half) — ``AudioPlayer`` protocol +
+``WinsoundPlayer`` (EP-31, CST-1, DEC-53a, ISS-17).
+
+TK-264 (ISS-17): sentinel-length WAV normalization runs BEFORE the TK-262/DEC-53a validation —
+``test_play_normalizes_sentinel_sizes_then_plays`` (incl. the exact live Fish shape),
+``test_normalize_sentinel_sizes_does_not_patch_non_sentinel_overrun``,
+``test_normalize_sentinel_sizes_is_noop_on_well_formed_wav``,
+``test_normalize_sentinel_sizes_returns_unchanged_on_unparseable_bytes``.
 
 AC3 (clean-checkout import bar / lazy winsound; construction + play on win32):
 ``test_playback_module_imports_without_winsound_installed``,
@@ -22,7 +28,7 @@ import importlib
 import io
 import sys
 import wave
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from importlib.abc import MetaPathFinder
 from importlib.machinery import ModuleSpec
@@ -40,7 +46,7 @@ from wombat.stages.artifacts import (
     composed_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
-from wombat.voice.playback import AudioPlayer, WinsoundPlayer
+from wombat.voice.playback import AudioPlayer, WinsoundPlayer, _normalize_sentinel_sizes
 
 
 class _BlockedFinder(MetaPathFinder):
@@ -144,6 +150,93 @@ def test_play_rejects_malformed_wav_bytes_without_ever_calling_playsound(
         player.play(wav_bytes)
 
     assert calls == []
+
+
+# --- TK-264 (ISS-17): sentinel-length WAV normalization, BEFORE the TK-262/DEC-53a validation ---
+
+
+def _poison_data_size(wav_bytes: bytes, sentinel: int) -> bytes:
+    """Overwrite a well-formed WAV's ``data`` chunk size field with ``sentinel``, leaving the
+    rest of the (self-consistent) buffer untouched — the exact shape Fish.audio's streaming
+    encoder produces (ISS-17)."""
+    idx = wav_bytes.find(b"data")
+    assert idx != -1, "fixture must already contain a data sub-chunk"
+    poisoned = bytearray(wav_bytes)
+    poisoned[idx + 4 : idx + 8] = sentinel.to_bytes(4, "little")
+    return bytes(poisoned)
+
+
+def _poison_riff_size(wav_bytes: bytes, sentinel: int) -> bytes:
+    """Overwrite a well-formed WAV's RIFF size field (bytes 4-7) with ``sentinel``."""
+    poisoned = bytearray(wav_bytes)
+    poisoned[4:8] = sentinel.to_bytes(4, "little")
+    return bytes(poisoned)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="winsound is Windows-only (CST-1)")
+@pytest.mark.parametrize(
+    "poison",
+    [
+        pytest.param(
+            lambda good: _poison_data_size(good, 0xFFFFFF00),
+            id="data-sentinel-live-fish-shape",
+        ),
+        pytest.param(
+            lambda good: _poison_data_size(good, 0xFFFFFFFF),
+            id="data-sentinel-all-ones",
+        ),
+        pytest.param(
+            lambda good: _poison_riff_size(good, 0xFFFFFFFF),
+            id="riff-sentinel",
+        ),
+        pytest.param(
+            lambda good: _poison_riff_size(_poison_data_size(good, 0xFFFFFF00), 0xFFFFFFFF),
+            id="both-riff-and-data-sentinel",
+        ),
+    ],
+)
+def test_play_normalizes_sentinel_sizes_then_plays(
+    monkeypatch: pytest.MonkeyPatch, poison: Callable[[bytes], bytes]
+) -> None:
+    """AC1: a self-consistent WAV whose RIFF and/or ``data`` size field carries a known
+    unknown-length sentinel (including the exact live Fish shape, declared data size
+    4294967040 over a much smaller actual body) is patched to the buffer's actual lengths
+    BEFORE validation, and ``winsound.PlaySound`` is invoked exactly once with the patched
+    (here: reconstructed-original) bytes."""
+    import winsound
+
+    calls: list[tuple[bytes, int]] = []
+    monkeypatch.setattr(winsound, "PlaySound", lambda sound, flags: calls.append((sound, flags)))
+
+    good = _make_wav_bytes(nframes=100)
+    poisoned = poison(good)
+    assert poisoned != good  # sanity: the fixture is actually poisoned
+
+    player = WinsoundPlayer()
+    player.play(poisoned)
+
+    assert calls == [(good, winsound.SND_MEMORY)]
+
+
+def test_normalize_sentinel_sizes_does_not_patch_non_sentinel_overrun() -> None:
+    """AC2: a genuinely truncated buffer's (non-sentinel) declared size is never rewritten —
+    normalization is a strict no-op on it, so validation's existing overrun check still fires."""
+    truncated = _make_wav_bytes(nframes=100)[:60]
+    assert _normalize_sentinel_sizes(truncated) is truncated
+
+
+def test_normalize_sentinel_sizes_is_noop_on_well_formed_wav() -> None:
+    """AC3: a well-formed, already-consistent WAV passes through byte-identical (same object,
+    no gratuitous rewrite)."""
+    good = _make_wav_bytes(nframes=100)
+    assert _normalize_sentinel_sizes(good) is good
+
+
+def test_normalize_sentinel_sizes_returns_unchanged_on_unparseable_bytes() -> None:
+    """Bytes that are not parseable as RIFF/WAVE at all are returned UNCHANGED, letting
+    validation raise its own existing errors."""
+    junk = b"not a wav file at all, just random junk bytes" * 4
+    assert _normalize_sentinel_sizes(junk) is junk
 
 
 # --- AC3 (TK-262): SpeakSink already contains any adapter exception (regression, no new code) --
