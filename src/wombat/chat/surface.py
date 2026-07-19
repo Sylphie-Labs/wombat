@@ -35,9 +35,22 @@ registry-derived id agree.
 
 The held connection then awaits that future up to ``CHAT_REPLY_TIMEOUT_SECONDS`` (30.0): a
 resolve within the window answers ``{"status": "replied", "text": <composed text>}``; a timeout
-answers ``{"status": "held"}`` — an HONEST gate-held/slow answer, never a hang (the gate's
-hold-authority stands; chat never bypasses it) — and discards the now-abandoned registration so a
-late resolve becomes the documented unknown-id no-op rather than leaking a completed future.
+answers ``{"status": "held", "id": <item_id>}`` and MOVES the registration into a bounded LATE
+SLOT rather than discarding it outright (DEC-56(b), TK-270 — this supersedes Q-110(d) ruling 4's
+plain discard-on-timeout IN PART; everything else in that ruling stands).
+
+DEC-56(b) — the late slot: ``ChatReplyBroker.discard(item_id)`` (still called on timeout) now
+marks ``item_id`` as LATE-EXPECTED in a capped, TTL'd dict (``LATE_SLOT_MAX_SIZE`` entries,
+``LATE_SLOT_TTL_SECONDS`` each, oldest-evicted at the cap, monotonic-clocked). A subsequent
+``resolve(item_id, text)`` for a late-expected id parks its text there instead of being a no-op;
+``resolve`` for an id NEVER seen by this broker (never registered, or evicted/expired) is still the
+documented no-op — the two cases are held structurally apart (late-expected-but-empty vs. simply
+absent), never conflated. ``GET /chat/reply/<item_id>`` (guarded by the SAME
+``X-Wombat-Chat-Token`` check as ``POST /chat``, identical 401 shape) answers
+``{"status": "pending"}`` for anything not yet arrived (late-expected OR unrecognized — the wire
+response itself doesn't need to distinguish those) and, once arrived, POPS and answers
+``{"status": "replied", "text": <text>}`` exactly once — a second poll reports ``"pending"``
+again. No websocket/SSE, no persistence beyond the in-memory bounded dict, no speak-path change.
 
 STRUCTURAL (CON-1): this module imports NOTHING model/compose/mouth-shaped — only stdlib,
 ``wombat.domain.item_identity``, and ``wombat.sources.{base,chat_source}``.
@@ -49,6 +62,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -62,6 +76,13 @@ logger = logging.getLogger(__name__)
 # The reply-await bound (Q-110(d) ruling 4): a resolve within this window answers "replied"; a
 # timeout answers "held" rather than hanging the connection.
 CHAT_REPLY_TIMEOUT_SECONDS = 30.0
+
+# DEC-56(b), TK-270: the late slot's bounds — a timed-out item's eventual reply is held here for
+# pickup by GET /chat/reply/<id>. Bounded in both dimensions: at most LATE_SLOT_MAX_SIZE entries
+# (oldest evicted first), each alive at most LATE_SLOT_TTL_SECONDS (comfortably past the app's
+# pinned ~12-minute poll-give-up bound, so a genuinely-late reply always has time to be picked up).
+LATE_SLOT_MAX_SIZE = 128
+LATE_SLOT_TTL_SECONDS = 900.0
 
 # Defensive bounds on the hand-rolled HTTP parse below — this is a loopback, token-gated surface
 # (CON-7), but a malformed/adversarial connection must still never hang or exhaust memory.
@@ -78,9 +99,11 @@ _REASON_PHRASES: dict[int, str] = {
 
 _CORS_HEADERS = (
     "Access-Control-Allow-Origin: *",
-    "Access-Control-Allow-Methods: POST, OPTIONS",
+    "Access-Control-Allow-Methods: GET, POST, OPTIONS",
     "Access-Control-Allow-Headers: Content-Type, X-Wombat-Chat-Token",
 )
+
+_LATE_REPLY_PATH_PREFIX = "/chat/reply/"
 
 
 class ChatReplyBroker:
@@ -90,6 +113,11 @@ class ChatReplyBroker:
 
     def __init__(self) -> None:
         self._pending: dict[str, asyncio.Future[str]] = {}
+        # DEC-56(b): the bounded late slot — item_id -> (text, inserted_at_monotonic). ``text`` is
+        # ``None`` while late-expected-but-not-yet-arrived; a resolve() for an id present here
+        # fills it in. Presence here (regardless of ``text``) is exactly what makes a late-
+        # expected id structurally distinct from one this broker never saw at all.
+        self._late: dict[str, tuple[str | None, float]] = {}
 
     def register(self, item_id: str) -> asyncio.Future[str]:
         """Create and store a fresh, unresolved future for ``item_id`` on the CURRENT running
@@ -100,18 +128,61 @@ class ChatReplyBroker:
         return future
 
     def resolve(self, item_id: str, text: str) -> None:
-        """Deliver ``text`` to the connection waiting on ``item_id``. A NO-OP for an unknown id
-        (never registered, already resolved, or already discarded after a timeout) — this is the
-        guard that lets ``chat_reply`` call this unconditionally for every composed item, chat or
-        not, and never raise for one it doesn't recognize."""
+        """Deliver ``text`` to the connection waiting on ``item_id``, OR — if ``item_id`` timed
+        out and is sitting in the late slot (DEC-56(b)) — park ``text`` there for
+        ``GET /chat/reply/<item_id>`` to pick up. A NO-OP for an id this broker has no record of
+        at all (never registered, or evicted/expired from the late slot) — this is the guard that
+        lets ``chat_reply`` call this unconditionally for every composed item, chat or not, and
+        never raise for one it doesn't recognize."""
         future = self._pending.pop(item_id, None)
-        if future is not None and not future.done():
-            future.set_result(text)
+        if future is not None:
+            if not future.done():
+                future.set_result(text)
+            return
+        self._prune_late()
+        if item_id in self._late:
+            # Refresh the timestamp on arrival so a genuinely-late reply gets its own full TTL
+            # window to be picked up, rather than inheriting the age of the original timeout.
+            self._late[item_id] = (text, time.monotonic())
 
     def discard(self, item_id: str) -> None:
-        """Drop a pending registration without resolving it (the timeout path) — a LATE resolve
-        for this id afterward is then the documented unknown-id no-op."""
+        """Move a pending registration into the bounded late slot (DEC-56(b), the timeout path) —
+        a subsequent ``resolve`` for this id then parks its text there instead of being a no-op,
+        and ``GET /chat/reply/<item_id>`` can report it once it arrives."""
         self._pending.pop(item_id, None)
+        self._prune_late()
+        if item_id not in self._late and len(self._late) >= LATE_SLOT_MAX_SIZE:
+            oldest_id = next(iter(self._late))
+            del self._late[oldest_id]
+        self._late[item_id] = (None, time.monotonic())
+
+    def poll_late(self, item_id: str) -> str | None:
+        """``GET /chat/reply/<item_id>`` semantics: ``None`` means "pending" — either genuinely
+        late-expected-but-not-arrived, or an id this broker has no late-slot record of (both
+        answer the caller identically; the pane only ever holds ids this surface itself minted).
+        A ``str`` is the arrived reply text, POPPED on read — a second poll for the same id then
+        reports pending again, matching the deliver-exactly-once discipline everywhere else in
+        this module."""
+        self._prune_late()
+        entry = self._late.get(item_id)
+        if entry is None:
+            return None
+        text, _inserted_at = entry
+        if text is None:
+            return None
+        del self._late[item_id]
+        return text
+
+    def _prune_late(self) -> None:
+        """Drop late-slot entries older than ``LATE_SLOT_TTL_SECONDS`` (monotonic-clocked)."""
+        now = time.monotonic()
+        expired = [
+            key
+            for key, (_text, inserted_at) in self._late.items()
+            if now - inserted_at > LATE_SLOT_TTL_SECONDS
+        ]
+        for key in expired:
+            del self._late[key]
 
 
 def _parse_chat_text(body: bytes) -> str | None:
@@ -248,9 +319,12 @@ class ChatSurface:
         body: bytes,
         writer: asyncio.StreamWriter,
     ) -> None:
-        if method == "OPTIONS" and path == "/chat":
+        if method == "OPTIONS" and (path == "/chat" or path.startswith(_LATE_REPLY_PATH_PREFIX)):
             # A CORS preflight never carries the app's custom headers — answered token-free.
             await self._respond(writer, 204, None)
+            return
+        if method == "GET" and path.startswith(_LATE_REPLY_PATH_PREFIX):
+            await self._handle_late_reply_get(path, headers, writer)
             return
         if method != "POST" or path != "/chat":
             await self._respond(writer, 404, {"error": "not_found"})
@@ -265,6 +339,24 @@ class ChatSurface:
             return
 
         await self._accept_message(text, writer)
+
+    async def _handle_late_reply_get(
+        self, path: str, headers: dict[str, str], writer: asyncio.StreamWriter
+    ) -> None:
+        """``GET /chat/reply/<item_id>`` (DEC-56(b), TK-270) — guarded by the SAME token header
+        check as ``POST /chat``, identical 401 shape."""
+        if headers.get("x-wombat-chat-token") != self._token:
+            await self._respond(writer, 401, {"error": "unauthorized"})
+            return
+        item_id = path[len(_LATE_REPLY_PATH_PREFIX) :]
+        if not item_id:
+            await self._respond(writer, 404, {"error": "not_found"})
+            return
+        text = self._broker.poll_late(item_id)
+        if text is None:
+            await self._respond(writer, 200, {"status": "pending"})
+        else:
+            await self._respond(writer, 200, {"status": "replied", "text": text})
 
     async def _accept_message(self, text: str, writer: asyncio.StreamWriter) -> None:
         """The ONE egress point for an accepted message: register a broker future, THEN push onto
@@ -285,7 +377,7 @@ class ChatSurface:
             reply_text = await asyncio.wait_for(future, timeout=self._reply_timeout_seconds)
         except TimeoutError:
             self._broker.discard(item_id)
-            await self._respond(writer, 200, {"status": "held"})
+            await self._respond(writer, 200, {"status": "held", "id": item_id})
             return
 
         await self._respond(writer, 200, {"status": "replied", "text": reply_text})
@@ -308,4 +400,10 @@ class ChatSurface:
         await writer.drain()
 
 
-__all__ = ["CHAT_REPLY_TIMEOUT_SECONDS", "ChatReplyBroker", "ChatSurface"]
+__all__ = [
+    "CHAT_REPLY_TIMEOUT_SECONDS",
+    "LATE_SLOT_MAX_SIZE",
+    "LATE_SLOT_TTL_SECONDS",
+    "ChatReplyBroker",
+    "ChatSurface",
+]

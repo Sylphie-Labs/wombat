@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PROBE_TIMEOUT_MS, SEND_TIMEOUT_MS, probeChat, sendChat } from "./chat";
+import {
+  POLL_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
+  SEND_TIMEOUT_MS,
+  pollChatReply,
+  probeChat,
+  sendChat,
+} from "./chat";
 
 // surface.py's CHAT_REPLY_TIMEOUT_SECONDS (src/wombat/chat/surface.py:64),
 // mirrored as a literal here (out of scope to import across the app/runtime
@@ -70,12 +77,14 @@ describe("sendChat", () => {
 
   it("returns held on surface.py's verbatim held shape", async () => {
     stubBridge({ port: PORT, token: TOKEN });
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({ status: "held" }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ status: "held", id: "item-held-1" }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await sendChat("hello");
 
-    expect(result).toEqual({ kind: "held" });
+    expect(result).toEqual({ kind: "held", id: "item-held-1" });
   });
 
   it("returns unavailable on a non-200 response (e.g. a 401)", async () => {
@@ -100,7 +109,9 @@ describe("sendChat", () => {
 
   it("derives the URL solely from the bridge port and sends the token only in the header", async () => {
     stubBridge({ port: PORT, token: TOKEN });
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({ status: "held" }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ status: "held", id: "item-held-2" }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await sendChat("hello");
@@ -120,7 +131,7 @@ describe("sendChat", () => {
       getInfo,
     };
     const fetchMock = vi.fn().mockImplementation(() =>
-      Promise.resolve(Response.json({ status: "held" })),
+      Promise.resolve(Response.json({ status: "held", id: "item-held-3" })),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -146,6 +157,61 @@ describe("sendChat timeout (TK-266 / ISS-19)", () => {
     const result = await pending;
 
     expect(result).toEqual({ kind: "timed_out" });
+  });
+});
+
+describe("pollChatReply (TK-270 / DEC-56(b))", () => {
+  it("returns pending on surface.py's verbatim pending shape", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ status: "pending" })));
+
+    expect(await pollChatReply("item-abc")).toEqual({ kind: "pending" });
+  });
+
+  it("returns replied+text on surface.py's verbatim replied shape", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ status: "replied", text: "sorry, late" })),
+    );
+
+    expect(await pollChatReply("item-abc")).toEqual({ kind: "replied", text: "sorry, late" });
+  });
+
+  it("returns unavailable when the bridge resolves null", async () => {
+    stubBridge(null);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await pollChatReply("item-abc")).toEqual({ kind: "unavailable" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("hits GET /chat/reply/<id> with the token only in the header, never the URL", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ status: "pending" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await pollChatReply("item-abc");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`http://127.0.0.1:${PORT}/chat/reply/item-abc`);
+    expect(url).not.toContain(TOKEN);
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-Wombat-Chat-Token")).toBe(TOKEN);
+  });
+
+  it("aborts a never-settling fetch at POLL_TIMEOUT_MS and returns unavailable", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", neverSettlingFetch());
+
+    const pending = pollChatReply("item-abc");
+    await vi.advanceTimersByTimeAsync(POLL_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(result).toEqual({ kind: "unavailable" });
   });
 });
 

@@ -9,9 +9,10 @@
  *
  * `surface.py`'s wire (`POST /chat`, `X-Wombat-Chat-Token` header, body
  * `{"text": <str>}`) answers `{"status": "replied", "text": <str>}` or, after
- * its honest 30s timeout, `{"status": "held"}`; anything else (no handshake,
- * a network failure, a non-200, an unrecognized body shape) collapses to the
- * SAME closed `unavailable` result - the pane never has to distinguish why.
+ * its honest 30s timeout, `{"status": "held", "id": <str>}`; anything else
+ * (no handshake, a network failure, a non-200, an unrecognized body shape)
+ * collapses to the SAME closed `unavailable` result - the pane never has to
+ * distinguish why.
  *
  * TK-266 (ISS-19): if the runtime dies holding the connection, the fetch
  * above never settles on its own - so `sendChat` races it against an
@@ -19,6 +20,11 @@
  * closed result, `timed_out`, distinct from `unavailable`: the pane needs to
  * tell "the app is honestly down" apart from "we gave up waiting and the
  * message may be lost".
+ *
+ * TK-270 (DEC-56(b)): a `held` result now carries the surface-minted `id` -
+ * the pane polls `pollChatReply(id)` (below) for it to arrive late. `id`
+ * never enters any model-visible payload; it is purely a client<->surface
+ * correlation handle.
  */
 
 export interface ChatBridgeInfo {
@@ -36,7 +42,7 @@ declare global {
 
 export type ChatResult =
   | { readonly kind: "replied"; readonly text: string }
-  | { readonly kind: "held" }
+  | { readonly kind: "held"; readonly id: string }
   | { readonly kind: "unavailable" }
   | { readonly kind: "timed_out" };
 
@@ -121,12 +127,74 @@ export async function sendChat(text: string): Promise<ChatResult> {
     return { kind: "unavailable" };
   }
 
+  const body = (await response.json()) as { status?: unknown; text?: unknown; id?: unknown };
+  if (body.status === "replied" && typeof body.text === "string") {
+    return { kind: "replied", text: body.text };
+  }
+  if (body.status === "held" && typeof body.id === "string") {
+    return { kind: "held", id: body.id };
+  }
+  return { kind: "unavailable" };
+}
+
+/**
+ * TK-270 (DEC-56(b)): `pollChatReply`'s own abort timeout - a hung poll must
+ * abort like any other fetch here (TK-266 discipline), not hang the polling
+ * loop.
+ */
+export const POLL_TIMEOUT_MS = 5_000;
+
+/** TK-270: the interval between successive polls. */
+export const POLL_INTERVAL_MS = 5_000;
+
+/**
+ * TK-270: the pinned, honest bound on how long the pane keeps polling for a
+ * late reply before giving up. A constant, not configurable - past this the
+ * pane renders an honest gave-up line rather than polling forever.
+ */
+export const POLL_GIVE_UP_MS = 12 * 60_000;
+
+export type PollReplyResult =
+  | { readonly kind: "replied"; readonly text: string }
+  | { readonly kind: "pending" }
+  | { readonly kind: "unavailable" };
+
+/**
+ * TK-270: `GET /chat/reply/<id>` - answers `{"status": "pending"}` or
+ * `{"status": "replied", "text": <str>}` (popped server-side on read).
+ * Mirrors `sendChat`'s freshness discipline (`getInfo()` re-read per call,
+ * never cached) and its collapse-to-`unavailable` posture for anything else.
+ */
+export async function pollChatReply(id: string): Promise<PollReplyResult> {
+  const info = await window.wombatChat.getInfo();
+  if (info === null) {
+    return { kind: "unavailable" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${info.port}/chat/reply/${id}`, {
+      method: "GET",
+      headers: {
+        "X-Wombat-Chat-Token": info.token,
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    return { kind: "unavailable" };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    return { kind: "unavailable" };
+  }
+
   const body = (await response.json()) as { status?: unknown; text?: unknown };
   if (body.status === "replied" && typeof body.text === "string") {
     return { kind: "replied", text: body.text };
   }
-  if (body.status === "held") {
-    return { kind: "held" };
-  }
-  return { kind: "unavailable" };
+  return { kind: "pending" };
 }

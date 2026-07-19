@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SEND_TIMEOUT_MS } from "../chat";
+import { POLL_GIVE_UP_MS, POLL_INTERVAL_MS, SEND_TIMEOUT_MS } from "../chat";
 import { ChatPane } from "./ChatPane";
 
 /**
@@ -49,7 +49,10 @@ describe("ChatPane (TK-223 AC1: send/receive)", () => {
 
   it("renders the honest held state on a held response, without a spinner", async () => {
     stubBridge({ port: PORT, token: TOKEN });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ status: "held" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ status: "held", id: "item-held-1" })),
+    );
 
     render(<ChatPane />);
     await typeAndSend("still working on this one");
@@ -100,7 +103,10 @@ describe("ChatPane (TK-223 AC1: send/receive)", () => {
 
   it("clears the input after sending", async () => {
     stubBridge({ port: PORT, token: TOKEN });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ status: "held" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ status: "held", id: "item-held-2" })),
+    );
 
     render(<ChatPane />);
     await typeAndSend("hello");
@@ -108,6 +114,85 @@ describe("ChatPane (TK-223 AC1: send/receive)", () => {
     await waitFor(() => {
       expect((screen.getByLabelText("Message") as HTMLInputElement).value).toBe("");
     });
+  });
+});
+
+describe("ChatPane (TK-270 / DEC-56(b): late-reply polling)", () => {
+  it("polls for a late reply after held, appends it with a 'replied late' marker, and stops polling", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ status: "held", id: "item-abc" }))
+      .mockResolvedValueOnce(Response.json({ status: "pending" }))
+      .mockResolvedValueOnce(Response.json({ status: "replied", text: "sorry for the wait" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatPane />);
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "slow one" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(
+      screen.getByText(/no reply within 30s - wombat is holding this or still working/i),
+    ).toBeTruthy();
+
+    // Two poll ticks: first sees "pending", second sees "replied".
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    });
+
+    expect(screen.getByText("Wombat (replied late): sorry for the wait")).toBeTruthy();
+
+    // Polling has stopped - further time passing makes no more fetch calls.
+    const callsAfterReply = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAfterReply);
+
+    vi.useRealTimers();
+  });
+
+  it("gives up after the poll bound elapses, renders an honest line, and stops polling", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ status: "held", id: "item-xyz" }))
+      .mockImplementation(() => Promise.resolve(Response.json({ status: "pending" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatPane />);
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "never comes back" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_GIVE_UP_MS + POLL_INTERVAL_MS * 2);
+    });
+
+    expect(
+      screen.getByText(/still no reply after several minutes - giving up waiting/i),
+    ).toBeTruthy();
+
+    const callsAfterGiveUp = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAfterGiveUp);
+
+    vi.useRealTimers();
   });
 });
 

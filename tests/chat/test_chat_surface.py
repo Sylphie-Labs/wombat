@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+from wombat.chat import surface as chat_surface
 from wombat.chat.surface import ChatReplyBroker, ChatSurface
 from wombat.domain.item_identity import idempotency_key as derive_key
 from wombat.gate.gate import gate_item_from_queue_item
@@ -451,12 +452,15 @@ async def test_ac3_reply_timeout_answers_held_and_a_late_resolve_is_then_a_no_op
             timeout=5.0,
         )
         assert status == 200
-        assert json.loads(body) == {"status": "held"}
+        held = json.loads(body)
+        assert held["status"] == "held"
 
-        # The registration was discarded on timeout — a LATE resolve for the same item_id is
-        # the documented unknown-id no-op (never raises).
+        # The registration moved into the DEC-56(b) late slot on timeout — a late resolve for
+        # the same item_id now parks its text there rather than being dropped (never raises
+        # either way).
         await _wait_until(lambda: len(stack.enqueuer.items) >= 1)
         item_id = stack.enqueuer.items[0].idempotency_key
+        assert held["id"] == item_id
         stack.broker.resolve(item_id, "too late")  # must not raise
     finally:
         await _stop_stack(stack)
@@ -481,3 +485,143 @@ async def test_malformed_body_is_400_and_never_reaches_the_source(tmp_path: Path
         assert stack.enqueuer.items == []
     finally:
         await _stop_stack(stack)
+
+
+# --- DEC-56(b) / TK-270: late-slot delivery -----------------------------------------------------
+
+
+async def test_ac1_late_reply_is_delivered_via_get_and_popped_on_read(tmp_path: Path) -> None:
+    stack = await _start_stack(tmp_path, reply_timeout_seconds=0.05)
+    try:
+        host, port = stack.surface.address
+        status, _headers, body = await asyncio.wait_for(
+            _http_request(
+                host,
+                port,
+                method="POST",
+                path="/chat",
+                headers={"X-Wombat-Chat-Token": _TOKEN},
+                body=json.dumps({"text": "late one"}).encode("utf-8"),
+            ),
+            timeout=5.0,
+        )
+        assert status == 200
+        held = json.loads(body)
+        assert held["status"] == "held"
+        item_id = held["id"]
+        assert item_id
+        await _wait_until(lambda: len(stack.enqueuer.items) >= 1)
+
+        # Pre-resolve: pending.
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path=f"/chat/reply/{item_id}",
+            headers={"X-Wombat-Chat-Token": _TOKEN},
+        )
+        assert status == 200
+        assert json.loads(body) == {"status": "pending"}
+
+        stack.broker.resolve(item_id, "arrived late")
+
+        # Post-resolve: replied + text, but the resolved text never entered any model-visible
+        # payload — the only thing the enqueuer ever saw was the original user message.
+        assert stack.enqueuer.items[0].payload["text"] == "late one"
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path=f"/chat/reply/{item_id}",
+            headers={"X-Wombat-Chat-Token": _TOKEN},
+        )
+        assert status == 200
+        assert json.loads(body) == {"status": "replied", "text": "arrived late"}
+
+        # Pop-on-read: a second GET reports pending again.
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path=f"/chat/reply/{item_id}",
+            headers={"X-Wombat-Chat-Token": _TOKEN},
+        )
+        assert status == 200
+        assert json.loads(body) == {"status": "pending"}
+    finally:
+        await _stop_stack(stack)
+
+
+async def test_ac3_late_reply_get_tokenless_is_401(tmp_path: Path) -> None:
+    stack = await _start_stack(tmp_path)
+    try:
+        host, port = stack.surface.address
+        status, _headers, body = await _http_request(
+            host, port, method="GET", path="/chat/reply/whatever"
+        )
+        assert status == 401
+        assert json.loads(body) == {"error": "unauthorized"}
+    finally:
+        await _stop_stack(stack)
+
+
+async def test_ac3_late_reply_get_wrong_token_is_401(tmp_path: Path) -> None:
+    stack = await _start_stack(tmp_path)
+    try:
+        host, port = stack.surface.address
+        status, _headers, _body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path="/chat/reply/whatever",
+            headers={"X-Wombat-Chat-Token": "wrong-token"},
+        )
+        assert status == 401
+    finally:
+        await _stop_stack(stack)
+
+
+async def test_ac3_late_reply_options_preflight_is_answered_without_a_token(
+    tmp_path: Path,
+) -> None:
+    stack = await _start_stack(tmp_path)
+    try:
+        host, port = stack.surface.address
+        status, headers, _body = await _http_request(
+            host, port, method="OPTIONS", path="/chat/reply/whatever"
+        )
+        assert status == 204
+        assert headers.get("access-control-allow-origin") == "*"
+    finally:
+        await _stop_stack(stack)
+
+
+def test_ac3_resolve_for_a_never_registered_id_is_a_noop_and_polls_pending_forever() -> None:
+    broker = ChatReplyBroker()
+    broker.resolve("never-seen", "should be dropped")  # must not raise
+    assert broker.poll_late("never-seen") is None
+    assert broker.poll_late("never-seen") is None  # still pending, not just once
+
+
+def test_ac2_late_slot_evicts_the_oldest_entry_at_the_size_cap() -> None:
+    broker = ChatReplyBroker()
+    ids = [f"item-{i}" for i in range(chat_surface.LATE_SLOT_MAX_SIZE + 1)]
+    for item_id in ids:
+        broker.discard(item_id)
+
+    assert len(broker._late) == chat_surface.LATE_SLOT_MAX_SIZE
+    assert ids[0] not in broker._late
+    assert ids[-1] in broker._late
+
+
+def test_ac2_late_slot_expires_entries_past_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    broker = ChatReplyBroker()
+    broker.discard("stale-item")
+
+    monkeypatch.setattr(chat_surface, "LATE_SLOT_TTL_SECONDS", 0.0)
+
+    # Any subsequent late-slot touch prunes the now-expired entry.
+    broker.discard("fresh-item")
+    assert "stale-item" not in broker._late
+    assert "fresh-item" in broker._late
+    assert broker.poll_late("stale-item") is None

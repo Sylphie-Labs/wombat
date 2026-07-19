@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { sendChat } from "../chat";
+import { POLL_GIVE_UP_MS, POLL_INTERVAL_MS, pollChatReply, sendChat } from "../chat";
 import { ink } from "../tokens";
 import { Button } from "./Button";
 import { Field } from "./Field";
@@ -16,12 +16,20 @@ import { Panel } from "./Panel";
  * before the fetch settles) is likewise an honest transcript line, never a
  * stuck "Sending...". No history persistence, no streaming/typing indicator,
  * and no usage tracking of any kind (DEC-29).
+ *
+ * TK-270 (DEC-56(b)): a `held` result now carries an `id` - the pane starts
+ * polling `pollChatReply(id)` every `POLL_INTERVAL_MS`, up to the pinned
+ * `POLL_GIVE_UP_MS` bound. A reply that lands appends with a VISIBLE
+ * "replied late" marker and polling for that id stops; the bound elapsing
+ * first appends an honest gave-up line and stops - never an infinite loop.
  */
 
 type TranscriptEntry =
   | { readonly id: string; readonly kind: "user"; readonly text: string }
   | { readonly id: string; readonly kind: "replied"; readonly text: string }
   | { readonly id: string; readonly kind: "held" }
+  | { readonly id: string; readonly kind: "replied_late"; readonly text: string }
+  | { readonly id: string; readonly kind: "poll_gave_up" }
   | { readonly id: string; readonly kind: "timed_out" };
 
 function nextId(): string {
@@ -33,6 +41,8 @@ export function ChatPane() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
+  const mountedRef = useRef(true);
+  const pollTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +63,42 @@ export function ChatPane() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      for (const timer of pollTimersRef.current) {
+        clearTimeout(timer);
+      }
+      pollTimersRef.current.clear();
+    };
+  }, []);
+
+  // TK-270 (DEC-56(b)): schedules the next poll for a held reply's `id`,
+  // `elapsedMs` after the original held response. Stops (without scheduling
+  // again) once the reply arrives or `POLL_GIVE_UP_MS` is reached.
+  function schedulePoll(id: string, elapsedMs: number): void {
+    const timer = setTimeout(() => {
+      pollTimersRef.current.delete(timer);
+      void pollChatReply(id).then((result) => {
+        if (!mountedRef.current) return;
+        if (result.kind === "replied") {
+          setTranscript((prev) => [
+            ...prev,
+            { id: nextId(), kind: "replied_late", text: result.text },
+          ]);
+          return;
+        }
+        const nextElapsedMs = elapsedMs + POLL_INTERVAL_MS;
+        if (nextElapsedMs >= POLL_GIVE_UP_MS) {
+          setTranscript((prev) => [...prev, { id: nextId(), kind: "poll_gave_up" }]);
+          return;
+        }
+        schedulePoll(id, nextElapsedMs);
+      });
+    }, POLL_INTERVAL_MS);
+    pollTimersRef.current.add(timer);
+  }
+
   async function handleSend(): Promise<void> {
     const text = draft.trim();
     if (!text || sending) return;
@@ -68,6 +114,7 @@ export function ChatPane() {
       } else if (result.kind === "held") {
         setUnavailable(false);
         setTranscript((prev) => [...prev, { id: nextId(), kind: "held" }]);
+        schedulePoll(result.id, 0);
       } else if (result.kind === "timed_out") {
         // TK-266 (ISS-19): the fetch never settled - stay honest about the
         // possible loss instead of leaving the pane stuck on "Sending...".
@@ -108,6 +155,20 @@ export function ChatPane() {
             return (
               <p key={entry.id} className={ink.muted}>
                 Wombat stopped responding - the message may be lost.
+              </p>
+            );
+          }
+          if (entry.kind === "replied_late") {
+            return (
+              <p key={entry.id} className={ink.primary}>
+                Wombat (replied late): {entry.text}
+              </p>
+            );
+          }
+          if (entry.kind === "poll_gave_up") {
+            return (
+              <p key={entry.id} className={ink.muted}>
+                Still no reply after several minutes - giving up waiting.
               </p>
             );
           }
