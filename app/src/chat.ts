@@ -12,6 +12,13 @@
  * its honest 30s timeout, `{"status": "held"}`; anything else (no handshake,
  * a network failure, a non-200, an unrecognized body shape) collapses to the
  * SAME closed `unavailable` result - the pane never has to distinguish why.
+ *
+ * TK-266 (ISS-19): if the runtime dies holding the connection, the fetch
+ * above never settles on its own - so `sendChat` races it against an
+ * `AbortController` timing out at `SEND_TIMEOUT_MS`. An abort is its OWN
+ * closed result, `timed_out`, distinct from `unavailable`: the pane needs to
+ * tell "the app is honestly down" apart from "we gave up waiting and the
+ * message may be lost".
  */
 
 export interface ChatBridgeInfo {
@@ -30,7 +37,23 @@ declare global {
 export type ChatResult =
   | { readonly kind: "replied"; readonly text: string }
   | { readonly kind: "held" }
-  | { readonly kind: "unavailable" };
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "timed_out" };
+
+/**
+ * TK-266: the send-side abort timeout. MUST stay STRICTLY GREATER than
+ * `surface.py`'s `CHAT_REPLY_TIMEOUT_SECONDS` (30s) so a legitimate `held`
+ * answer - which surface.py itself only returns after its own 30s wait - is
+ * NEVER falsely reported as timed out here.
+ */
+export const SEND_TIMEOUT_MS = 45_000;
+
+/**
+ * TK-266: `probeChat`'s own, much shorter abort timeout - a liveness probe
+ * that hangs is itself a dead answer, so it must not wait anywhere near as
+ * long as a real chat send.
+ */
+export const PROBE_TIMEOUT_MS = 5_000;
 
 /**
  * TK-263 (ISS-16): the header's liveness signal. Handshake-file presence
@@ -50,11 +73,17 @@ export async function probeChat(): Promise<boolean> {
     return false;
   }
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    await fetch(`http://127.0.0.1:${info.port}/`);
+    await fetch(`http://127.0.0.1:${info.port}/`, { signal: controller.signal });
     return true;
   } catch {
+    // Covers both a thrown network error and an abort (a hung probe is a
+    // dead answer) - either way the runtime does not count as alive.
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -64,6 +93,8 @@ export async function sendChat(text: string): Promise<ChatResult> {
     return { kind: "unavailable" };
   }
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
   let response: Response;
   try {
     // The loopback origin is derived entirely from the bridge-supplied port;
@@ -75,9 +106,15 @@ export async function sendChat(text: string): Promise<ChatResult> {
         "X-Wombat-Chat-Token": info.token,
       },
       body: JSON.stringify({ text }),
+      signal: controller.signal,
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return { kind: "timed_out" };
+    }
     return { kind: "unavailable" };
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!response.ok) {

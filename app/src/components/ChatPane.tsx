@@ -12,14 +12,17 @@ import { Panel } from "./Panel";
  * base components. `held` renders an HONEST transcript state (the gate's
  * hold authority stands - never a spinner that lies); no handshake or a
  * dead runtime renders a visible "wombat is not running" state instead of a
- * dead pane. No history persistence, no streaming/typing indicator, and no
- * usage tracking of any kind (DEC-29).
+ * dead pane. TK-266 (ISS-19): `timed_out` (the send's own abort firing
+ * before the fetch settles) is likewise an honest transcript line, never a
+ * stuck "Sending...". No history persistence, no streaming/typing indicator,
+ * and no usage tracking of any kind (DEC-29).
  */
 
 type TranscriptEntry =
   | { readonly id: string; readonly kind: "user"; readonly text: string }
   | { readonly id: string; readonly kind: "replied"; readonly text: string }
-  | { readonly id: string; readonly kind: "held" };
+  | { readonly id: string; readonly kind: "held" }
+  | { readonly id: string; readonly kind: "timed_out" };
 
 function nextId(): string {
   return crypto.randomUUID();
@@ -65,6 +68,10 @@ export function ChatPane() {
       } else if (result.kind === "held") {
         setUnavailable(false);
         setTranscript((prev) => [...prev, { id: nextId(), kind: "held" }]);
+      } else if (result.kind === "timed_out") {
+        // TK-266 (ISS-19): the fetch never settled - stay honest about the
+        // possible loss instead of leaving the pane stuck on "Sending...".
+        setTranscript((prev) => [...prev, { id: nextId(), kind: "timed_out" }]);
       } else {
         setUnavailable(true);
       }
@@ -94,6 +101,13 @@ export function ChatPane() {
             return (
               <p key={entry.id} className={ink.primary}>
                 Wombat: {entry.text}
+              </p>
+            );
+          }
+          if (entry.kind === "timed_out") {
+            return (
+              <p key={entry.id} className={ink.muted}>
+                Wombat stopped responding - the message may be lost.
               </p>
             );
           }

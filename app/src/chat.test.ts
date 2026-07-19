@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { sendChat } from "./chat";
+import { PROBE_TIMEOUT_MS, SEND_TIMEOUT_MS, probeChat, sendChat } from "./chat";
+
+// surface.py's CHAT_REPLY_TIMEOUT_SECONDS (src/wombat/chat/surface.py:64),
+// mirrored as a literal here (out of scope to import across the app/runtime
+// boundary) - SEND_TIMEOUT_MS must stay strictly greater than this in ms.
+const SURFACE_HELD_TIMEOUT_MS = 30_000;
 
 /**
  * TK-223 AC1/AC2/AC3: sendChat against a fake window.wombatChat bridge +
@@ -21,7 +26,23 @@ function stubBridge(info: { port: number; token: string } | null): void {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+/**
+ * TK-266: a fetch stand-in for the ISS-19 crash class - it never settles on
+ * its own, only rejecting with the real `AbortError` `fetch` itself would
+ * produce once its passed `AbortSignal` fires.
+ */
+function neverSettlingFetch(): ReturnType<typeof vi.fn> {
+  return vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+  });
+}
 
 describe("sendChat", () => {
   it("returns unavailable when the bridge resolves null (no handshake / chat disabled)", async () => {
@@ -107,5 +128,37 @@ describe("sendChat", () => {
     await sendChat("second");
 
     expect(getInfo).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("sendChat timeout (TK-266 / ISS-19)", () => {
+  it("SEND_TIMEOUT_MS is strictly greater than surface.py's 30s held-window", () => {
+    expect(SEND_TIMEOUT_MS).toBeGreaterThan(SURFACE_HELD_TIMEOUT_MS);
+  });
+
+  it("aborts a never-settling fetch at SEND_TIMEOUT_MS and returns timed_out", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", neverSettlingFetch());
+
+    const pending = sendChat("hello");
+    await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS);
+    const result = await pending;
+
+    expect(result).toEqual({ kind: "timed_out" });
+  });
+});
+
+describe("probeChat timeout (TK-266 / ISS-19)", () => {
+  it("aborts a never-settling probe fetch at PROBE_TIMEOUT_MS and reports not-alive", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", neverSettlingFetch());
+
+    const pending = probeChat();
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+    const alive = await pending;
+
+    expect(alive).toBe(false);
   });
 });

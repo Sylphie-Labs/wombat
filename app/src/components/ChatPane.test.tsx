@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { SEND_TIMEOUT_MS } from "../chat";
 import { ChatPane } from "./ChatPane";
 
 /**
@@ -28,6 +29,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("ChatPane (TK-223 AC1: send/receive)", () => {
@@ -55,6 +57,45 @@ describe("ChatPane (TK-223 AC1: send/receive)", () => {
     expect(
       await screen.findByText(/no reply within 30s - wombat is holding this or still working/i),
     ).toBeTruthy();
+  });
+
+  it("renders the honest timed-out line and re-enables send controls (TK-266 / ISS-19)", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    // A fetch that never settles - only `sendChat`'s own AbortController
+    // resolves it, once its timeout fires.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        });
+      }),
+    );
+
+    render(<ChatPane />);
+    fireEvent.change(screen.getByLabelText("Message"), {
+      target: { value: "will this ever come back" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS);
+    });
+
+    expect(
+      screen.getByText("Wombat stopped responding - the message may be lost."),
+    ).toBeTruthy();
+
+    // "Send" (not stuck on "Sending...") and the input itself re-enabled;
+    // the button stays disabled only because the (already-cleared) draft is
+    // empty - the same as after any other completed send, e.g. `held`.
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect((screen.getByLabelText("Message") as HTMLInputElement).disabled).toBe(false);
+
+    vi.useRealTimers();
   });
 
   it("clears the input after sending", async () => {
