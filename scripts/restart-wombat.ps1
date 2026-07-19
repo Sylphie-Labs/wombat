@@ -48,8 +48,12 @@ function Get-WombatWatchdogHostProcesses {
 # Pinned process-identity shape (Stop-Wombat.ps1:3-4) - the same helper used
 # by wombat-console.ps1's single-instance guard and post-start assert.
 function Get-WombatProcesses {
+    # ISS-24: anchored to end-or-whitespace so 'python -m wombat.settings_app'
+    # never false-positives as a runtime match. CIM CommandLines can carry a
+    # trailing space (TK-238) - that trailing space IS whitespace, so `\s`
+    # still honors it.
     Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-        Where-Object { $_.CommandLine -match '-m wombat' }
+        Where-Object { $_.CommandLine -match '-m wombat(\s|$)' }
 }
 
 # (1) Kill the watchdog host(s) FIRST - see .DESCRIPTION ordering rationale
