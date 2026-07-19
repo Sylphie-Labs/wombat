@@ -20,8 +20,11 @@ standing-loop cycle (AC5) live in ``tests/integration/test_serve_boot.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import socket
 import sys
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -1571,3 +1574,106 @@ async def test_serve_boots_byte_unchanged_when_scratchpad_store_is_none(
     monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
 
     await runtime.serve()  # must not raise
+
+
+# --- TK-268 (ISS-20): _write_chat_handshake refuses to stomp a live handshake -------------------
+
+
+@dataclass
+class _FakeHandshakeSurface:
+    """The bare attributes ``_write_chat_handshake`` reads off a ``ChatSurface`` (handshake_path/
+    port/token) — a real ``ChatSurface`` needs a started server for ``.port`` to resolve, so this
+    stands in, mirroring the module's own "testable/callable standalone" seam."""
+
+    handshake_path: Path
+    port: int
+    token: str = "fake-token"
+
+
+def _bind_loopback_socket() -> socket.socket:
+    """A real listening socket on an OS-assigned 127.0.0.1 port — the test-owned "live" port for
+    AC1/AC3 below. Caller closes it."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    return sock
+
+
+def test_write_chat_handshake_refuses_overwrite_when_recorded_port_is_live(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC1: an existing handshake file whose recorded port is held by a test-owned live listener
+    -> the write is refused (file byte-unchanged), exactly one WARNING names the path and the
+    live port, and the call does not raise."""
+    listener = _bind_loopback_socket()
+    try:
+        live_port = listener.getsockname()[1]
+        path = tmp_path / "chat-handshake.json"
+        original = json.dumps({"port": live_port, "token": "old-token"})
+        path.write_text(original, encoding="utf-8")
+
+        surface = _FakeHandshakeSurface(handshake_path=path, port=99999, token="new-token")
+        with caplog.at_level(logging.WARNING):
+            runtime._write_chat_handshake(surface)  # type: ignore[arg-type]
+
+        assert path.read_text(encoding="utf-8") == original  # byte-unchanged
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert str(path) in warnings[0].getMessage()
+        assert str(live_port) in warnings[0].getMessage()
+    finally:
+        listener.close()
+
+
+@pytest.mark.parametrize(
+    "seed_file",
+    ["absent", "dead_port", "unparsable"],
+)
+def test_write_chat_handshake_writes_as_today_when_no_live_owner(
+    tmp_path: Path, seed_file: str
+) -> None:
+    """AC2: an absent file, a dead-port handshake, or an unparsable file all fall through to the
+    exact same unconditional write as before — the written JSON line equals
+    ``{"port": surface.port, "token": surface.token}``."""
+    path = tmp_path / "chat-handshake.json"
+    if seed_file == "dead_port":
+        # Bind-then-close to mint a port number almost certainly not currently listening.
+        probe = _bind_loopback_socket()
+        dead_port = probe.getsockname()[1]
+        probe.close()
+        path.write_text(json.dumps({"port": dead_port, "token": "stale"}), encoding="utf-8")
+    elif seed_file == "unparsable":
+        path.write_text("not json at all", encoding="utf-8")
+    # "absent": no file written at all.
+
+    surface = _FakeHandshakeSurface(handshake_path=path, port=54321, token="fresh-token")
+    runtime._write_chat_handshake(surface)  # type: ignore[arg-type]
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"port": 54321, "token": "fresh-token"}
+
+
+def test_write_chat_handshake_proceeds_once_bounded_probe_timeout_elapses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC3: a probe that neither answers nor refuses promptly (simulated black-hole/firewall) still
+    proceeds to write once the bounded timeout elapses — the whole call completes within the bound
+    and the write happens. Shrinks the module's probe timeout via monkeypatch (no env flag, no
+    config field) so this test stays fast instead of actually blocking a full second."""
+    monkeypatch.setattr(runtime, "_HANDSHAKE_PROBE_TIMEOUT_SECONDS", 0.05)
+
+    def _blackhole_create_connection(*args: Any, **kwargs: Any) -> socket.socket:
+        time.sleep(0.05)  # stands in for the OS actually waiting out the connect timeout
+        raise TimeoutError("simulated black-hole: neither SYN-ACK nor RST ever arrives")
+
+    monkeypatch.setattr(socket, "create_connection", _blackhole_create_connection)
+
+    path = tmp_path / "chat-handshake.json"
+    path.write_text(json.dumps({"port": 65000, "token": "stale"}), encoding="utf-8")
+    surface = _FakeHandshakeSurface(handshake_path=path, port=11111, token="fresh-token")
+
+    start = time.monotonic()
+    runtime._write_chat_handshake(surface)  # type: ignore[arg-type]
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0  # comfortably under the real 1s default — proves the bound, not a hang
+    assert json.loads(path.read_text(encoding="utf-8")) == {"port": 11111, "token": "fresh-token"}

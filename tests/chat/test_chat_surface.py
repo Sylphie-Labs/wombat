@@ -362,7 +362,11 @@ async def test_ac2_exactly_one_parseable_handshake_json_per_launch(tmp_path: Pat
         handshake = json.loads(handshake_path.read_text(encoding="utf-8"))
         assert handshake == {"port": surface.port, "token": _TOKEN}
 
-        # A second launch OVERWRITES (still exactly one file, still parseable).
+        # A second launch OVERWRITES (still exactly one file, still parseable) -- stopping first
+        # mirrors a genuine restart, where the prior process's port is closed by then (TK-268,
+        # ISS-20: a still-live recorded port is refused, not overwritten -- this is the byte-
+        # identical "port is dead" branch, not that guard).
+        await _stop_chat_surface(surface)
         await _start_chat_surface(surface)
         assert json.loads(handshake_path.read_text(encoding="utf-8")) == {
             "port": surface.port,

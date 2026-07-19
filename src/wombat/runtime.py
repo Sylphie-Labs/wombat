@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -86,6 +87,10 @@ _SCHEDULE_RUN_ID_PREFIX = "wombat-brief-schedule"
 # TK-52: the dream schedule pathway's initial-drive run-id prefix — arms the nightly dream timer
 # at boot (also the crash-miss catch, mirrors _SCHEDULE_RUN_ID_PREFIX above).
 _DREAM_SCHEDULE_RUN_ID_PREFIX = "wombat-dream-schedule"
+# TK-268 (ISS-20): the pre-write live-handshake probe's bounded connect timeout — deliberately a
+# plain module constant (no env flag, no config field per the ruling: the guard derives from
+# observable state only). Tests shrink this via monkeypatch to keep the timeout-elapses case fast.
+_HANDSHAKE_PROBE_TIMEOUT_SECONDS = 1.0
 
 
 def _sweeper_clock(bundle: RuntimeBundle) -> Callable[[], datetime]:
@@ -120,11 +125,59 @@ def _heartbeat_artifact() -> Artifact:
     )
 
 
+def _existing_handshake_port(path: Path) -> int | None:
+    """Read ``path`` and return its recorded port IF it parses as a handshake (one JSON object
+    with an int ``port`` and a ``token``) — ``None`` for an absent or unparsable file (TK-268,
+    ISS-20). Never raises: any read/parse failure is just "not a handshake"."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    port = data.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) or "token" not in data:
+        return None
+    return port
+
+
+def _handshake_port_is_live(port: int) -> bool:
+    """Bounded loopback TCP connect-then-close probe (TK-268, ISS-20): answers ``True`` iff some
+    process currently holds ``port`` on 127.0.0.1. No HTTP, no token use — the raw TCP connect is
+    the whole question (per ruling: no token validation on the probe). A refusal, timeout, or any
+    other OS error just means "not live"."""
+    try:
+        with socket.create_connection(
+            ("127.0.0.1", port), timeout=_HANDSHAKE_PROBE_TIMEOUT_SECONDS
+        ):
+            return True
+    except OSError:
+        return False
+
+
 def _write_chat_handshake(surface: ChatSurface) -> None:
     """Write EXACTLY ONE ``{"port": ..., "token": ...}`` handshake JSON line for ``surface``
     (TK-222 ruling 5) — parent dirs created, overwrite. Raises on any filesystem failure; the
-    caller (``_start_chat_surface``) is the guard."""
+    caller (``_start_chat_surface``) is the guard.
+
+    TK-268 (ISS-20): before overwriting, if the file at ``surface.handshake_path`` already exists
+    and parses as a handshake, probe its recorded port. If that port still answers, some OTHER
+    live process owns it — REFUSE the overwrite (leave the file byte-unchanged), log exactly one
+    loud WARNING naming the path and the live port, and return normally (this is a logged no-write,
+    not a failure — the new surface still serves fine on its own port, only the file write is
+    skipped). A dead/refused port, an absent file, or an unparsable file all fall through to the
+    exact same unconditional write as before."""
     path = Path(surface.handshake_path)
+    existing_port = _existing_handshake_port(path) if path.exists() else None
+    if existing_port is not None and _handshake_port_is_live(existing_port):
+        logger.warning(
+            "serve: refusing to overwrite live chat handshake at %s — port %d still answers "
+            "(leaving the file untouched; this launch's chat surface serves on its own port)",
+            path,
+            existing_port,
+        )
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"port": surface.port, "token": surface.token}), encoding="utf-8"
