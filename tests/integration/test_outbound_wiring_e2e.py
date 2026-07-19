@@ -81,7 +81,8 @@ _FIXED_NOW = datetime(2026, 7, 9, 9, 0, tzinfo=UTC)
 # for TK-164 (Q-96): compose now transitions onward to the new "speak" terminal. Further
 # ADDITIVELY updated (TK-229 un-staling) for the chat_reply and reflection_compose stages now
 # built unconditionally into the drain graph regardless of google wiring (see bootstrap.py's
-# two build_drain_pathway(...) branches, both of which include them).
+# two build_drain_pathway(...) branches, both of which include them). Further ADDITIVELY updated
+# (TK-267, DEC-55) for the new speech_shape hop inserted between chat_reply and speak.
 _BASELINE_DRAIN_STAGES = frozenset(
     {
         "drain_queue",
@@ -90,6 +91,7 @@ _BASELINE_DRAIN_STAGES = frozenset(
         "compose_dispatch",
         "compose",
         "chat_reply",
+        "speech_shape",
         "speak",
         "reflection_compose",
     }

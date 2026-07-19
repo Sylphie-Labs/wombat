@@ -73,6 +73,7 @@ from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
 from wombat.stages.gate_stage import GateStage, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
+from wombat.stages.speech_shape import SpeechShapeStage
 from wombat.substrate import cold_boot_bundle
 from wombat.user_model.observation_writer import ObservationWriter
 from wombat.user_model.outcome_labeler import OutcomeLabeler
@@ -250,6 +251,11 @@ def _build_stack_with_raising_dream(
     # with broker=None (chat-disabled shape, pure pass-through) — this module isn't testing
     # chat either.
     chat_reply_stage = ChatReplyStage(broker=None)
+    # TK-267 (DEC-55): chat_reply now transitions onward to "speech_shape" (not "speak" directly).
+    # voice-off/no-adapter here (mirrors chat_reply's own voice-off posture above).
+    speech_shape_stage = SpeechShapeStage(
+        config=_config(), voice_enabled=False, adapter_present=False
+    )
     speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     drain_graph = build_drain_pathway(
@@ -259,6 +265,7 @@ def _build_stack_with_raising_dream(
         compose_dispatch_router,
         compose_stage,
         chat_reply_stage,
+        speech_shape_stage,
         speak_stage,
     )
 

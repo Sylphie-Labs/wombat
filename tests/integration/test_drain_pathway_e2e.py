@@ -61,6 +61,7 @@ from wombat.stages.compose_dispatch_router import ComposeDispatchRouter
 from wombat.stages.drain_queue import DrainQueueStage
 from wombat.stages.gate_stage import GateStage, make_gate_evaluator, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
+from wombat.stages.speech_shape import SpeechShapeStage
 from wombat.substrate import cold_boot_bundle
 from wombat.user_model.user_model import UserModel
 
@@ -146,6 +147,12 @@ def _build_stack(*, model_factory: object) -> tuple[Engine, WombatQueue]:
     # terminal. chat_reply is wired with broker=None (chat-disabled shape, pure pass-through) —
     # this module isn't testing chat either.
     chat_reply_stage = ChatReplyStage(broker=None)
+    # TK-267 (DEC-55): chat_reply now transitions onward to "speech_shape" (not "speak" directly).
+    # voice-off/no-adapter here (mirrors chat_reply's own voice-off posture above) so this hop is
+    # a zero-model-call pass-through — this module isn't testing the speech-shaping mouth.
+    speech_shape_stage = SpeechShapeStage(
+        config=_config(), voice_enabled=False, adapter_present=False
+    )
     speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     graph = build_drain_pathway(
@@ -155,6 +162,7 @@ def _build_stack(*, model_factory: object) -> tuple[Engine, WombatQueue]:
         compose_dispatch_router,
         compose_stage,
         chat_reply_stage,
+        speech_shape_stage,
         speak_stage,
     )
 
@@ -235,6 +243,11 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
     # TK-164 (Q-96): compose transitions onward to "chat_reply" (TK-222) — voice-off here (see
     # _build_stack). chat_reply is wired with broker=None (chat-disabled shape).
     chat_reply_stage = ChatReplyStage(broker=None)
+    # TK-267 (DEC-55): chat_reply now transitions onward to "speech_shape" (not "speak" directly).
+    # voice-off/no-adapter here (mirrors chat_reply's own voice-off posture above).
+    speech_shape_stage = SpeechShapeStage(
+        config=_config(), voice_enabled=False, adapter_present=False
+    )
     speak_stage = SpeakSink(voice_enabled=False, adapter=None)
 
     graph = build_drain_pathway(
@@ -244,6 +257,7 @@ def _build_real_gate_stack(*, model_factory: object) -> tuple[Engine, WombatQueu
         compose_dispatch_router,
         compose_stage,
         chat_reply_stage,
+        speech_shape_stage,
         speak_stage,
     )
 
