@@ -569,6 +569,30 @@ def test_wombat_timezone_is_not_app_editable_and_not_required() -> None:
     assert "WOMBAT_TIMEZONE" not in REQUIRED_ENV
 
 
+# --- TK-261 (DEC-52e): wombat_singleton_port — documented default, operator .env-tier field ----
+
+
+def test_wombat_singleton_port_default_and_not_app_editable_or_required() -> None:
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+    )
+    assert config.wombat_singleton_port == 63218
+    assert "wombat_singleton_port" not in APP_EDITABLE_FIELDS
+    assert "WOMBAT_SINGLETON_PORT" not in REQUIRED_ENV
+
+
+def test_wombat_singleton_port_reads_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WOMBAT_SINGLETON_PORT", "54321")
+
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+    )
+
+    assert config.wombat_singleton_port == 54321
+
+
 # --- TK-241 AC5 (v2.64): suite hermeticity — closes the CLASS of collection-time DB hazards ---
 
 

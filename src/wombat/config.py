@@ -243,6 +243,15 @@ class WombatConfig(BaseSettings):
     # ``resolve_wombat_zone(config)``.
     wombat_timezone: str | None = None
 
+    # OPTIONAL (TK-261, DEC-52e): the fixed loopback port ``wombat.__main__.main()`` binds
+    # exclusively, for process lifetime, as the single-instance guard (ISS-14: three runtimes ran
+    # live concurrently). An operator .env-tier field, deliberately NOT in APP_EDITABLE_FIELDS
+    # (the ``wombat_chat_handshake_file``/``wombat_timezone`` precedent — this is launch-time
+    # process wiring, not a settings-UI concern) and deliberately NOT in REQUIRED_ENV (it has a
+    # documented default and the drain spine/library use/test suite never bind it — only
+    # ``main()`` does). Nothing reads this field except ``main()``.
+    wombat_singleton_port: int = 63218
+
     @classmethod
     def settings_customise_sources(
         cls,
