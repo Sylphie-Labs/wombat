@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
     TK-238: launch the wombat runtime (python -m wombat) in a new, visible,
-    detached console window, with output tee'd to a timestamped log file.
+    detached console window; the runtime writes its own per-boot log file
+    (TK-259, DEC-52a).
 
 .DESCRIPTION
     DEC-42 / Q-116 pinned shape, amended by the root-match orchestrator
@@ -13,11 +14,16 @@
     match set. Single-instance guard: refuses loud (exit 1) if a root
     "-m wombat" python is already running (ASMP-2 - at most one drainer).
     Otherwise starts a detached visible powershell.exe console that cds to
-    the repo root and runs the venv python -m wombat, piping 2>&1 through
-    Tee-Object to logs/runtime-<yyyyMMdd-HHmmss>.log. The console hosts the
-    pipeline directly, so closing the window kills the runtime (the kill
-    affordance); Start-Process detaches the console from this caller so the
-    caller exiting does not end the runtime (the exit-5 incident precedent).
+    the repo root and runs the venv python -m wombat. Per-boot file logging
+    (logs/runtime-<yyyyMMdd-HHmmss>.log) is runtime-owned (TK-259, DEC-52a) -
+    python -m wombat writes it directly, so this script no longer pipes
+    through Tee-Object (that path proved unreliable: block-buffered piped
+    stderr plus Tee-Object only creating its file on the first object meant
+    healthy boots could produce zero bytes on disk). The console hosts the
+    runtime process directly, so closing the window kills the runtime (the
+    kill affordance); Start-Process detaches the console from this caller so
+    the caller exiting does not end the runtime (the exit-5 incident
+    precedent).
     Exits 0 only after a bounded-wait CIM assert finds exactly ONE matching
     ROOT process; exits nonzero on any failure to reach that state.
 
@@ -68,10 +74,11 @@ if (-not (Test-Path -LiteralPath $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }
 
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$logFile = Join-Path $LogDir "runtime-$timestamp.log"
-
-$innerCommand = "Set-Location -LiteralPath '$repoRoot'; & '$venvPython' -m wombat 2>&1 | Tee-Object -FilePath '$logFile'"
+# TK-259 (DEC-52a): per-boot file logging is runtime-owned - python -m wombat writes its own
+# logs/runtime-<yyyyMMdd-HHmmss>.log directly, so the inner command no longer pipes through
+# Tee-Object (custody lives in exactly one place; the Tee path proved unreliable - see the
+# .DESCRIPTION block above).
+$innerCommand = "Set-Location -LiteralPath '$repoRoot'; & '$venvPython' -m wombat"
 
 Start-Process -FilePath 'powershell.exe' `
     -ArgumentList @('-NoProfile', '-Command', $innerCommand) `
