@@ -64,6 +64,7 @@ from wombat.stages.artifacts import (
     gate_decisions_to_artifact_data,
     queue_items_from_artifact_data,
 )
+from wombat.user_model.user_model import resolve_event_class_for_item
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,24 @@ class GateStage:
         entries: list[GateDecisionEntry] = [
             (decision, queue_item) for queue_item in queue_items
         ]
+
+        # TK-273 (ISS-23): ONE INFO line per decided (decision, queue_item) entry — ids and
+        # enum/name values only, never payload/message text. Score fields come from
+        # decision.items[0] when carried, else None (mirrors _hold_record honesty: a production
+        # HOLD discards the score except the TK-272 chat carry).
+        for entry_decision, entry_queue_item in entries:
+            entry_gate_item = gate_item_from_queue_item(entry_queue_item)
+            entry_score = entry_decision.items[0] if entry_decision.items else None
+            logger.info(
+                "gate decision: item_id=%r item_kind=%r event_class=%r action=%r "
+                "urgency=%r load=%r",
+                entry_queue_item.idempotency_key,
+                entry_gate_item.item_kind.value,
+                resolve_event_class_for_item(entry_gate_item).value,
+                entry_decision.action.value,
+                entry_score.urgency if entry_score is not None else None,
+                entry_score.load if entry_score is not None else None,
+            )
 
         if self._stamp_resolution is not None:
             for stamp_decision, stamp_queue_item in entries:

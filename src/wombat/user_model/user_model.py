@@ -50,6 +50,29 @@ _ITEM_KIND_FALLBACK: dict[ItemKind, EventClass] = {
 }
 
 
+def resolve_event_class_for_item(item: GateItem) -> EventClass:
+    """Pure, instance-free resolution of an item's ``EventClass`` (TK-273, ISS-23).
+
+    Export-only wrapper around the same Q-41 ruling 1 logic ``UserModel.resolve_event_class``
+    applies (the payload ``'event_class'`` override, else the TOTAL ``_ITEM_KIND_FALLBACK`` map)
+    — used by gate-decision logging call sites that have a ``GateItem`` in hand but no
+    ``UserModel`` instance (no KG, no user scope). Zero behavior change: identical to the
+    instance method, just without ``self``.
+    """
+    raw = item.payload.get("event_class")
+    if raw is not None:
+        try:
+            return EventClass(raw)
+        except ValueError:
+            logger.warning(
+                "resolve_event_class_for_item: invalid event_class payload value %r on "
+                "item %r; falling back to the ItemKind map",
+                raw,
+                item.item_id,
+            )
+    return _ITEM_KIND_FALLBACK[item.item_kind]
+
+
 class UserModel:
     """Pure-read seam over one user's rating-parameter claims (Q-41).
 
@@ -71,18 +94,7 @@ class UserModel:
         value, falls back to the TOTAL ``ItemKind`` map; an invalid value also logs a warning so
         a silently-wrong payload doesn't go unnoticed.
         """
-        raw = item.payload.get("event_class")
-        if raw is not None:
-            try:
-                return EventClass(raw)
-            except ValueError:
-                logger.warning(
-                    "UserModel.resolve_event_class: invalid event_class payload value %r on "
-                    "item %r; falling back to the ItemKind map",
-                    raw,
-                    item.item_id,
-                )
-        return _ITEM_KIND_FALLBACK[item.item_kind]
+        return resolve_event_class_for_item(item)
 
     async def ratings_for(self, item: GateItem) -> RatingParams:
         """Return this user's personalized ``RatingParams`` for ``item`` (AC1-AC3).

@@ -81,6 +81,15 @@ class ComposeDispatchRouter:
             )
             composer_name = _FALLBACK_COMPOSER
 
+        # TK-273 (ISS-23): ONE INFO line per dispatched item — ids and enum/name values only,
+        # never payload/message text.
+        logger.info(
+            "compose dispatch: item_id=%r item_kind=%r composer_name=%r",
+            queue_item.idempotency_key,
+            scored_item.item_kind.value,
+            composer_name,
+        )
+
         # PAYLOAD BOUNDARY (CON-1): payload is queue_item.payload ONLY — never scored_item/action.
         item_id = queue_item.idempotency_key
         data = compose_request_to_artifact_data(

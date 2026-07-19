@@ -7,7 +7,9 @@ All PURE: no Postgres, no model. ``support.stage_context_fake`` is importable vi
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Transition
@@ -293,6 +295,63 @@ async def test_gate_stage_touches_no_ctx_member_beyond_last_output_and_clock() -
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
+
+
+# --- TK-273 (ISS-23): ONE gate-decision INFO line per decided entry, ids/enums only --------------
+
+
+async def test_gate_stage_logs_one_info_line_per_decided_item_with_no_payload_text(
+    caplog: Any,
+) -> None:
+    # At the Q-51 mvp batch_size=1 composition rule GateStage is always called with exactly one
+    # drained item; two separate single-item runs (rather than one two-item batch, whose
+    # make_stub_evaluator degenerate case pairs the SAME last-item decision with every queue_item)
+    # exercise the surface_immediate and hold cases independently.
+    high_items = [
+        QueueItem(
+            idempotency_key="a",
+            payload={"stub_urgency": "high", "secret_body": "do not log this"},
+            item_id=1,
+        )
+    ]
+    low_items = [
+        QueueItem(
+            idempotency_key="b",
+            payload={"stub_urgency": "low", "secret_body": "or this either"},
+            item_id=2,
+        )
+    ]
+    stage = GateStage(evaluate=_evaluate, presence_provider=lambda: _ACTIVE)
+
+    with caplog.at_level(logging.INFO, logger="wombat.stages.gate_stage"):
+        result_a = await stage.run(
+            StageContextFake(
+                now_fn=lambda: _FIXED_NOW,
+                last_output_map={"drain_queue": _drained_batch_artifact(high_items)},
+            )
+        )
+        result_b = await stage.run(
+            StageContextFake(
+                now_fn=lambda: _FIXED_NOW,
+                last_output_map={"drain_queue": _drained_batch_artifact(low_items)},
+            )
+        )
+
+    assert isinstance(result_a, Transition)
+    assert isinstance(result_b, Transition)
+    gate_records = [r for r in caplog.records if r.name == "wombat.stages.gate_stage"]
+    assert len(gate_records) == 2
+    for record in gate_records:
+        assert "secret_body" not in record.message
+        assert "do not log this" not in record.message
+        assert "or this either" not in record.message
+    a_record = next(r for r in gate_records if "item_id='a'" in r.message)
+    assert "item_kind=" in a_record.message
+    assert "event_class=" in a_record.message
+    assert "action='surface_immediate'" in a_record.message
+    assert "urgency=0.9" in a_record.message
+    b_record = next(r for r in gate_records if "item_id='b'" in r.message)
+    assert "action='hold'" in b_record.message
 
 
 # --- round-trip: gate_decisions_to/from_artifact_data is lossless (incl. carried queue_item) -----

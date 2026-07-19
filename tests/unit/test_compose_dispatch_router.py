@@ -148,6 +148,34 @@ async def test_payload_boundary_excludes_scores_action_and_queue_internals() -> 
     assert item_kind is ItemKind.GENERIC
 
 
+# --- TK-273 (ISS-23): ONE dispatch INFO line per routed item, ids/enums only, no payload text ----
+
+
+async def test_router_logs_one_info_line_per_dispatched_item_with_no_payload_text(
+    caplog: Any,
+) -> None:
+    scored_item = ScoredItem(item_id="i-7", item_kind=ItemKind.DRAFT, urgency=0.5, load=0.1)
+    queue_item = QueueItem(
+        idempotency_key="i-7", payload={"body": "do not log this reply text"}, item_id=7
+    )
+    ctx = _ctx(GateAction.SURFACE_IMMEDIATE, scored_item, queue_item)
+    router = ComposeDispatchRouter(composer_by_kind=_DEFAULT_MAP)
+
+    with caplog.at_level(logging.INFO, logger="wombat.stages.compose_dispatch_router"):
+        result = await router.run(ctx)
+
+    assert isinstance(result, Transition)
+    dispatch_records = [
+        r for r in caplog.records if r.name == "wombat.stages.compose_dispatch_router"
+    ]
+    assert len(dispatch_records) == 1
+    record = dispatch_records[0]
+    assert "do not log this reply text" not in record.message
+    assert "item_id='i-7'" in record.message
+    assert "item_kind=" in record.message
+    assert "composer_name='draft_compose'" in record.message
+
+
 # --- surfaced_item wire round-trip: json.dumps must not raise; inverse is lossless (Q-49) --------
 
 
