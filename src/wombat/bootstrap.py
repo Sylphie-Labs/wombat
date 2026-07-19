@@ -236,6 +236,7 @@ from .stages.draft_dispatch import DraftDispatchStage
 from .stages.drain_queue import DrainQueueStage
 from .stages.gate_stage import GateStage, make_gate_evaluator
 from .stages.review_or_speak import ReviewOrSpeakStage
+from .stages.speech_shape import SpeechShapeStage
 from .substrate import SubstrateBundle, build_substrate
 from .trail.writer import ActionTrailWriter
 from .user_model.claims import Claim, ClaimPredicate
@@ -495,6 +496,42 @@ def build_speak_sink(config: WombatConfig) -> SpeakSink:
     """
     adapter = build_tts_adapter(config) if config.wombat_voice_enabled else None
     return SpeakSink(voice_enabled=config.wombat_voice_enabled, adapter=adapter)
+
+
+def build_speech_shape_stage(
+    *,
+    config: WombatConfig,
+    dsn: str,
+    params: OperatingParams | None = None,
+    tz: ZoneInfo,
+    daily_ledger: DailyLedger | None = None,
+    adapter_present: bool,
+) -> SpeechShapeStage:
+    """Assemble the drain pathway's ``speech_shape`` hop (TK-267, DEC-55): a SECOND DeepSeek mouth
+    call, wired with the SAME TK-9 layer 2 budget plumbing as ``build_compose_stage`` — a real
+    ``DailySpendLedger`` over a ``DailyLedger`` on the SAME ``dsn``/``tz`` and the SAME
+    ``"spend:tokens"`` ledger row, plus the SAME ``mouth_daily_token_ceiling`` tunable, so both
+    mouths share ONE daily token cap.
+
+    ``daily_ledger`` (mirrors ``build_compose_stage``'s own CR-15 seam) lets a caller hand in an
+    ALREADY constructed ``DailyLedger`` so this stage shares that ONE instance/connection rather
+    than opening a second one on the same ``dsn``.
+
+    ``adapter_present`` mirrors ``config.wombat_voice_enabled`` gating ``build_speak_sink``'s own
+    adapter construction — ``assemble_runtime`` passes whether the SAME TTS adapter it built for
+    ``SpeakSink`` is non-``None``, so this stage's pre-call gate (voice on AND adapter present)
+    matches ``SpeakSink``'s own gate exactly.
+    """
+    op = params if params is not None else load_operating_params()
+    ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
+    spend_ledger = DailySpendLedger(ledger)
+    return SpeechShapeStage(
+        config=config,
+        voice_enabled=config.wombat_voice_enabled,
+        adapter_present=adapter_present,
+        spend_ledger=spend_ledger,
+        daily_token_ceiling=op.mouth_daily_token_ceiling,
+    )
 
 
 def make_speak_callable(config: WombatConfig) -> Callable[[str], None] | None:
@@ -933,7 +970,19 @@ def assemble_runtime(
     # chat_reply, see below) instead of ending the spine itself; ONE SpeakSink instance is
     # appended to BOTH graph variants below (draft_dispatch stays its own separate terminal,
     # untouched).
-    speak_stage = build_speak_sink(config)
+    # TK-267 (DEC-55): the TTS adapter is built ONCE here (inlining what build_speak_sink itself
+    # does) so speech_shape_stage's adapter-presence gate reads the SAME adapter SpeakSink speaks
+    # through, rather than constructing (and possibly loud-logging) a second one.
+    tts_adapter = build_tts_adapter(config) if config.wombat_voice_enabled else None
+    speak_stage = SpeakSink(voice_enabled=config.wombat_voice_enabled, adapter=tts_adapter)
+    speech_shape_stage = build_speech_shape_stage(
+        config=config,
+        dsn=dsn,
+        params=op,
+        tz=tz,
+        daily_ledger=daily_ledger,
+        adapter_present=tts_adapter is not None,
+    )
 
     # TK-222 (EP-32, Q-110(d) ruling 5): the chat input surface — enabled IFF
     # config.wombat_chat_handshake_file is non-blank (loud-skip parity with sources.bootstrap's
@@ -983,6 +1032,7 @@ def assemble_runtime(
             *pre_dispatch_stages,
             compose_stage,
             chat_reply_stage,
+            speech_shape_stage,
             speak_stage,
             reflection_compose_stage,
             draft_dispatch_stage,
@@ -995,6 +1045,7 @@ def assemble_runtime(
             compose_dispatch_router,
             compose_stage,
             chat_reply_stage,
+            speech_shape_stage,
             speak_stage,
             reflection_compose_stage,
         )

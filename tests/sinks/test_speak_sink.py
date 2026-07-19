@@ -1,4 +1,6 @@
-"""TK-165 — SpeakSink gate-only tests (Q-96 as-amended).
+"""TK-165 — SpeakSink gate-only tests (Q-96 as-amended); TK-267 (DEC-55) updates every voice-on
+case to also wire ``speech_shape``'s output, since ``SpeakSink`` now speaks THAT text, never the
+composed text.
 
 Locks TK-164's guarantees with binary stub-count tests: no audio hardware, no ``pyttsx3``
 required in CI. All PURE: ``support.stage_context_fake.StageContextFake`` is the only ``ctx``
@@ -30,6 +32,7 @@ from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     SPOKEN_OUTPUT,
     composed_output_to_artifact_data,
+    speech_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
 
@@ -37,7 +40,8 @@ _FIXED_NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=UTC)
 
 _ITEM_ID = "gate-item-1"
 _ITEM_KIND = ItemKind.GENERIC
-_TEXT = "You have a new alert."
+_COMPOSED_TEXT = "**You have a new alert.** [see here](https://example.com)"
+_SPEECH_TEXT = "You have a new alert."
 
 
 class _StubAdapter:
@@ -65,26 +69,52 @@ class _RaisingAdapter:
 
 
 def _composed_output_artifact() -> Artifact:
-    """A gate-surfaced item's composed output — the ONLY thing ``SpeakSink`` ever reads."""
+    """A gate-surfaced item's composed output — read ONLY for item identity now (TK-267)."""
     return Artifact(
         kind=COMPOSED_OUTPUT,
         produced_by="compose",
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
-        data=composed_output_to_artifact_data(_TEXT, _ITEM_ID, _ITEM_KIND, False),
+        data=composed_output_to_artifact_data(_COMPOSED_TEXT, _ITEM_ID, _ITEM_KIND, False),
     )
 
 
-def _ctx(*, compose_output: Artifact | None) -> StageContextFake:
+def _speech_output_artifact(*, text: str | None = _SPEECH_TEXT, degraded: bool = False) -> Artifact:
+    """The ``speech_shape`` hop's output — the TEXT ``SpeakSink`` actually speaks (TK-267)."""
+    return Artifact(
+        kind="wombat.speech_output",
+        produced_by="speech_shape",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=speech_output_to_artifact_data(_ITEM_ID, _ITEM_KIND, text, degraded),
+    )
+
+
+class _Unset:
+    """A sentinel distinguishing "caller didn't pass speech_output" from "explicitly None"."""
+
+
+_UNSET = _Unset()
+
+
+def _ctx(
+    *,
+    compose_output: Artifact | None,
+    speech_output: Artifact | None | _Unset = _UNSET,
+) -> StageContextFake:
+    resolved_speech = (
+        _speech_output_artifact() if isinstance(speech_output, _Unset) else speech_output
+    )
     return StageContextFake(
         now_fn=lambda: _FIXED_NOW,
-        last_output_map={"compose": compose_output},
+        last_output_map={"compose": compose_output, "speech_shape": resolved_speech},
     )
 
 
-# --- AC1: gate-surfaced composed output + voice on -> speaks exactly once, verbatim -----------
+# --- AC1: gate-surfaced speech_shape output + voice on -> speaks exactly once, the SHAPED text --
+# (TK-267, DEC-55c never-verbatim): SpeakSink speaks speech_shape's summary, never the composed
+# text — proven by the two texts differing and only the speech text reaching the stub.
 
 
-async def test_ac1_gate_surfaced_composed_output_speaks_once_verbatim() -> None:
+async def test_ac1_speech_shape_output_speaks_once_never_the_composed_text() -> None:
     stub = _StubAdapter()
     stage = SpeakSink(voice_enabled=True, adapter=stub)
     ctx = _ctx(compose_output=_composed_output_artifact())
@@ -92,7 +122,8 @@ async def test_ac1_gate_surfaced_composed_output_speaks_once_verbatim() -> None:
     result = await stage.run(ctx)
 
     assert stub.call_count == 1
-    assert stub.calls == [_TEXT]
+    assert stub.calls == [_SPEECH_TEXT]
+    assert _SPEECH_TEXT != _COMPOSED_TEXT  # the fixture itself proves the two differ
     assert isinstance(result, Done)
     assert result.output.kind == SPOKEN_OUTPUT
     item_id, item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
@@ -177,3 +208,58 @@ async def test_ac4_adapter_failure_leaves_the_composed_output_wire_untouched() -
 
     assert isinstance(result, Degraded)
     assert compose_artifact == snapshot  # the wire artifact itself is untouched
+
+
+# --- TK-267 (DEC-55): a degraded/absent speech_shape output degrades SpeakSink, NEVER falls back
+# to the composed text ------------------------------------------------------------------------
+
+
+async def test_degraded_speech_shape_output_degrades_speak_and_never_touches_the_adapter() -> None:
+    stub = _StubAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=stub)
+    ctx = _ctx(
+        compose_output=_composed_output_artifact(),
+        speech_output=_speech_output_artifact(text=None, degraded=True),
+    )
+
+    result = await stage.run(ctx)
+
+    assert stub.call_count == 0  # never speaks anything, let alone the composed text
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    assert "speech_shape" in result.reason
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True
+
+
+async def test_absent_speech_shape_output_degrades_speak_and_never_touches_the_adapter() -> None:
+    stub = _StubAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=stub)
+    ctx = _ctx(compose_output=_composed_output_artifact(), speech_output=None)
+
+    result = await stage.run(ctx)
+
+    assert stub.call_count == 0
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    assert "speech_shape" in result.reason
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True
+
+
+async def test_voice_disabled_never_reads_speech_shape_output_stays_byte_identical() -> None:
+    """AC voice-off: the voice-off Done branch is unaffected even with a degraded/absent
+    speech_shape output — the check gates BEFORE speech_shape is ever read (TK-267)."""
+    stub = _StubAdapter()
+    stage = SpeakSink(voice_enabled=False, adapter=stub)
+    ctx = _ctx(compose_output=_composed_output_artifact(), speech_output=None)
+
+    result = await stage.run(ctx)
+
+    assert stub.call_count == 0
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is False

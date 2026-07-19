@@ -57,6 +57,14 @@ named seam future callers can mock/round-trip against instead of hand-parsing ``
 ``item_id``/``item_kind`` shape. ``spoken`` is ``True`` only when the TTS adapter's ``speak()``
 was actually called and returned without raising THIS run; ``degraded`` is ``True`` only on an
 adapter failure (the sink's ``Degraded`` path) — the two are never both ``True``.
+
+``speech_output_to_artifact_data`` / ``speech_output_from_artifact_data`` (TK-267, DEC-55) define
+``SpeechShapeStage``'s terminal wire, ``wombat.speech_output`` — ``{"item_id", "item_kind":
+<ItemKind .value string>, "text", "degraded"}``. ``text`` is the validated, plain-spoken-English
+DeepSeek summary ``SpeakSink`` actually speaks — NEVER the composed text (DEC-55c never-verbatim)
+— or ``None`` when voice is off/no adapter is wired (a pass-through, non-degraded outcome) or
+when the model call/validation failed (a degraded no-speech outcome); ``degraded`` distinguishes
+the two ``None`` cases.
 """
 
 from __future__ import annotations
@@ -76,6 +84,8 @@ SURFACED_ITEM = "wombat.surfaced_item"
 HOLD_REPORT = "wombat.hold_report"
 # TK-164, Q-96: SpeakSink's terminal wire kind — the drain pathway's new terminal stage.
 SPOKEN_OUTPUT = "wombat.spoken_output"
+# TK-267, DEC-55: SpeechShapeStage's terminal wire kind — the new compose->speak hop.
+SPEECH_OUTPUT = "wombat.speech_output"
 # TK-98, EP-30-ish morning-brief cluster: BriefGatherStage's terminal wire kind (Q-74).
 BRIEF_PAYLOAD = "wombat.brief_payload"
 # TK-99: BriefForceFlushStage's terminal wire kind (Q-75) — a sealed BriefDecisionArtifact.
@@ -285,6 +295,36 @@ def spoken_output_from_artifact_data(data: dict[str, Any]) -> tuple[str, ItemKin
     )
 
 
+def speech_output_to_artifact_data(
+    item_id: str, item_kind: ItemKind, text: str | None, degraded: bool
+) -> dict[str, Any]:
+    """Serialize ``SpeechShapeStage``'s terminal output into an Artifact ``data`` payload (TK-267,
+    DEC-55).
+
+    ``{"item_id", "item_kind": <ItemKind .value string>, "text", "degraded"}``. ``text`` is
+    ``None`` for a voice-off/no-adapter pass-through (``degraded=False``) or a failed/unsanitizable
+    model call (``degraded=True``) — never the composed text (DEC-55c).
+    """
+    return {
+        "item_id": item_id,
+        "item_kind": item_kind.value,
+        "text": text,
+        "degraded": degraded,
+    }
+
+
+def speech_output_from_artifact_data(
+    data: dict[str, Any],
+) -> tuple[str, ItemKind, str | None, bool]:
+    """The inverse of ``speech_output_to_artifact_data`` — the ONLY path back (TK-267, DEC-55)."""
+    return (
+        data["item_id"],
+        ItemKind(data["item_kind"]),
+        data["text"],
+        data["degraded"],
+    )
+
+
 def brief_text_to_artifact_data(text: str, degraded: bool, tokens_spent: int) -> dict[str, Any]:
     """Serialize ``BriefComposeStage``'s terminal output into an Artifact ``data`` payload
     (TK-100, Q-77).
@@ -333,6 +373,7 @@ __all__ = [
     "DRAIN_HEARTBEAT",
     "GATE_DECISIONS",
     "HOLD_REPORT",
+    "SPEECH_OUTPUT",
     "SPOKEN_OUTPUT",
     "SURFACED_ITEM",
     "GateDecisionEntry",
@@ -351,6 +392,8 @@ __all__ = [
     "hold_report_to_artifact_data",
     "queue_items_from_artifact_data",
     "queue_items_to_artifact_data",
+    "speech_output_from_artifact_data",
+    "speech_output_to_artifact_data",
     "spoken_output_from_artifact_data",
     "spoken_output_to_artifact_data",
     "surfaced_item_from_artifact_data",

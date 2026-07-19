@@ -73,6 +73,7 @@ from wombat.sources.asr import ASRSource
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     composed_output_to_artifact_data,
+    speech_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
 from wombat.voice.select import (
@@ -399,9 +400,23 @@ def _composed_output_artifact() -> Artifact:
     )
 
 
+def _speech_output_artifact() -> Artifact:
+    """The ``speech_shape`` hop's output — the TEXT ``SpeakSink`` actually speaks (TK-267)."""
+    return Artifact(
+        kind="wombat.speech_output",
+        produced_by="speech_shape",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=speech_output_to_artifact_data(_ITEM_ID, _ITEM_KIND, _TEXT, False),
+    )
+
+
 def _ctx(compose_artifact: Artifact) -> StageContextFake:
     return StageContextFake(
-        now_fn=lambda: _FIXED_NOW, last_output_map={"compose": compose_artifact}
+        now_fn=lambda: _FIXED_NOW,
+        last_output_map={
+            "compose": compose_artifact,
+            "speech_shape": _speech_output_artifact(),
+        },
     )
 
 

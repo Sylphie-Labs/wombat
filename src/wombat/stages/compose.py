@@ -36,6 +36,10 @@ output=...)``. ``SpeakSink`` (``sinks/speak.py``) is UNAFFECTED — it reads thi
 so inserting ``chat_reply`` (``stages/chat_reply.py``) as a pass-through hop between ``compose``
 and ``speak`` leaves ``SpeakSink`` byte-identical.
 
+TK-267 (DEC-55) inserts a NEW ``speech_shape`` hop further downstream, between ``chat_reply`` and
+``speak`` — this stage's own transition (``chat_reply``) and every artifact it produces are
+UNCHANGED; the module docstring above stays accurate as written.
+
 TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona``) — ``None``
 (the default) keeps the frozen-at-``__init__`` instruction above, byte-identical to every existing
 caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.COMPOSE)`` fresh EVERY

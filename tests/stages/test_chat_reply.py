@@ -54,10 +54,10 @@ def _ctx(*, compose_output: Artifact | None) -> StageContextFake:
 # --- name/transitions ------------------------------------------------------------------------
 
 
-def test_stage_declares_name_and_speak_as_its_only_edge() -> None:
+def test_stage_declares_name_and_speech_shape_as_its_only_edge() -> None:
     stage = ChatReplyStage(broker=None)
     assert stage.name == "chat_reply"
-    assert stage.transitions == ("speak",)
+    assert stage.transitions == ("speech_shape",)
 
 
 # --- success: a wired broker resolves and delivered=True ----------------------------------------
@@ -74,7 +74,7 @@ async def test_wired_broker_end_to_end_unblocks_the_registered_future() -> None:
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"
+    assert result.to == "speech_shape"
     item_id, delivered = chat_delivery_from_artifact_data(result.output.data)
     assert item_id == _ITEM_ID
     assert delivered is True
@@ -92,7 +92,7 @@ async def test_broker_none_is_a_pure_pass_through_delivered_false() -> None:
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"
+    assert result.to == "speech_shape"
     item_id, delivered = chat_delivery_from_artifact_data(result.output.data)
     assert item_id == _ITEM_ID
     assert delivered is False
@@ -114,7 +114,7 @@ async def test_non_chat_item_resolves_as_a_no_op_but_still_reports_delivered_tru
     result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"
+    assert result.to == "speech_shape"
     item_id, delivered = chat_delivery_from_artifact_data(result.output.data)
     assert item_id == "generic-1"
     assert delivered is True  # resolve() didn't raise — it just had nothing to deliver to
@@ -133,7 +133,7 @@ async def test_raising_broker_degrades_to_delivered_false_and_logs_one_warning(
         result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "speak"
+    assert result.to == "speech_shape"
     _item_id, delivered = chat_delivery_from_artifact_data(result.output.data)
     assert delivered is False
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]

@@ -16,10 +16,14 @@ non-chat item (``ItemKind.GENERIC`` phrased by the same mouth) harmlessly resolv
 — no resolve attempted at all, ``delivered=False`` always — the shape a chat-disabled boot wires
 (``bootstrap.assemble_runtime``, TK-222 ruling 5's loud-skip).
 
-``run()`` ALWAYS returns ``Transition(to="speak", ...)`` — even on a broker failure or when no
-broker is wired — so ``SpeakSink`` (which reads ``ctx.last_output("compose")`` BY STAGE NAME, not
-this stage's own output) is completely unaffected by this hop's insertion (byte-identical voice
-delivery either way).
+TK-267 (DEC-55) inserts a NEW ``speech_shape`` hop between this stage and ``speak``: ``compose`` ->
+``chat_reply`` -> ``speech_shape`` -> ``speak``. ``run()`` ALWAYS returns
+``Transition(to="speech_shape", ...)`` — even on a broker failure or when no broker is wired — so
+``SpeakSink`` (which reads ``ctx.last_output("compose")``/``ctx.last_output("speech_shape")`` BY
+STAGE NAME, not the immediately-preceding stage) is completely unaffected by this hop's insertion
+(byte-identical text-channel delivery either way; the composed text this stage resolves to the chat
+broker stays the FULL, byte-identical composed text — shaping happens only downstream, for the
+spoken channel).
 
 ``wombat.chat_delivery`` is a small wire LOCAL to this module (``{"item_id", "delivered"}``) —
 nothing downstream consumes it, so it doesn't join the shared ``stages/artifacts.py`` convention;
@@ -59,7 +63,9 @@ class ChatReplyStage:
     passes through to ``speak`` (TK-222)."""
 
     name: str = "chat_reply"
-    transitions: tuple[str, ...] = ("speak",)
+    # TK-267 (DEC-55): the onward edge is now "speech_shape" (a new hop that produces the spoken
+    # summary) rather than "speak" directly — see the module docstring.
+    transitions: tuple[str, ...] = ("speech_shape",)
 
     def __init__(self, *, broker: ChatReplyBroker | None) -> None:
         self._broker = broker
@@ -89,7 +95,7 @@ class ChatReplyStage:
                 delivered = False
 
         return Transition(
-            to="speak",
+            to="speech_shape",
             output=Artifact(
                 kind=CHAT_DELIVERY,
                 produced_by=self.name,

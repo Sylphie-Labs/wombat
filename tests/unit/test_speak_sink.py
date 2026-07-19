@@ -1,4 +1,6 @@
-"""TK-164 — SpeakSink acceptance criteria (Q-96).
+"""TK-164 — SpeakSink acceptance criteria (Q-96); TK-267 (DEC-55) updates every voice-on case to
+also wire ``speech_shape``'s output, since ``SpeakSink`` now speaks THAT text, never the composed
+text.
 
 All PURE: no Postgres, no real network, no real TTS engine. ``support.stage_context_fake`` is
 importable via the ``pythonpath = ["tests"]`` pytest setting. Mirrors
@@ -24,6 +26,7 @@ from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     SPOKEN_OUTPUT,
     composed_output_to_artifact_data,
+    speech_output_to_artifact_data,
     spoken_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
@@ -32,6 +35,7 @@ _FIXED_NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=UTC)
 
 _ITEM_ID = "i-1"
 _ITEM_KIND = ItemKind.GENERIC
+_COMPOSED_TEXT = "**You have a new alert.**"
 _TEXT = "You have a new alert."
 
 
@@ -60,14 +64,38 @@ def _composed_output_artifact(*, degraded: bool = False) -> Artifact:
         kind=COMPOSED_OUTPUT,
         produced_by="compose",
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
-        data=composed_output_to_artifact_data(_TEXT, _ITEM_ID, _ITEM_KIND, degraded),
+        data=composed_output_to_artifact_data(_COMPOSED_TEXT, _ITEM_ID, _ITEM_KIND, degraded),
     )
 
 
-def _ctx(*, compose_output: Artifact | None) -> StageContextFake:
+def _speech_output_artifact(*, text: str | None = _TEXT, degraded: bool = False) -> Artifact:
+    """The ``speech_shape`` hop's output — the TEXT ``SpeakSink`` actually speaks (TK-267)."""
+    return Artifact(
+        kind="wombat.speech_output",
+        produced_by="speech_shape",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=speech_output_to_artifact_data(_ITEM_ID, _ITEM_KIND, text, degraded),
+    )
+
+
+class _Unset:
+    """A sentinel distinguishing "caller didn't pass speech_output" from "explicitly None"."""
+
+
+_UNSET = _Unset()
+
+
+def _ctx(
+    *,
+    compose_output: Artifact | None,
+    speech_output: Artifact | None | _Unset = _UNSET,
+) -> StageContextFake:
+    resolved_speech = (
+        _speech_output_artifact() if isinstance(speech_output, _Unset) else speech_output
+    )
     return StageContextFake(
         now_fn=lambda: _FIXED_NOW,
-        last_output_map={"compose": compose_output},
+        last_output_map={"compose": compose_output, "speech_shape": resolved_speech},
     )
 
 
@@ -182,6 +210,42 @@ def test_speak_sink_is_terminal() -> None:
     stage = SpeakSink(voice_enabled=False, adapter=None)
     assert stage.name == "speak"
     assert stage.transitions == ()
+
+
+# --- TK-267 (DEC-55): a degraded/absent speech_shape output degrades SpeakSink, NEVER falls back
+# to the composed text --------------------------------------------------------------------------
+
+
+async def test_degraded_speech_shape_output_degrades_speak_and_never_touches_the_adapter() -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(
+        compose_output=_composed_output_artifact(),
+        speech_output=_speech_output_artifact(text=None, degraded=True),
+    )
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == []
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    assert "speech_shape" in result.reason
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True
+
+
+async def test_absent_speech_shape_output_degrades_speak_and_never_touches_the_adapter() -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(compose_output=_composed_output_artifact(), speech_output=None)
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == []
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    assert "speech_shape" in result.reason
 
 
 # --- wire round-trip: json.dumps + inverse must be lossless (Q-49 regression) -------------------

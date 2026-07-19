@@ -1,10 +1,19 @@
 """SpeakSink — terse local-TTS output for drain surfacings (TK-164, Q-96).
 
-The drain pathway's new TERMINAL stage (``transitions=()``), landing after ``compose`` (the
+The drain pathway's TERMINAL stage (``transitions=()``), landing after ``compose`` (the
 TK-8-reserved flip: ``compose``'s ``Done`` -> ``Transition(to="speak", ...)`` carrying the SAME
 ``wombat.composed_output`` artifact byte-identical, ``stages/compose.py``). ``SpeakSink`` reads
-that artifact via ``ctx.last_output("compose")`` and, iff voice is enabled AND a working TTS
-adapter is wired, speaks the composed text VERBATIM exactly once.
+that artifact via ``ctx.last_output("compose")`` — for item identity (``item_id``/``item_kind``)
+ONLY, byte-identical to before.
+
+TK-267 (DEC-55): the drain graph now runs ``compose -> chat_reply -> speech_shape -> speak``.
+Iff voice is enabled AND a working TTS adapter is wired, ``SpeakSink`` speaks
+``SpeechShapeStage``'s shaped summary (``ctx.last_output("speech_shape")``) — NEVER the composed
+text (DEC-55c never-verbatim). A degraded or absent ``speech_shape`` output (voice-off/no-adapter
+pass-throughs never reach this branch at all, since the voice-off check below still gates first)
+degrades THIS stage to the existing terminal ``Degraded(spoken=False, degraded=True, to=None)``
+shape, naming ``speech_shape`` in the reason — the mouth failing never means silence turns into
+speaking the raw composed text instead.
 
 HOLD-SILENCE IS STRUCTURAL (Q-96/ISS-4): a held item is acked at ``ReviewOrSpeakStage`` and never
 routed to ``compose``/``speak`` at all — this stage never inspects a ``GateAction`` (ISS-4's
@@ -36,6 +45,7 @@ from wombat.sinks.tts_adapter import TTSAdapter
 from wombat.stages.artifacts import (
     SPOKEN_OUTPUT,
     composed_output_from_artifact_data,
+    speech_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
 
@@ -58,11 +68,14 @@ class SpeakSink:
         if art is None:
             msg = "speak: no compose output available yet"
             raise RuntimeError(msg)
-        text, item_id, item_kind, _degraded = composed_output_from_artifact_data(art.data)
+        _composed_text, item_id, item_kind, _degraded = composed_output_from_artifact_data(
+            art.data
+        )
 
         if not self._voice_enabled or self._adapter is None:
             # Voice-off (or no adapter wired) is a silent no-op — the text path is unaffected;
-            # voice is additive only (CON-3).
+            # voice is additive only (CON-3). Byte-identical to before TK-267 (speech_shape is
+            # never even consulted on this branch).
             return Done(
                 output=Artifact(
                     kind=SPOKEN_OUTPUT,
@@ -76,8 +89,38 @@ class SpeakSink:
                 )
             )
 
+        # TK-267 (DEC-55): the TEXT actually spoken is SpeechShapeStage's shaped summary — NEVER
+        # the composed text (DEC-55c never-verbatim). A degraded/absent speech_shape output
+        # degrades THIS stage, naming speech_shape, rather than falling back to composed text.
+        speech_art = await ctx.last_output("speech_shape")
+        speech_text: str | None = None
+        if speech_art is not None:
+            _sp_item_id, _sp_item_kind, speech_text, _sp_degraded = (
+                speech_output_from_artifact_data(speech_art.data)
+            )
+
+        if speech_text is None:
+            logger.warning(
+                "speak: speech_shape produced no speech text; degrading "
+                "(text delivery unaffected)"
+            )
+            return Degraded(
+                reason="speak: speech_shape produced no speech text (degraded or absent output)",
+                output=Artifact(
+                    kind=SPOKEN_OUTPUT,
+                    produced_by=self.name,
+                    provenance=Provenance(
+                        source="system", confidence=1.0, recorded_at=ctx.clock()
+                    ),
+                    data=spoken_output_to_artifact_data(
+                        item_id=item_id, item_kind=item_kind, spoken=False, degraded=True
+                    ),
+                ),
+                to=None,
+            )
+
         try:
-            self._adapter.speak(text)
+            self._adapter.speak(speech_text)
         except asyncio.CancelledError:
             # Never swallow cancellation — only the adapter's own failures degrade.
             raise

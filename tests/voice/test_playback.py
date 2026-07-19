@@ -44,6 +44,7 @@ from wombat.sinks.speak import SpeakSink
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     composed_output_to_artifact_data,
+    speech_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
 from wombat.voice.playback import AudioPlayer, WinsoundPlayer, _normalize_sentinel_sizes
@@ -274,9 +275,15 @@ async def test_speak_sink_degrades_cleanly_when_adapter_raises_wav_validation_er
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
         data=composed_output_to_artifact_data(_TEXT, _ITEM_ID, _ITEM_KIND, False),
     )
+    speech_artifact = Artifact(
+        kind="wombat.speech_output",
+        produced_by="speech_shape",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=speech_output_to_artifact_data(_ITEM_ID, _ITEM_KIND, _TEXT, False),
+    )
     ctx = StageContextFake(
         now_fn=lambda: _FIXED_NOW,
-        last_output_map={"compose": compose_artifact},
+        last_output_map={"compose": compose_artifact, "speech_shape": speech_artifact},
     )
 
     with caplog.at_level("WARNING"):
