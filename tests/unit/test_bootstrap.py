@@ -217,6 +217,51 @@ def test_assemble_runtime_replay_pending_false_never_calls_rebuild_from_journal(
     assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
 
 
+# --- TK-269 (DEC-56a): RuntimeBundle.chat_source mirrors chat_surface's None/non-None shape ------
+
+
+def test_assemble_runtime_chat_source_is_none_when_chat_handshake_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # TK-186/TK-202 chdir+delenv precedent (see test_wombat_config_boots_without_brief_path_or_
+    # voice_env above): an operator .env may set WOMBAT_CHAT_HANDSHAKE_FILE, so isolate from it.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WOMBAT_CHAT_HANDSHAKE_FILE", raising=False)
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),  # wombat_chat_handshake_file blank/absent -> chat disabled
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.chat_surface is None
+    assert bundle.chat_source is None
+
+
+def test_assemble_runtime_chat_source_is_the_same_instance_registered_into_source_registry(
+    tmp_path: Path,
+) -> None:
+    """TK-269 WIRING: ``bundle.chat_source`` is the EXACT ``ChatSource`` instance ``source_
+    registry`` already has registered — a pass-through, not a second construction — so ``runtime.
+    _drive_and_serve`` wiring a wake onto it reaches the SAME source the registry polls."""
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={"wombat_chat_handshake_file": str(tmp_path / "chat_handshake.json")}
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.chat_surface is not None
+    assert bundle.chat_source is not None
+    assert bundle.chat_source is bundle.chat_surface._source
+    assert bundle.chat_source.wake is None  # unwired at assembly time -- _drive_and_serve's job
+
+
 # --- TK-46 (Q-85): wombat.dream registers UNCONDITIONALLY, connection-free -----------------------
 
 

@@ -73,6 +73,7 @@ from wombat.persona.matrix import DEFAULT_MATRIX, Directness, Humor
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
 from wombat.scratchpad import SCRATCHPAD_PURGE_DAYS, ScratchpadStore
 from wombat.settings_store import SettingsStore
+from wombat.sources.chat_source import ChatSource
 from wombat.sources.registry import SourceRegistry
 from wombat.stages.brief_compose_stage import BriefComposeStage
 from wombat.stages.compose import ComposeStage
@@ -355,6 +356,145 @@ async def test_pump_drains_k_pre_enqueued_items_sequentially_within_one_beat(
     assert all(rid.startswith("wombat-drain-") for rid in engine.run_ids)
     assert engine.max_in_flight == 1  # sequential — never more than one run in flight (ASMP-2)
     assert sleeps == [5.0]  # sleeps exactly once, after the peek finally reports empty
+
+
+# --- TK-269 (DEC-56a): DrainWake ---------------------------------------------------------------
+
+
+async def test_drain_wake_wait_times_out_like_a_plain_sleep_when_never_set() -> None:
+    """No ``set()`` -> ``wait()`` behaves exactly like the ``asyncio.sleep(beat)`` it replaces:
+    it blocks the full timeout."""
+    wake = runtime.DrainWake()
+    start = time.monotonic()
+    await wake.wait(0.05)
+    assert time.monotonic() - start >= 0.05
+
+
+async def test_drain_wake_wait_returns_early_once_set() -> None:
+    """AC1: a ``set()`` while ``wait()`` is blocked returns well before the timeout elapses."""
+    wake = runtime.DrainWake()
+
+    async def _set_soon() -> None:
+        await asyncio.sleep(0.01)
+        wake.set()
+
+    start = time.monotonic()
+    await asyncio.gather(wake.wait(5.0), _set_soon())
+    assert time.monotonic() - start < 1.0  # woken, not timed out at 5s
+
+
+async def test_drain_wake_clears_on_return_so_the_next_wait_blocks_again() -> None:
+    """The event is cleared whichever way ``wait()`` returns, so a stale set from a prior wake
+    never causes the NEXT wait to fire spuriously."""
+    wake = runtime.DrainWake()
+    wake.set()
+    await wake.wait(5.0)  # consumes the pending set immediately
+
+    start = time.monotonic()
+    await wake.wait(0.05)  # nothing pending now -> full timeout again
+    assert time.monotonic() - start >= 0.05
+
+
+async def test_drain_wake_coalesces_multiple_sets_into_one_early_wake() -> None:
+    """AC2: N sets landing before a single ``wait()`` collapse into ONE early return, not N."""
+    wake = runtime.DrainWake()
+    wake.set()
+    wake.set()
+    wake.set()
+
+    start = time.monotonic()
+    await wake.wait(5.0)
+    assert time.monotonic() - start < 1.0
+
+
+async def test_pump_wakes_early_via_drain_wake_instead_of_waiting_full_beat() -> None:
+    """TK-269 AC1: pump idling with a ``DrainWake`` (long, 5s beat) -> an enqueue-then-wake while
+    it's waiting starts draining well before the beat elapses instead of waiting it out."""
+    queue = _FakeQueue(batches=[])  # empty until the fake "chat enqueue" below appends
+    wake = runtime.DrainWake()
+
+    class _SpyEngine:
+        def __init__(self) -> None:
+            self.run_ids: list[str] = []
+
+        async def run(
+            self,
+            *,
+            run_id: str,
+            session_id: str,
+            pathway_id: str,
+            initial: Artifact,
+            pathway_version: int = 1,
+        ) -> object:
+            self.run_ids.append(run_id)
+            queue.batches.pop(0)
+            return object()
+
+    async def _enqueue_then_wake() -> None:
+        await asyncio.sleep(0.01)
+        queue.batches.append([QueueItem(idempotency_key="k1", payload={})])
+        wake.set()
+
+    engine = _SpyEngine()
+    start = time.monotonic()
+    # Bounded from OUTSIDE (not by cancelling the pump's own sleep, which would also cancel the
+    # helper coroutine's unrelated `asyncio.sleep(0.01)` above): after draining the one woken item
+    # the pump loops back to a genuine 5s wait, so this cuts it off well short of that at 0.3s —
+    # proving the drain already happened by then.
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            asyncio.gather(
+                runtime._run_drain_pump(
+                    queue=queue, engine=engine, drain_pathway_id="wombat.drain", beat=5.0, wake=wake
+                ),
+                _enqueue_then_wake(),
+            ),
+            timeout=0.3,
+        )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0  # started (and finished) draining well inside the 5s beat
+    assert len(engine.run_ids) == 1
+
+
+async def test_pump_spurious_wake_does_one_empty_peek_then_reidles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-269 AC3: a wake with nothing actually enqueued -> exactly one empty peek (no engine.run)
+    then the pump goes right back to waiting, byte-identical to the idle-beat shape."""
+    queue = _FakeQueue(batches=[])  # never gets anything appended
+    wake = runtime.DrainWake()
+
+    class _SpyEngine:
+        async def run(
+            self,
+            *,
+            run_id: str,
+            session_id: str,
+            pathway_id: str,
+            initial: Artifact,
+            pathway_version: int = 1,
+        ) -> object:
+            raise AssertionError("engine.run must never be called on a spurious wake")
+
+    wake.set()  # already pending before the pump even starts waiting -- consumed on the first wait
+
+    waits: list[float] = []
+
+    async def _fake_wait(self: runtime.DrainWake, timeout: float) -> None:
+        waits.append(timeout)
+        if len(waits) >= 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(runtime.DrainWake, "wait", _fake_wait)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._run_drain_pump(
+            queue=queue, engine=_SpyEngine(), drain_pathway_id="wombat.drain", beat=5.0, wake=wake
+        )
+
+    assert waits == [5.0, 5.0]  # the spurious wake's early return re-peeked (still empty) and
+    # went right back to waiting -- no extra run, no extra empty-peek loop iteration skipped
 
 
 # --- AC2: the Sweeper idles quietly when nothing is due (DEC-8) -------------------------------
@@ -772,6 +912,78 @@ async def test_ac4_shutdown_awaits_registry_stop_on_cancellation() -> None:
         await task
 
     assert registry.stop_calls == 1
+
+
+async def test_drive_and_serve_wires_the_running_wake_into_chat_source_when_present() -> None:
+    """TK-269 (DEC-56a) WIRING: ``_drive_and_serve`` constructs the ``DrainWake`` on the running
+    loop and hands its ``set`` callable to ``bundle.chat_source.wake`` — so ``ChatSource.poll()``
+    can reach the SAME wake the pump is waiting on. AC4 (construction-level): this bundle has no
+    gmail/gcal/asr/Sweeper-specific wiring touched at all — the wake reaches ONLY chat_source.
+    """
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    graph = StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only")
+    pathways.register("only", graph)
+
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
+    )
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+    )
+
+    registry = _RecordingSourceRegistry()
+    queue = _NeverPendingQueue(_FAKE_DSN, max_size=10)
+    daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
+    pending_journal = PgPendingJournal(_FAKE_DSN)
+    compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    entity_kg = InMemoryEntityKG()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
+    chat_source = ChatSource()
+    assert chat_source.wake is None  # unwired until _drive_and_serve runs
+
+    bundle = RuntimeBundle(
+        engine=engine,
+        pathways=pathways,
+        journal=journal,
+        drain_pathway_id="only",
+        dream_pathway_id="only",
+        dream_schedule_pathway_id=None,
+        source_registry=registry,
+        pending_journal=pending_journal,
+        queue=queue,
+        daily_ledger=daily_ledger,
+        compose_stage=compose_stage,
+        live_persona=_live_persona(),
+        brief_pathway_id=None,
+        brief_schedule_pathway_id=None,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
+        behavior_event_log=BehaviorEventLog(_FAKE_DSN),
+        chat_source=chat_source,
+    )
+    op = load_operating_params().model_copy(
+        update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
+    )
+
+    task: asyncio.Task[None] = asyncio.ensure_future(runtime._drive_and_serve(bundle, params=op))
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    assert chat_source.wake is not None  # wired to a real DrainWake.set on the running loop
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 # --- TK-97: serve() fires the SECOND initial drive on the schedule pathway when registered -------

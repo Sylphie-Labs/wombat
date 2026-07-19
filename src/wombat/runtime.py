@@ -113,6 +113,36 @@ def _sweeper_clock(bundle: RuntimeBundle) -> Callable[[], datetime]:
     return _clock
 
 
+class DrainWake:
+    """Interruptible wait for the drain pump's idle beat (TK-269, DEC-56a). ``ChatSource.poll()``
+    calls ``set()`` right after a chat message lands in ``wombat_queue``, so ``wait()`` — the
+    pump's replacement for a plain ``asyncio.sleep(beat)`` — returns early instead of waiting out
+    the whole beat. ``wait()`` swallows its own timeout (the ordinary idle case, byte-identical to
+    the old sleep) and ALWAYS clears the event before returning, whichever way it returned, so N
+    sets landing during one drive episode coalesce into at most one extra early wake rather than
+    firing once per set (AC2)."""
+
+    __slots__ = ("_event",)
+
+    def __init__(self) -> None:
+        self._event = asyncio.Event()
+
+    def set(self) -> None:
+        """Wake a pump currently (or about to be) waiting. Safe to call any number of times
+        between two ``wait()`` calls — extra sets before the next wait collapse into the one
+        pending flag."""
+        self._event.set()
+
+    async def wait(self, timeout: float) -> None:
+        """Block up to ``timeout`` seconds for a wake, returning immediately once one lands."""
+        try:
+            await asyncio.wait_for(self._event.wait(), timeout=timeout)
+        except TimeoutError:
+            pass
+        finally:
+            self._event.clear()
+
+
 def _heartbeat_artifact() -> Artifact:
     """The initial drive's input — a system-provenanced, contentless heartbeat (mirrors
     ``scripts/demo_drain.py``'s own ``drain-tick`` convention)."""
@@ -244,6 +274,7 @@ async def _run_drain_pump(
     engine: _DrivableEngine,
     drain_pathway_id: str,
     beat: float,
+    wake: DrainWake | None = None,
 ) -> None:
     """The ONE process-wide draining pump (TK-230, DEC-41, ASMP-2).
 
@@ -251,10 +282,15 @@ async def _run_drain_pump(
     fresh ``engine.run`` drive — a fresh ``wombat-drain-<uuid>`` run_id on the drain pathway with
     a heartbeat ``Artifact`` — and await it before starting the next. Runs are chained strictly
     sequentially (never concurrent), which is what holds ASMP-2 (exactly one draining process-
-    wide). Once the peek reports empty, sleep ``beat`` seconds and re-peek — an idle beat starts
-    ZERO runs and (since ``pending_count`` is a plain SELECT) writes ZERO journal records; this is
-    where DEC-8's idles-on-empty guarantee now lives, replacing the old stage-owned idle Wait that
-    a Done run could never be woken back out of (see the module docstring).
+    wide). Once the peek reports empty, idle: ``wake=None`` (the default; every non-chat caller —
+    demo/tests) sleeps ``beat`` seconds byte-identically to before TK-269; a real boot passes a
+    ``DrainWake`` (TK-269, DEC-56a), whose ``wait(beat)`` returns early the instant a chat enqueue
+    sets it, so an interactive message starts draining well inside the beat instead of waiting it
+    out — and returns at the ordinary ``beat`` timeout otherwise, same as a plain sleep. Either
+    way an idle beat starts ZERO runs and (since ``pending_count`` is a plain SELECT) writes ZERO
+    journal records; this is where DEC-8's idles-on-empty guarantee now lives, replacing the old
+    stage-owned idle Wait that a Done run could never be woken back out of (see the module
+    docstring).
     """
     while True:
         while queue.pending_count() > 0:
@@ -265,7 +301,10 @@ async def _run_drain_pump(
                 pathway_id=drain_pathway_id,
                 initial=_heartbeat_artifact(),
             )
-        await asyncio.sleep(beat)
+        if wake is None:
+            await asyncio.sleep(beat)
+        else:
+            await wake.wait(beat)
 
 
 async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) -> None:
@@ -308,6 +347,14 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
             fire=bundle.engine.fire_timer,
             clock=_sweeper_clock(bundle),
         )
+        # TK-269 (DEC-56a): a fresh DrainWake, constructed here (ON the running loop — asyncio
+        # primitives bind to the loop they're created on) so an interactive chat enqueue wakes
+        # the pump instead of it waiting out the idle beat. Wired ONLY into ChatSource (per the
+        # ticket's frame: background pollers/gmail/gcal/feedback/asr and the Sweeper get NO wake)
+        # and only when chat is actually enabled (``bundle.chat_source`` is ``None`` otherwise).
+        wake = DrainWake()
+        if bundle.chat_source is not None:
+            bundle.chat_source.wake = wake.set
         # TK-230 (DEC-41): the drain pump SUBSUMES the old "one initial drive" — its first beat
         # drains whatever is already queued, exactly like the initial drive used to, but every
         # later beat keeps draining too (the bug this ticket fixes: a Done run's cancelled timers
@@ -317,6 +364,7 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
             engine=bundle.engine,
             drain_pathway_id=bundle.drain_pathway_id,
             beat=_DRAIN_POLL_INTERVAL_SECONDS,
+            wake=wake,
         )
         await asyncio.gather(
             pump,

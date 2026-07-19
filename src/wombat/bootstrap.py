@@ -669,6 +669,13 @@ class RuntimeBundle:
     # GUARDED (CON-3): any start/run failure is ONE loud WARNING, the rest of the bundle
     # (drain loop, brief, other sources) is unaffected.
     chat_surface: ChatSurface | None = None
+    # TK-269 (DEC-56a): pass-through to the SAME ``ChatSource`` instance registered into
+    # ``source_registry`` above (mirrors the ``chat_surface`` field precedent) — ``None`` exactly
+    # when chat is disabled (chat_surface is also None then). ``runtime._drive_and_serve`` uses
+    # this to hand the running-loop ``DrainWake``'s ``set`` callable to the source, wiring the
+    # interactive-enqueue wake WITHOUT this module (constructed too early for a loop-bound wake)
+    # needing to know anything about it.
+    chat_source: ChatSource | None = None
     # TK-245 (DEC-45(c)/(d), ruling v2.68 r6): the source-poll store sink target — ALWAYS
     # constructed by assemble_runtime (dsn is a required str, ExternalItemStore is fully lazy —
     # no connection at construction), typed Optional with default None ONLY to mirror the
@@ -1311,6 +1318,7 @@ def assemble_runtime(
         behavior_event_log=behavior_event_log,
         action_trail_writer=action_trail_writer,
         chat_surface=chat_surface,
+        chat_source=chat_source,
         external_item_store=external_item_store,
         scratchpad_store=scratchpad_store,
     )

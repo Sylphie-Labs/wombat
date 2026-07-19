@@ -88,6 +88,57 @@ async def test_pushed_event_enqueues_via_the_registry_with_the_canonical_idempot
     assert key == derive_key("chat", "ek-1")
 
 
+async def test_poll_fires_wake_exactly_once_when_events_drained() -> None:
+    """TK-269 (DEC-56a): a poll that drains >=1 event fires ``source.wake`` exactly once, AFTER
+    the drain (the module's atomicity argument relies on the call happening inside ``poll()``,
+    not after)."""
+    source = ChatSource()
+    calls = 0
+
+    def _wake() -> None:
+        nonlocal calls
+        calls += 1
+
+    source.wake = _wake
+    source.push(SourceEvent(event_key="ek-1", payload={}))
+    source.push(SourceEvent(event_key="ek-2", payload={}))
+
+    drained = await source.poll()
+
+    assert [e.event_key for e in drained] == ["ek-1", "ek-2"]
+    assert calls == 1  # one poll, one wake — never one-per-event
+
+
+async def test_poll_does_not_fire_wake_when_nothing_drained() -> None:
+    """An empty poll (nothing pushed since the last one) must not fire the wake — AC3's spurious-
+    wake avoidance starts here, at the source."""
+    source = ChatSource()
+    calls = 0
+
+    def _wake() -> None:
+        nonlocal calls
+        calls += 1
+
+    source.wake = _wake
+
+    drained = await source.poll()
+
+    assert drained == []
+    assert calls == 0
+
+
+async def test_poll_with_no_wake_configured_behaves_like_plain_push_source() -> None:
+    """Default ``wake=None`` (unwired, e.g. a chat-disabled boot) — polling still drains events
+    exactly like today, just without firing anything."""
+    source = ChatSource()
+    assert source.wake is None
+
+    source.push(SourceEvent(event_key="ek-1", payload={}))
+    drained = await source.poll()
+
+    assert [e.event_key for e in drained] == ["ek-1"]
+
+
 def test_chat_source_module_imports_no_model_compose_or_mouth_module() -> None:
     """Structural CON-1 guard: the source module itself never reaches toward the mouth."""
     imported = _imported_module_names(_CHAT_SOURCE_PATH.read_text(encoding="utf-8"))

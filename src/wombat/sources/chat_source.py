@@ -12,11 +12,24 @@ module itself never touches HTTP, JSON parsing, or auth.
 STRUCTURAL (CON-1): this module imports NOTHING beyond ``sources.base`` — no model/compose/mouth
 module is reachable from here, so the mouth can never see a correlation id or reach back into the
 chat transport.
+
+TK-269 (DEC-56a): ``poll()`` is overridden to fire an optional ``wake`` callable (set by
+``wombat.runtime._drive_and_serve`` once the running loop's ``DrainWake`` exists — this instance
+is constructed too early in ``assemble_runtime`` to have it) right after draining the buffer, IFF
+that drain returned at least one event. The wake fires INSIDE ``poll()``, before the registry's
+own enqueue loop runs, but this is still safe (v2.113 ruling): ``asyncio.Event.set()`` only marks
+a waiting task ready, it never itself yields control — the pump can only actually observe the
+wake once THIS coroutine chain yields, and ``sources.registry.SourceRegistry._poll_loop`` has no
+await point between ``poll()`` returning and its synchronous sink-call + enqueue loop finishing
+(the next await is its own ``asyncio.sleep`` afterward). So by the time the pump task is actually
+scheduled, the queue write has already committed — single-event-loop atomicity, not a race.
 """
 
 from __future__ import annotations
 
-from wombat.sources.base import PushSource
+from collections.abc import Callable
+
+from wombat.sources.base import PushSource, SourceEvent
 
 # The canonical registered source id — surface.py reads it off the constructed instance
 # (``source.id``) rather than hardcoding it a second time, so the two never drift.
@@ -33,6 +46,20 @@ class ChatSource(PushSource):
 
     def __init__(self) -> None:
         super().__init__(id=CHAT_SOURCE_ID, poll_interval_seconds=CHAT_POLL_INTERVAL_SECONDS)
+        # TK-269 (DEC-56a): the drain pump's wake callable — ``None`` (today's behavior, no wake)
+        # until ``wombat.runtime._drive_and_serve`` sets it on the running loop. A default-None
+        # plain attribute (not a constructor arg) because assemble_runtime constructs this
+        # instance well before that loop-bound wake exists.
+        self.wake: Callable[[], None] | None = None
+
+    async def poll(self) -> list[SourceEvent]:
+        """``PushSource.poll()`` plus one thing: if it drained >=1 event, fire ``self.wake`` (see
+        the module docstring for why doing so INSIDE this call, before the registry's enqueue
+        loop runs, is still safe)."""
+        events = await super().poll()
+        if events and self.wake is not None:
+            self.wake()
+        return events
 
 
 __all__ = ["CHAT_POLL_INTERVAL_SECONDS", "CHAT_SOURCE_ID", "ChatSource"]
