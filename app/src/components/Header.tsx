@@ -1,31 +1,43 @@
 import { useEffect, useState } from "react";
 
+import { probeChat } from "../chat";
 import { border, brand, ink, surface } from "../tokens";
 import { cn } from "./cn";
 
+/** TK-263 (ISS-16): interval between liveness probes. */
+const PROBE_INTERVAL_MS = 15_000;
+
 /**
  * TK-249: the app shell's header - the wombat mark, wordmark, and an honest
- * running/offline status. The status rides the SAME `window.wombatChat`
- * bridge `ChatPane` already probes (TK-223) - no new api.ts function, no new
- * fetch, just the app's one existing signal for "is wombat's runtime up".
- * Restart itself stays exclusively in Settings > System (`RuntimeControls`,
- * byte-unchanged) - the header only reports state, it never triggers one.
+ * running/offline status. TK-263: handshake-file presence alone proved
+ * stale (the file survives a dead runtime), so the status now comes from
+ * `probeChat()` - a fresh `getInfo()` read plus a real round-trip to the
+ * chat port - polled at mount and on a ~15s interval so a runtime death
+ * between polls flips the chip without a reload. Restart itself stays
+ * exclusively in Settings > System (`RuntimeControls`, byte-unchanged) -
+ * the header only reports state, it never triggers one.
  */
 export function Header() {
   const [running, setRunning] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    window.wombatChat
-      .getInfo()
-      .then((info) => {
-        if (!cancelled) setRunning(info !== null);
-      })
-      .catch(() => {
-        if (!cancelled) setRunning(false);
-      });
+
+    const probe = () => {
+      probeChat()
+        .then((isRunning) => {
+          if (!cancelled) setRunning(isRunning);
+        })
+        .catch(() => {
+          if (!cancelled) setRunning(false);
+        });
+    };
+
+    probe();
+    const intervalId = setInterval(probe, PROBE_INTERVAL_MS);
     return () => {
       cancelled = true;
+      clearInterval(intervalId);
     };
   }, []);
 

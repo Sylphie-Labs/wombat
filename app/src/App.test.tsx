@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { resetBridgeCacheForTests } from "./api";
+import { Header } from "./components/Header";
 
 /**
  * TK-200 acceptance tests, against a fake bridge + fake fetch (no live API -
@@ -321,5 +322,77 @@ describe("App (TK-249 shell AC1: header/rail/chat dock/Today landing)", () => {
     fireEvent.click(screen.getByRole("button", { name: "System" }));
     expect(screen.getByRole("button", { name: /restart wombat/i })).toBeTruthy();
     expect(screen.queryByLabelText("ElevenLabs API key")).toBeNull();
+  });
+});
+
+/**
+ * TK-263 (ISS-16): the header's status chip must reflect a real chat-port
+ * round trip, not just handshake-file presence. Exercised against `Header`
+ * directly (no App/settings bridge needed) with a stubbed
+ * `window.wombatChat` and a stubbed global `fetch`.
+ */
+describe("Header (TK-263: liveness truthfulness)", () => {
+  function stubWombatChat(getInfo: () => Promise<{ port: number; token: string } | null>): void {
+    (window as unknown as { wombatChat: { getInfo: () => Promise<unknown> } }).wombatChat = {
+      getInfo: vi.fn(getInfo),
+    };
+  }
+
+  it("shows Offline when getInfo resolves handshake info but the port probe fetch rejects (ISS-15 live state)", async () => {
+    stubWombatChat(async () => ({ port: PORT, token: TOKEN }));
+    const fetchMock = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Header />);
+
+    expect(await screen.findByText("Offline")).toBeTruthy();
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+
+  it("shows Running when the port probe fetch resolves with any HTTP status, and never POSTs /chat", async () => {
+    stubWombatChat(async () => ({ port: PORT, token: TOKEN }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Header />);
+
+    expect(await screen.findByText("Running")).toBeTruthy();
+    for (const call of fetchMock.mock.calls) {
+      const url = String(call[0]);
+      const method = (call[1] as RequestInit | undefined)?.method ?? "GET";
+      expect(url.endsWith("/chat") && method === "POST").toBe(false);
+    }
+  });
+
+  it("flips Running -> Offline on the next ~15s poll without a reload, and clears the interval on unmount", async () => {
+    vi.useFakeTimers();
+    stubWombatChat(async () => ({ port: PORT, token: TOKEN }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<Header />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("Running")).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(screen.getByText("Offline")).toBeTruthy();
+
+    const callsAtUnmount = fetchMock.mock.calls.length;
+    unmount();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAtUnmount);
+
+    vi.useRealTimers();
   });
 });
