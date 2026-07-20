@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 7
+version: 8
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -46,6 +46,18 @@ max_pending: 100
 mouth_daily_token_ceiling: 100000
 mouth_max_usd_per_drive: 0.50
 mouth_max_calls_per_drive: 3
+
+# --- Mouth model-call timeout (TK-283, DEC-61) ------------------------------------------
+# CHOSEN-HERE: runtime-20260720-183045.log showed ComposeStage degrading a HEALTHY DeepSeek
+# call to template because boot-time faster-whisper CPU decode saturated cores and the call
+# ran past the old 2.0s default; later composes ran 1.1-1.5s once contention cleared. DEC-61
+# rules the promptness guarantee belongs to the FALLBACK (deterministic template on genuine
+# give-up), not the model wait — so the wait becomes ONE tunable shared by every model-
+# calling mouth site (compose/brief_compose/speech_shape/reflection_compose/draft_composer).
+# 10.0s comfortably clears the observed 1.1-1.5s healthy-call range plus boot-time
+# contention, and still fits inside the 30s chat reply window; genuine 503s/errors return
+# fast so this only bites real hangs.
+mouth_model_timeout_seconds: 10.0
 
 # --- Morning brief (TK-97) -------------------------------------------------------------
 # morning_brief_time: CHOSEN-HERE — TK-97 FORBIDS runtime configurability but never stated

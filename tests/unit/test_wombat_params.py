@@ -42,6 +42,7 @@ def _valid_mapping() -> dict[str, object]:
         "mouth_daily_token_ceiling": 100000,
         "mouth_max_usd_per_drive": 0.50,
         "mouth_max_calls_per_drive": 3,
+        "mouth_model_timeout_seconds": 10.0,
         "morning_brief_time": "07:00:00",
         "nightly_dream_time": "02:00:00",
         "rating_tuner": {
@@ -93,6 +94,7 @@ def test_shipped_params_load_with_every_field_typed() -> None:
     assert isinstance(params.mouth_daily_token_ceiling, int)
     assert isinstance(params.mouth_max_usd_per_drive, float)
     assert isinstance(params.mouth_max_calls_per_drive, int)
+    assert isinstance(params.mouth_model_timeout_seconds, float)
     assert isinstance(params.morning_brief_time, time)
     assert isinstance(params.nightly_dream_time, time)
     assert isinstance(params.rating_tuner, RatingTunerBounds)
@@ -223,6 +225,25 @@ def test_spend_ledger_fields_load_are_typed_and_equal_shipped_values() -> None:
 
     assert isinstance(params.mouth_max_calls_per_drive, int)
     assert params.mouth_max_calls_per_drive == 3
+
+
+# --- Mouth model-call timeout (TK-283, DEC-61) — the ONE tunable shared by every mouth site ---
+
+
+def test_mouth_model_timeout_field_loads_is_typed_and_equals_shipped_value() -> None:
+    """The DEC-61 mouth model-call timeout tunable loads as the documented shipped value."""
+    params = load_operating_params()
+
+    assert isinstance(params.mouth_model_timeout_seconds, float)
+    assert params.mouth_model_timeout_seconds == 10.0
+
+
+def test_missing_mouth_model_timeout_fails_loud_at_load(tmp_path: Path) -> None:
+    """A YAML missing the DEC-61 tunable raises at load — no silent code default (AC1)."""
+    mapping = _valid_mapping()
+    del mapping["mouth_model_timeout_seconds"]
+    with pytest.raises(OperatingParamsError):
+        load_operating_params(_write_yaml(tmp_path, mapping))
 
 
 # --- AC3 — the morning-brief time is owned here and nowhere else ------------------------

@@ -146,6 +146,30 @@ async def test_ac2b_timeout_degrades_to_template_within_bound() -> None:
     assert degraded is True
 
 
+# --- TK-283 (DEC-61): the boot-contention repro -- a call slower than the OLD 2.0s default but
+# under the injected mouth_model_timeout_seconds tunable returns real phrased text, NOT a
+# template (runtime-20260720-183045.log: boot-time faster-whisper CPU decode saturated cores
+# and a HEALTHY DeepSeek call got cut at the old hard-coded 2.0s default). -------------------------
+
+
+async def test_ac_boot_contention_slow_healthy_call_returns_phrased_text_not_degraded() -> None:
+    model = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop"),
+        sleep_seconds=2.5,  # longer than the OLD 2.0s default, well under the injected tunable
+    )
+    ctx = _ctx(model)
+    stage = ComposeStage(
+        config=_config(), template_composer=TemplateComposer(), timeout_seconds=10.0
+    )
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    text, _item_id, _item_kind, degraded = composed_output_from_artifact_data(result.output.data)
+    assert degraded is False
+    assert text == "phrased!"
+
+
 # --- empty/whitespace-only response text also degrades --------------------------------------------
 
 

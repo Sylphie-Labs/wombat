@@ -110,6 +110,11 @@ class OperatingParams(BaseModel):
     mouth_max_usd_per_drive: float
     mouth_max_calls_per_drive: int
 
+    # --- Mouth model-call timeout (TK-283, DEC-61) — the ONE tunable shared by every model-
+    # calling mouth site (compose/brief_compose/speech_shape/reflection_compose/draft_composer);
+    # the promptness guarantee belongs to the fallback, not the model wait ---
+    mouth_model_timeout_seconds: float
+
     # --- Morning brief (TK-97) — the single fixed value; no runtime knob ---
     morning_brief_time: time
 

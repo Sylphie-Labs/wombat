@@ -114,6 +114,112 @@ def test_module_exposes_build_engine() -> None:
     assert callable(bootstrap.build_engine)
 
 
+# --- TK-283 (DEC-61): mouth_model_timeout_seconds is injected at every model-calling mouth site -
+
+_FAKE_DSN = "postgresql://fake/db"
+
+# A value distinct from every mouth stage's own ctor default (2.0 or 10.0) so a passing
+# assertion proves the tunable was actually threaded through, not a coincidental match.
+_DISTINCT_TIMEOUT = 7.25
+
+
+class _FakeDraftTrailWriter:
+    """Minimal ``DraftTrailWriter`` fake for construction-only tests (never called here)."""
+
+    def record_proposal(
+        self,
+        *,
+        action_id: str,
+        action_type: Any,
+        human_summary: str,
+        target: str,
+        proposed_at: datetime,
+    ) -> object:
+        raise NotImplementedError
+
+    def record_refusal(
+        self,
+        *,
+        action_id: str,
+        human_summary: str,
+        target: str,
+        proposed_at: datetime,
+    ) -> object:
+        raise NotImplementedError
+
+
+def _op_with_timeout(timeout_seconds: float) -> Any:
+    return load_operating_params().model_copy(
+        update={"mouth_model_timeout_seconds": timeout_seconds}
+    )
+
+
+def test_build_compose_stage_injects_mouth_model_timeout_seconds() -> None:
+    op = _op_with_timeout(_DISTINCT_TIMEOUT)
+    stage = bootstrap.build_compose_stage(
+        config=_config(), dsn=_FAKE_DSN, params=op, tz=ZoneInfo("UTC")
+    )
+    assert stage._timeout_seconds == _DISTINCT_TIMEOUT
+
+
+def test_build_brief_compose_stage_injects_mouth_model_timeout_seconds() -> None:
+    op = _op_with_timeout(_DISTINCT_TIMEOUT)
+    stage = bootstrap.build_brief_compose_stage(
+        config=_config(), dsn=_FAKE_DSN, params=op, tz=ZoneInfo("UTC")
+    )
+    assert stage._timeout_seconds == _DISTINCT_TIMEOUT
+
+
+def test_build_speech_shape_stage_injects_mouth_model_timeout_seconds() -> None:
+    op = _op_with_timeout(_DISTINCT_TIMEOUT)
+    stage = bootstrap.build_speech_shape_stage(
+        config=_config(), dsn=_FAKE_DSN, params=op, tz=ZoneInfo("UTC"), adapter_present=False
+    )
+    assert stage._timeout_seconds == _DISTINCT_TIMEOUT
+
+
+def test_build_draft_composer_stage_default_preserves_ctor_default() -> None:
+    # No timeout_seconds passed -- the standalone-caller posture must keep DraftComposer's own
+    # ctor default byte-identical (AC4).
+    from wombat.integrations.gmail.draft_composer import _DEFAULT_TIMEOUT_SECONDS
+
+    stage = bootstrap.build_draft_composer_stage(writer=_FakeDraftTrailWriter())
+    assert stage._timeout_seconds == _DEFAULT_TIMEOUT_SECONDS
+
+
+def test_build_draft_composer_stage_forwards_mouth_model_timeout_seconds_when_given() -> None:
+    stage = bootstrap.build_draft_composer_stage(
+        writer=_FakeDraftTrailWriter(), timeout_seconds=_DISTINCT_TIMEOUT
+    )
+    assert stage._timeout_seconds == _DISTINCT_TIMEOUT
+
+
+def test_assemble_runtime_compose_stage_carries_mouth_model_timeout_seconds() -> None:
+    op = _op_with_timeout(_DISTINCT_TIMEOUT)
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.compose_stage._timeout_seconds == _DISTINCT_TIMEOUT
+
+
+def test_assemble_runtime_reflection_compose_stage_carries_mouth_model_timeout_seconds() -> None:
+    op = _op_with_timeout(_DISTINCT_TIMEOUT)
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = graph.get("reflection_compose")
+    assert getattr(stage, "_timeout_seconds") == _DISTINCT_TIMEOUT  # noqa: B009
+
+
 # --- TK-101: WOMBAT_BRIEF_PATH / WOMBAT_VOICE_ENABLED are OPTIONAL -------------------------------
 
 

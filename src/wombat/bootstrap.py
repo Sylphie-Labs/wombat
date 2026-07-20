@@ -416,6 +416,7 @@ def build_compose_stage(
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
         live_persona=live_persona,
+        timeout_seconds=op.mouth_model_timeout_seconds,
     )
 
 
@@ -452,6 +453,7 @@ def build_brief_compose_stage(
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
         live_persona=live_persona,
+        timeout_seconds=op.mouth_model_timeout_seconds,
     )
 
 
@@ -531,6 +533,7 @@ def build_speech_shape_stage(
         adapter_present=adapter_present,
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
+        timeout_seconds=op.mouth_model_timeout_seconds,
     )
 
 
@@ -570,6 +573,7 @@ def build_draft_composer_stage(
     clock: Callable[[], datetime] = _utc_now,
     assistant_name: str = "Steward",
     live_persona: LivePersona | None = None,
+    timeout_seconds: float | None = None,
 ) -> DraftComposer:
     """Assemble TK-78's ``DraftComposer`` via a small bootstrap factory (TK-177, the Q-69
     assemble-via-factory lesson) — a thin, directly-testable wrapper mirroring
@@ -580,7 +584,18 @@ def build_draft_composer_stage(
     preserves every existing caller's behavior unchanged. ``live_persona`` (TK-209) threads the
     runtime persona authority through unchanged — ``None`` (the default) preserves the frozen
     ``assistant_name``-only instruction for every standalone caller that doesn't wire one.
+    ``timeout_seconds`` (TK-283, DEC-61) is OPTIONAL — ``None`` (the default) preserves
+    ``DraftComposer``'s own ``_DEFAULT_TIMEOUT_SECONDS`` for every standalone caller that doesn't
+    wire the ``mouth_model_timeout_seconds`` tunable; ``assemble_runtime`` passes it explicitly.
     """
+    if timeout_seconds is not None:
+        return DraftComposer(
+            writer=writer,
+            clock=clock,
+            assistant_name=assistant_name,
+            live_persona=live_persona,
+            timeout_seconds=timeout_seconds,
+        )
     return DraftComposer(
         writer=writer, clock=clock, assistant_name=assistant_name, live_persona=live_persona
     )
@@ -907,7 +922,9 @@ def assemble_runtime(
             exc_info=True,
         )
         reflection_kb = []
-    reflection_compose_stage = ReflectionComposeStage(kb=reflection_kb, live_persona=live_persona)
+    reflection_compose_stage = ReflectionComposeStage(
+        kb=reflection_kb, live_persona=live_persona, timeout_seconds=op.mouth_model_timeout_seconds
+    )
     composer_by_kind[ItemKind.REFLECTION] = "reflection_compose"
     draft_composer_stage: DraftComposer | None = None
     action_trail_writer: ActionTrailWriter | None = None
@@ -951,6 +968,7 @@ def assemble_runtime(
                     clock=_utc_now,
                     assistant_name=config.wombat_assistant_name,
                     live_persona=live_persona,
+                    timeout_seconds=op.mouth_model_timeout_seconds,
                 )
                 composer_by_kind[ItemKind.DRAFT] = "draft_composer"
     else:
