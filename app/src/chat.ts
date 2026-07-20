@@ -198,3 +198,106 @@ export async function pollChatReply(id: string): Promise<PollReplyResult> {
   }
   return { kind: "pending" };
 }
+
+/** TK-281 (DEC-60c app half): one entry of `GET /chat/voice-turns`'s snapshot array -
+ * `reply` is `null` until the matching `resolve()` lands. */
+export interface VoiceTurn {
+  readonly id: string;
+  readonly transcript: string;
+  readonly capturedAt: string;
+  readonly reply: string | null;
+}
+
+export type VoiceTurnsResult =
+  | { readonly kind: "ok"; readonly turns: readonly VoiceTurn[] }
+  | { readonly kind: "unavailable" };
+
+/**
+ * TK-281: `getVoiceTurns`'s own abort timeout - mirrors `POLL_TIMEOUT_MS`'s
+ * discipline (a hung poll must abort, not hang the pane's poll loop).
+ */
+export const VOICE_TURNS_TIMEOUT_MS = 5_000;
+
+/** TK-281: the interval `ChatPane` polls `getVoiceTurns` on while mounted. */
+export const VOICE_TURNS_POLL_INTERVAL_MS = 3_000;
+
+function parseVoiceTurn(raw: unknown): VoiceTurn | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { id, transcript, captured_at: capturedAt, reply } = raw as Record<string, unknown>;
+  if (typeof id !== "string" || typeof transcript !== "string" || typeof capturedAt !== "string") {
+    return null;
+  }
+  if (reply !== null && typeof reply !== "string") return null;
+  return { id, transcript, capturedAt, reply };
+}
+
+/**
+ * TK-281 (DEC-60c app half): `GET /chat/voice-turns` - surface.py answers a
+ * bare JSON array of `{id, transcript, captured_at, reply}` (`reply` is
+ * `null` until landed), never popped server-side (the pane dedupes by id).
+ * Mirrors `pollChatReply`'s freshness discipline (`getInfo()` re-read per
+ * call, never cached), token-in-header-only wiring, and collapse-to-
+ * `unavailable` posture for anything else - a malformed body counts as
+ * unavailable rather than throwing.
+ *
+ * `externalSignal` (TK-281): when supplied and it aborts (the pane's own
+ * unmount teardown), the in-flight fetch is aborted immediately alongside
+ * the internal `VOICE_TURNS_TIMEOUT_MS` bound - both routes land the SAME
+ * `unavailable` result.
+ */
+export async function getVoiceTurns(externalSignal?: AbortSignal): Promise<VoiceTurnsResult> {
+  const info = await window.wombatChat.getInfo();
+  if (info === null) {
+    return { kind: "unavailable" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), VOICE_TURNS_TIMEOUT_MS);
+  const onExternalAbort = (): void => controller.abort();
+  if (externalSignal?.aborted) {
+    // The signal fired before this point (e.g. synchronously right after the
+    // call, before the `await` above yielded) - an event listener added now
+    // would never see it fire again, so abort explicitly instead.
+    controller.abort();
+  } else {
+    externalSignal?.addEventListener("abort", onExternalAbort);
+  }
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${info.port}/chat/voice-turns`, {
+      method: "GET",
+      headers: {
+        "X-Wombat-Chat-Token": info.token,
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    return { kind: "unavailable" };
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
+  }
+
+  if (!response.ok) {
+    return { kind: "unavailable" };
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: "unavailable" };
+  }
+  if (!Array.isArray(body)) {
+    return { kind: "unavailable" };
+  }
+  const turns: VoiceTurn[] = [];
+  for (const raw of body) {
+    const turn = parseVoiceTurn(raw);
+    if (turn === null) {
+      return { kind: "unavailable" };
+    }
+    turns.push(turn);
+  }
+  return { kind: "ok", turns };
+}

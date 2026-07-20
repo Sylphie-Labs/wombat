@@ -5,6 +5,8 @@ import {
   POLL_TIMEOUT_MS,
   PROBE_TIMEOUT_MS,
   SEND_TIMEOUT_MS,
+  VOICE_TURNS_TIMEOUT_MS,
+  getVoiceTurns,
   pollChatReply,
   probeChat,
   sendChat,
@@ -44,9 +46,12 @@ afterEach(() => {
 function neverSettlingFetch(): ReturnType<typeof vi.fn> {
   return vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
     return new Promise((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => {
-        reject(new DOMException("The operation was aborted.", "AbortError"));
-      });
+      const onAbort = (): void => reject(new DOMException("The operation was aborted.", "AbortError"));
+      if (init?.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      init?.signal?.addEventListener("abort", onAbort);
     });
   });
 }
@@ -212,6 +217,96 @@ describe("pollChatReply (TK-270 / DEC-56(b))", () => {
     const result = await pending;
 
     expect(result).toEqual({ kind: "unavailable" });
+  });
+});
+
+describe("getVoiceTurns (TK-281 / DEC-60c app half)", () => {
+  it("returns unavailable when the bridge resolves null", async () => {
+    stubBridge(null);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await getVoiceTurns()).toEqual({ kind: "unavailable" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("parses surface.py's verbatim voice-turns array shape", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json([
+          { id: "v1", transcript: "hey wombat", captured_at: "2026-07-20T00:00:00Z", reply: null },
+          { id: "v2", transcript: "what's the weather", captured_at: "2026-07-20T00:01:00Z", reply: "sunny" },
+        ]),
+      ),
+    );
+
+    expect(await getVoiceTurns()).toEqual({
+      kind: "ok",
+      turns: [
+        { id: "v1", transcript: "hey wombat", capturedAt: "2026-07-20T00:00:00Z", reply: null },
+        { id: "v2", transcript: "what's the weather", capturedAt: "2026-07-20T00:01:00Z", reply: "sunny" },
+      ],
+    });
+  });
+
+  it("returns unavailable on a malformed (non-array) body", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ oops: true })));
+
+    expect(await getVoiceTurns()).toEqual({ kind: "unavailable" });
+  });
+
+  it("returns unavailable on a non-200 response", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 401 })));
+
+    expect(await getVoiceTurns()).toEqual({ kind: "unavailable" });
+  });
+
+  it("returns unavailable when fetch rejects", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+    expect(await getVoiceTurns()).toEqual({ kind: "unavailable" });
+  });
+
+  it("hits GET /chat/voice-turns with the token only in the header, never the URL", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    const fetchMock = vi.fn().mockResolvedValue(Response.json([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getVoiceTurns();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`http://127.0.0.1:${PORT}/chat/voice-turns`);
+    expect(url).not.toContain(TOKEN);
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-Wombat-Chat-Token")).toBe(TOKEN);
+  });
+
+  it("aborts a never-settling fetch at VOICE_TURNS_TIMEOUT_MS and returns unavailable", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", neverSettlingFetch());
+
+    const pending = getVoiceTurns();
+    await vi.advanceTimersByTimeAsync(VOICE_TURNS_TIMEOUT_MS);
+
+    expect(await pending).toEqual({ kind: "unavailable" });
+  });
+
+  it("aborts the in-flight fetch immediately when the caller's externalSignal aborts", async () => {
+    stubBridge({ port: PORT, token: TOKEN });
+    vi.stubGlobal("fetch", neverSettlingFetch());
+    const externalController = new AbortController();
+
+    const pending = getVoiceTurns(externalController.signal);
+    externalController.abort();
+
+    expect(await pending).toEqual({ kind: "unavailable" });
   });
 });
 

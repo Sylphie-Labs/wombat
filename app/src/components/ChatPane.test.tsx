@@ -2,7 +2,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { POLL_GIVE_UP_MS, POLL_INTERVAL_MS, SEND_TIMEOUT_MS } from "../chat";
+import {
+  POLL_GIVE_UP_MS,
+  POLL_INTERVAL_MS,
+  SEND_TIMEOUT_MS,
+  VOICE_TURNS_POLL_INTERVAL_MS,
+} from "../chat";
 import { ChatPane } from "./ChatPane";
 
 /**
@@ -23,6 +28,14 @@ function stubBridge(info: { port: number; token: string } | null): void {
 async function typeAndSend(text: string): Promise<void> {
   fireEvent.change(screen.getByLabelText("Message"), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: /send/i }));
+}
+
+// TK-281: the pane's own always-on voice-turns poll shares the same global
+// `fetch` mock in these tests - filter a mock's calls down to just the
+// late-reply path so assertions about THAT poll's call count aren't
+// perturbed by the unrelated voice-turns poll ticking in the background.
+function lateReplyCalls(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
+  return fetchMock.mock.calls.filter(([url]) => (url as string).includes("/chat/reply/"));
 }
 
 afterEach(() => {
@@ -125,7 +138,9 @@ describe("ChatPane (TK-270 / DEC-56(b): late-reply polling)", () => {
       .fn()
       .mockResolvedValueOnce(Response.json({ status: "held", id: "item-abc" }))
       .mockResolvedValueOnce(Response.json({ status: "pending" }))
-      .mockResolvedValueOnce(Response.json({ status: "replied", text: "sorry for the wait" }));
+      .mockResolvedValueOnce(Response.json({ status: "replied", text: "sorry for the wait" }))
+      // Fallback for the background voice-turns poll ticking during/after this test's window.
+      .mockResolvedValue(Response.json({ status: "pending" }));
     vi.stubGlobal("fetch", fetchMock);
 
     render(<ChatPane />);
@@ -149,12 +164,14 @@ describe("ChatPane (TK-270 / DEC-56(b): late-reply polling)", () => {
 
     expect(screen.getByText("Wombat (replied late): sorry for the wait")).toBeTruthy();
 
-    // Polling has stopped - further time passing makes no more fetch calls.
-    const callsAfterReply = fetchMock.mock.calls.length;
+    // Late-reply polling has stopped for this id - further time passing
+    // makes no more /chat/reply/ calls (the unrelated voice-turns poll may
+    // still tick in the background; see `lateReplyCalls`).
+    const lateReplyCallsAfterReply = lateReplyCalls(fetchMock).length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
     });
-    expect(fetchMock.mock.calls.length).toBe(callsAfterReply);
+    expect(lateReplyCalls(fetchMock).length).toBe(lateReplyCallsAfterReply);
 
     vi.useRealTimers();
   });
@@ -186,11 +203,14 @@ describe("ChatPane (TK-270 / DEC-56(b): late-reply polling)", () => {
       screen.getByText(/still no reply after several minutes - giving up waiting/i),
     ).toBeTruthy();
 
-    const callsAfterGiveUp = fetchMock.mock.calls.length;
+    // Late-reply polling has stopped (the give-up line rendered) - further
+    // time passing makes no more /chat/reply/ calls (the unrelated
+    // voice-turns poll may still tick in the background).
+    const lateReplyCallsAfterGiveUp = lateReplyCalls(fetchMock).length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
     });
-    expect(fetchMock.mock.calls.length).toBe(callsAfterGiveUp);
+    expect(lateReplyCalls(fetchMock).length).toBe(lateReplyCallsAfterGiveUp);
 
     vi.useRealTimers();
   });
@@ -238,5 +258,126 @@ describe("ChatPane (TK-223 AC2: degraded state)", () => {
       expect(screen.queryByText(/wombat is not running/i)).toBeNull();
     });
     expect(await screen.findByText("Wombat: back online")).toBeTruthy();
+  });
+});
+
+describe("ChatPane (TK-281 / DEC-60c app half: voice turns)", () => {
+  it("AC1: an unseen voice transcript appends once with a visible marker; its reply appends once on land; re-polls of the same snapshot append nothing", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    const voiceTurn = (reply: string | null) =>
+      Response.json([{ id: "v1", transcript: "hey wombat", captured_at: "t1", reply }]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(voiceTurn(null))
+      .mockResolvedValueOnce(voiceTurn("hi there"))
+      // Fresh Response instance per call (a Response body can only be read once).
+      .mockImplementation(() => Promise.resolve(voiceTurn("hi there")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatPane />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS);
+    });
+    expect(screen.getAllByText(/hey wombat/i)).toHaveLength(1);
+    expect(screen.getByLabelText("voice message")).toBeTruthy();
+    expect(screen.queryByText("Wombat: hi there")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS);
+    });
+    expect(screen.getByText("Wombat: hi there")).toBeTruthy();
+
+    // A re-poll of the same (already-seen) snapshot appends nothing further.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS * 2);
+    });
+    expect(screen.getAllByText(/hey wombat/i)).toHaveLength(1);
+    expect(screen.getAllByText("Wombat: hi there")).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("AC2: a repeatedly failing voice-turns poll shows nothing, never disturbs typed chat, and silently resumes", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/chat/voice-turns")) {
+        return Promise.reject(new Error("ECONNREFUSED"));
+      }
+      return Promise.resolve(Response.json({ status: "replied", text: "hi there" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ChatPane />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS * 4);
+    });
+    // Repeated poll failures never surface a "not running" banner or any
+    // transcript line - the typed-chat path is entirely untouched by them.
+    expect(screen.queryByText(/wombat is not running/i)).toBeNull();
+    expect(screen.getByRole("log").children).toHaveLength(0);
+
+    // A subsequent tick succeeding proves the poll silently resumed.
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/chat/voice-turns")) {
+        return Promise.resolve(
+          Response.json([{ id: "v9", transcript: "still there?", captured_at: "t9", reply: null }]),
+        );
+      }
+      return Promise.resolve(Response.json({ status: "replied", text: "hi there" }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS);
+    });
+    expect(screen.getByText(/still there\?/i)).toBeTruthy();
+
+    // Typed chat itself is unaffected throughout.
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("Wombat: hi there")).toBeTruthy();
+
+    vi.useRealTimers();
+  });
+
+  it("AC3: unmounting mid-poll clears the interval and aborts the in-flight fetch, with no post-unmount state updates", async () => {
+    vi.useFakeTimers();
+    stubBridge({ port: PORT, token: TOKEN });
+    let capturedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      capturedSignal = init?.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<ChatPane />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS);
+    });
+    expect(capturedSignal?.aborted).toBe(false);
+    const callsBeforeUnmount = fetchMock.mock.calls.length;
+
+    unmount();
+
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // No further poll calls after unmount - the interval was cleared, and
+    // there is no state update to warn about since the pane is gone.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(VOICE_TURNS_POLL_INTERVAL_MS * 5);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsBeforeUnmount);
+
+    vi.useRealTimers();
   });
 });

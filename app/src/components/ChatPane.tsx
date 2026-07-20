@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
-import { POLL_GIVE_UP_MS, POLL_INTERVAL_MS, pollChatReply, sendChat } from "../chat";
-import { ink } from "../tokens";
+import {
+  POLL_GIVE_UP_MS,
+  POLL_INTERVAL_MS,
+  VOICE_TURNS_POLL_INTERVAL_MS,
+  getVoiceTurns,
+  pollChatReply,
+  sendChat,
+} from "../chat";
+import { brand, ink } from "../tokens";
 import { Button } from "./Button";
 import { Field } from "./Field";
 import { Panel } from "./Panel";
@@ -22,6 +29,15 @@ import { Panel } from "./Panel";
  * `POLL_GIVE_UP_MS` bound. A reply that lands appends with a VISIBLE
  * "replied late" marker and polling for that id stops; the bound elapsing
  * first appends an honest gave-up line and stops - never an infinite loop.
+ *
+ * TK-281 (DEC-60c app half): the pane also polls `getVoiceTurns` every
+ * `VOICE_TURNS_POLL_INTERVAL_MS` while mounted - an unseen transcript
+ * appends as the operator's message with a visible voice marker, and a
+ * turn whose reply has landed appends the reply ONCE, exactly like a typed
+ * reply renders. A seen-set (keyed by turn id, split transcript/reply)
+ * guards against re-appending on a re-poll of the same snapshot. A failed
+ * poll shows nothing and never disturbs typed chat; polling silently
+ * resumes next tick. Arrival order only - never reordered.
  */
 
 type TranscriptEntry =
@@ -30,7 +46,9 @@ type TranscriptEntry =
   | { readonly id: string; readonly kind: "held" }
   | { readonly id: string; readonly kind: "replied_late"; readonly text: string }
   | { readonly id: string; readonly kind: "poll_gave_up" }
-  | { readonly id: string; readonly kind: "timed_out" };
+  | { readonly id: string; readonly kind: "timed_out" }
+  | { readonly id: string; readonly kind: "voice_user"; readonly text: string }
+  | { readonly id: string; readonly kind: "voice_replied"; readonly text: string };
 
 function nextId(): string {
   return crypto.randomUUID();
@@ -43,6 +61,11 @@ export function ChatPane() {
   const [unavailable, setUnavailable] = useState(false);
   const mountedRef = useRef(true);
   const pollTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // TK-281: seen-sets for the voice-turns poll, keyed by turn id - transcript
+  // and reply are tracked separately since a turn's reply can land on a
+  // later tick than its transcript first appeared.
+  const seenTranscriptIdsRef = useRef<Set<string>>(new Set());
+  const seenReplyIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +93,39 @@ export function ChatPane() {
         clearTimeout(timer);
       }
       pollTimersRef.current.clear();
+    };
+  }, []);
+
+  // TK-281 (DEC-60c app half): the voice-turns poll - interval cleared and
+  // any in-flight fetch aborted on unmount (mirrors the abort discipline
+  // `getVoiceTurns` itself already applies via `externalSignal`).
+  useEffect(() => {
+    const abortController = new AbortController();
+    const interval = setInterval(() => {
+      void getVoiceTurns(abortController.signal).then((result) => {
+        if (!mountedRef.current || result.kind !== "ok") return;
+        setTranscript((prev) => {
+          let next = prev;
+          for (const turn of result.turns) {
+            if (!seenTranscriptIdsRef.current.has(turn.id)) {
+              seenTranscriptIdsRef.current.add(turn.id);
+              next = [...next, { id: `voice-${turn.id}`, kind: "voice_user", text: turn.transcript }];
+            }
+            if (turn.reply !== null && !seenReplyIdsRef.current.has(turn.id)) {
+              seenReplyIdsRef.current.add(turn.id);
+              next = [
+                ...next,
+                { id: `voice-reply-${turn.id}`, kind: "voice_replied", text: turn.reply },
+              ];
+            }
+          }
+          return next;
+        });
+      });
+    }, VOICE_TURNS_POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      abortController.abort();
     };
   }, []);
 
@@ -162,6 +218,23 @@ export function ChatPane() {
             return (
               <p key={entry.id} className={ink.primary}>
                 Wombat (replied late): {entry.text}
+              </p>
+            );
+          }
+          if (entry.kind === "voice_user") {
+            return (
+              <p key={entry.id} className={ink.primary}>
+                <span className={brand.text} aria-label="voice message">
+                  🎤
+                </span>{" "}
+                You (voice): {entry.text}
+              </p>
+            );
+          }
+          if (entry.kind === "voice_replied") {
+            return (
+              <p key={entry.id} className={ink.primary}>
+                Wombat: {entry.text}
               </p>
             );
           }
