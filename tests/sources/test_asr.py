@@ -256,3 +256,62 @@ def test_faster_whisper_transcriber_construction_raises_when_not_installed(
     _simulate_absent(monkeypatch, "faster_whisper")
     with pytest.raises(ImportError):
         FasterWhisperTranscriber(model_name="base")
+
+
+# ------------------------------------------------------------------------- TK-277 (DEC-59) CPU pin
+
+
+class _RecordingWhisperModel:
+    """Fake ``WhisperModel`` that records the constructor args/kwargs it was called with."""
+
+    last_args: tuple[object, ...] | None = None
+    last_kwargs: dict[str, object] | None = None
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        type(self).last_args = args
+        type(self).last_kwargs = kwargs
+
+
+def _install_fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingWhisperModel]:
+    """Inject a fake ``faster_whisper`` module into ``sys.modules`` whose ``WhisperModel``
+    records its constructor args/kwargs — modelless, no real CTranslate2 construction (TK-277)."""
+    _RecordingWhisperModel.last_args = None
+    _RecordingWhisperModel.last_kwargs = None
+    fake_module = ModuleType("faster_whisper")
+    fake_module.WhisperModel = _RecordingWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+    return _RecordingWhisperModel
+
+
+def test_faster_whisper_transcriber_pins_device_cpu_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC1 (DEC-59): construction must pass ``device="cpu"`` as an explicit kwarg to
+    ``WhisperModel`` — never ``"auto"``, never omitted (CTranslate2's lazy CUDA init
+    otherwise only fails at first ``transcribe()``, silently severing the PTT path)."""
+    fake_model = _install_fake_faster_whisper(monkeypatch)
+
+    FasterWhisperTranscriber(model_name="base")
+
+    assert fake_model.last_kwargs is not None
+    assert fake_model.last_kwargs["device"] == "cpu"
+
+
+def test_faster_whisper_transcriber_logs_cpu_pin_at_construction(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2 (DEC-59): exactly one INFO log line at construction names the pinned device and
+    the model (never-silent posture — the prior silent construction success masked the
+    later transcribe()-time CUDA RuntimeError)."""
+    _install_fake_faster_whisper(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        FasterWhisperTranscriber(model_name="base")
+
+    matches = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.INFO and "cpu" in record.getMessage().lower()
+    ]
+    assert len(matches) == 1
+    assert "base" in matches[0].getMessage()

@@ -110,7 +110,8 @@ class FasterWhisperTranscriber:
     def __init__(self, model_name: str) -> None:
         from faster_whisper import WhisperModel  # lazy import (Q-97 ruling a) — [voice] extra
 
-        self._model = WhisperModel(model_name)
+        logger.info("ASR inference pinned to device=cpu (DEC-59), model=%s", model_name)
+        self._model = WhisperModel(model_name, device="cpu")
 
     def transcribe(self, path: Path) -> str:
         """Transcribe the audio file at ``path``, joining every decoded segment's text."""
