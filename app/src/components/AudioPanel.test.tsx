@@ -101,7 +101,7 @@ function installFakeAudioEnv(options: InstallOptions = {}): { calls: FetchCall[]
   };
 
   const calls: FetchCall[] = [];
-  const settings: Record<string, unknown> = { wombat_voice_enabled: false };
+  const settings: Record<string, unknown> = { wombat_voice_enabled: false, wombat_ptt_binding: "" };
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -235,5 +235,102 @@ describe("AudioPanel (TK-224 AC3: honest controls)", () => {
       true,
     );
     expect((screen.getByLabelText("Input device") as HTMLSelectElement).disabled).toBe(true);
+  });
+});
+
+describe("AudioPanel (TK-275 DEC-58 c/d: push-to-talk binding capture)", () => {
+  it("AC1: arming then pressing a key becomes the binding and PUTs the key: encoding once", async () => {
+    const { calls } = installFakeAudioEnv();
+    render(<AudioPanel />);
+    await screen.findByLabelText("Input device");
+
+    fireEvent.click(screen.getByRole("button", { name: /^set push-to-talk$/i }));
+    fireEvent.keyDown(document, { code: "KeyK", key: "k" });
+
+    expect(await screen.findByText("Key: KeyK")).toBeTruthy();
+
+    const settingsPuts = calls.filter(
+      (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+    );
+    expect(settingsPuts.length).toBe(1);
+    expect(settingsPuts[0].body).toEqual({ wombat_ptt_binding: "key:KeyK" });
+
+    // one-shot: a second press after capture does nothing further.
+    fireEvent.keyDown(document, { code: "KeyJ", key: "j" });
+    expect(screen.queryByText("Key: KeyJ")).toBeNull();
+    expect(
+      calls.filter((call) => call.method === "PUT" && call.url.endsWith("/settings")).length,
+    ).toBe(1);
+
+    expect(screen.queryByText("Restart Wombat to apply this change.")).toBeNull();
+  });
+
+  it("AC1: arming then pressing a non-left/right mouse button becomes the binding", async () => {
+    const { calls } = installFakeAudioEnv();
+    render(<AudioPanel />);
+    await screen.findByLabelText("Input device");
+
+    fireEvent.click(screen.getByRole("button", { name: /^set push-to-talk$/i }));
+    fireEvent.mouseDown(document, { button: 1 });
+
+    expect(await screen.findByText("Mouse button 1")).toBeTruthy();
+    const settingsPuts = calls.filter(
+      (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+    );
+    expect(settingsPuts.length).toBe(1);
+    expect(settingsPuts[0].body).toEqual({ wombat_ptt_binding: "mouse:1" });
+  });
+
+  it("AC1: Escape during arming cancels with no putSettings call", async () => {
+    const { calls } = installFakeAudioEnv();
+    render(<AudioPanel />);
+    await screen.findByLabelText("Input device");
+
+    fireEvent.click(screen.getByRole("button", { name: /^set push-to-talk$/i }));
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+
+    expect(await screen.findByRole("button", { name: /^set push-to-talk$/i })).toBeTruthy();
+    expect(screen.getByText("Not set")).toBeTruthy();
+    expect(
+      calls.filter((call) => call.method === "PUT" && call.url.endsWith("/settings")).length,
+    ).toBe(0);
+  });
+
+  it("AC2: left and right click are rejected with a visible explanation and arming continues", async () => {
+    installFakeAudioEnv();
+    render(<AudioPanel />);
+    await screen.findByLabelText("Input device");
+
+    fireEvent.click(screen.getByRole("button", { name: /^set push-to-talk$/i }));
+    fireEvent.mouseDown(document, { button: 0 });
+    expect(
+      await screen.findByText("Left and right click can't be used as the push-to-talk binding."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /press a key or mouse button/i })).toBeTruthy();
+
+    fireEvent.mouseDown(document, { button: 2 });
+    expect(
+      screen.getByText("Left and right click can't be used as the push-to-talk binding."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /press a key or mouse button/i })).toBeTruthy();
+
+    // arming survived both rejections - a subsequent valid mouse button still captures.
+    fireEvent.mouseDown(document, { button: 1 });
+    expect(await screen.findByText("Mouse button 1")).toBeTruthy();
+  });
+
+  it("AC2: a keypress with modifiers held binds the bare key code (no chords)", async () => {
+    const { calls } = installFakeAudioEnv();
+    render(<AudioPanel />);
+    await screen.findByLabelText("Input device");
+
+    fireEvent.click(screen.getByRole("button", { name: /^set push-to-talk$/i }));
+    fireEvent.keyDown(document, { code: "KeyK", key: "k", ctrlKey: true });
+
+    expect(await screen.findByText("Key: KeyK")).toBeTruthy();
+    const settingsPuts = calls.filter(
+      (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+    );
+    expect(settingsPuts[0].body).toEqual({ wombat_ptt_binding: "key:KeyK" });
   });
 });

@@ -478,6 +478,37 @@ def test_load_config_table_accepts_voice_enabled_bool(
     assert "wombat_voice_enabled" in APP_EDITABLE_FIELDS
 
 
+# --- TK-275 (DEC-58 c/d): wombat_ptt_binding joins the app-editable tier --------------------
+
+
+def test_wombat_ptt_binding_defaults_to_unbound() -> None:
+    """AC3: default "" means unbound; the field is admitted."""
+    config = WombatConfig(deepseek_api_key="k", deepseek_base_url="https://example.invalid")
+    assert config.wombat_ptt_binding == ""
+    assert "wombat_ptt_binding" in APP_EDITABLE_FIELDS
+
+
+@_requires_pg
+def test_load_config_table_accepts_ptt_binding_str(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A str value for the newly-admitted field loads (table-sourced)."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_ptt_binding": "key:KeyK"})
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_ptt_binding == "key:KeyK"
+    assert "wombat_ptt_binding" in APP_EDITABLE_FIELDS
+
+
 # --- AC4: the identical out-of-vocab value via the ENV tier still fails loud, naming the var
 # --- (TK-187 behavior pinned unchanged — only the app-file tier grew tolerant) --------------
 

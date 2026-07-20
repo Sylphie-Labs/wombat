@@ -448,6 +448,27 @@ def test_put_settings_wombat_voice_enabled_non_bool_is_422() -> None:
     assert response.status_code == 422
 
 
+def test_put_settings_wombat_ptt_binding_round_trips() -> None:
+    """TK-275 (DEC-58 c/d): the newly-admitted str field writes and reads back."""
+    client = _client()
+    response = client.put(
+        "/settings", json={"wombat_ptt_binding": "key:KeyK"}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_ptt_binding"] == "key:KeyK"
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_ptt_binding"] == "key:KeyK"
+
+
+def test_get_settings_wombat_ptt_binding_defaults_to_null_when_unset() -> None:
+    """TK-275: unset means "" (unbound) at the WombatConfig layer, but the settings-table view
+    (before any PUT) shows null like every other unset admitted field."""
+    client = _client()
+    response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert response.json()["settings"]["wombat_ptt_binding"] is None
+
+
 def test_put_key_unknown_provider_is_404_or_422() -> None:
     client = _client()
     response = client.put(

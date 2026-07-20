@@ -29,11 +29,25 @@ function deviceOptions(devices: readonly AudioCaptureDevice[]): SelectOption[] {
   return devices.map((device) => ({ value: device.deviceId, label: device.label }));
 }
 
+/** TK-275 (DEC-58 c/d): encode a captured event into the `wombat_ptt_binding` wire format -
+ * "key:<KeyboardEvent.code>" or "mouse:<MouseEvent.button>". */
+function describeBinding(binding: string): string {
+  if (!binding) return "Not set";
+  const [kind, value] = binding.split(":", 2);
+  if (kind === "key") return `Key: ${value}`;
+  if (kind === "mouse") return `Mouse button ${value}`;
+  return binding;
+}
+
 export function AudioPanel() {
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [voiceEnabledLoaded, setVoiceEnabledLoaded] = useState(false);
   const [savingVoice, setSavingVoice] = useState(false);
   const [restartNotice, setRestartNotice] = useState(false);
+
+  const [pttBinding, setPttBinding] = useState("");
+  const [armingPtt, setArmingPtt] = useState(false);
+  const [pttRejection, setPttRejection] = useState<string | null>(null);
 
   const [devices, setDevices] = useState<AudioCaptureDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
@@ -50,6 +64,7 @@ export function AudioPanel() {
       .then((response) => {
         if (cancelled) return;
         setVoiceEnabled(Boolean(response.settings.wombat_voice_enabled));
+        setPttBinding(String(response.settings.wombat_ptt_binding ?? ""));
       })
       .catch(() => {
         /* handled below via the finally-equivalent state flip */
@@ -80,6 +95,50 @@ export function AudioPanel() {
     } finally {
       setSavingVoice(false);
     }
+  }
+
+  useEffect(() => {
+    if (!armingPtt) return;
+
+    function finishCapture(encoded: string): void {
+      setArmingPtt(false);
+      setPttRejection(null);
+      setPttBinding(encoded);
+      void putSettings({ wombat_ptt_binding: encoded });
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      event.preventDefault();
+      if (event.key === "Escape") {
+        setArmingPtt(false);
+        setPttRejection(null);
+        return;
+      }
+      // DEC-58 d: a single event, modifiers ignored - the bare key code is the binding (no
+      // chords).
+      finishCapture(`key:${event.code}`);
+    }
+
+    function onMouseDown(event: MouseEvent): void {
+      event.preventDefault();
+      if (event.button === 0 || event.button === 2) {
+        setPttRejection("Left and right click can't be used as the push-to-talk binding.");
+        return;
+      }
+      finishCapture(`mouse:${event.button}`);
+    }
+
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("mousedown", onMouseDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("mousedown", onMouseDown, true);
+    };
+  }, [armingPtt]);
+
+  function handleSetPttClick(): void {
+    setPttRejection(null);
+    setArmingPtt(true);
   }
 
   async function handleRecordClick(): Promise<void> {
@@ -134,6 +193,14 @@ export function AudioPanel() {
         </Button>
       </div>
       {restartNotice && <p className={ink.muted}>Restart Wombat to apply this change.</p>}
+
+      <div className="flex items-center gap-2">
+        <Button type="button" variant="secondary" onClick={handleSetPttClick} disabled={armingPtt}>
+          {armingPtt ? "Press a key or mouse button..." : "Set push-to-talk"}
+        </Button>
+        <span className={ink.muted}>{describeBinding(pttBinding)}</span>
+      </div>
+      {pttRejection && <p className={ink.muted}>{pttRejection}</p>}
 
       {!dropDirConfigured && (
         <p className={ink.muted}>voice drop-dir not configured - set WOMBAT_ASR_DROP_DIR</p>

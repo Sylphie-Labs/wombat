@@ -66,6 +66,11 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     # stays operator .env-tier (the wombat_chat_handshake_file precedent) — a settings UI
     # toggle has no business relocating where the drop-dir watcher points.
     "wombat_voice_enabled",
+    # TK-275 (DEC-58 c/d): the one-shot-captured push-to-talk binding
+    # ("key:<code>"/"mouse:<button>", "" = unbound) - app-editable so the Electron settings UI
+    # can persist it; the Python runtime never reads this field (the renderer, TK-276, is the
+    # sole consumer), so no restart notice is warranted for it.
+    "wombat_ptt_binding",
 )
 
 
@@ -174,6 +179,11 @@ class WombatConfig(BaseSettings):
     # construction.
     wombat_brief_path: str | None = None
     wombat_voice_enabled: bool = False
+
+    # OPTIONAL (TK-275, DEC-58 c/d): the one-shot-captured push-to-talk binding, persisted
+    # through the app-editable settings tier. "" (default) means unbound. Deliberately a plain
+    # str, not a Literal - the Python runtime never reads it (the renderer is the sole consumer).
+    wombat_ptt_binding: str = ""
 
     # OPTIONAL (TK-176): the explicit-feedback file channel's path (TK-51's ``FeedbackInputSource``
     # v1 file channel). Deliberately NOT in REQUIRED_ENV — the drain spine/demo/tests must keep
