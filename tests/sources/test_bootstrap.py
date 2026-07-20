@@ -647,6 +647,59 @@ def test_build_source_registry_defaults_construct_asr_source_with_no_command_hoo
     assert consent_calls == []
 
 
+# --------------------------------------------------------------------- TK-280: turn_hook wiring
+
+
+def test_build_source_registry_threads_turn_hook_straight_through_to_asr_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-280 (DEC-60c server half): a supplied ``turn_hook`` reaches the constructed
+    ``ASRSource`` unchanged -- ``build_source_registry`` does no branching of its own on it."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    captured_kwargs = _wire_spy_asr_source(monkeypatch)
+    config = _make_config(asr_drop_dir=str(tmp_path))
+
+    def turn_hook(event_key: str, transcript: str, captured_at: str) -> None:
+        raise AssertionError("never called by this test -- identity-through-wiring only")
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        turn_hook=turn_hook,
+    )
+
+    assert _is_registered(registry, "asr")
+    assert captured_kwargs["turn_hook"] is turn_hook
+    assert consent_calls == []
+
+
+def test_build_source_registry_defaults_construct_asr_source_with_no_turn_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-280: the ``turn_hook`` default (``None``) constructs today's ``ASRSource`` exactly --
+    no ledger side effect wired at all."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    captured_kwargs = _wire_spy_asr_source(monkeypatch)
+    config = _make_config(asr_drop_dir=str(tmp_path))
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+
+    assert _is_registered(registry, "asr")
+    assert captured_kwargs["turn_hook"] is None
+    assert consent_calls == []
+
+
 def test_build_source_registry_wires_asr_at_2s_while_others_stay_at_300s(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

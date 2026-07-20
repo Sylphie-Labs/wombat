@@ -1017,6 +1017,18 @@ def assemble_runtime(
         )
     chat_reply_stage = ChatReplyStage(broker=chat_reply_broker)
 
+    # TK-280 (DEC-60c server half, EP-32): the ASR turn_hook seam — None when chat is disabled
+    # (chat_reply_broker is None), otherwise a closure that derives item_id via the SAME
+    # idempotency_key('asr', event_key) derivation sources.registry.SourceRegistry uses at
+    # enqueue time (ASRSource.id == "asr") and registers the turn into the broker's ledger.
+    asr_turn_hook: Callable[[str, str, str], None] | None = None
+    if chat_reply_broker is not None:
+        _voice_turn_broker = chat_reply_broker
+
+        def asr_turn_hook(event_key: str, transcript: str, captured_at: str) -> None:
+            item_id = idempotency_key("asr", event_key)
+            _voice_turn_broker.register_voice_turn(item_id, transcript, captured_at)
+
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
         # TK-179/Q-94: DraftDispatchStage locates the parked draft_composer step BY STAGE IDENTITY
@@ -1232,6 +1244,7 @@ def assemble_runtime(
         speak=speak,
         persona_feedback_recorder=_record_persona_feedback,
         external_item_store=external_item_store,
+        turn_hook=asr_turn_hook,
     )
     if chat_source is not None:
         # TK-222 (Q-110(d) ruling 1): registered exactly like every other source — the registry

@@ -54,6 +54,19 @@ again. No websocket/SSE, no persistence beyond the in-memory bounded dict, no sp
 
 STRUCTURAL (CON-1): this module imports NOTHING model/compose/mouth-shaped — only stdlib,
 ``wombat.domain.item_identity``, and ``wombat.sources.{base,chat_source}``.
+
+TK-280 (DEC-60c server half, EP-32): a BOUNDED voice-turn ledger, following the TK-270 late-slot
+discipline verbatim (dict, ``VOICE_TURN_LEDGER_MAX_SIZE`` entries, oldest-evicted at the cap,
+``VOICE_TURN_LEDGER_TTL_SECONDS`` each, monotonic-clocked). ``register_voice_turn(item_id,
+transcript, captured_at)`` (called by the composition root's ``ASRSource.turn_hook``, TK-280) adds
+an entry with ``reply=None``; ``resolve(item_id, text)`` — the SAME method ``chat_reply`` already
+calls unconditionally for every composed item — additionally parks ``text`` into a matching
+ledger entry, homed at the unknown-id no-op fall-through (a voice id is never registered into
+``_pending``, so it can never reach the future/late-slot branches above it — ``_pending``/``_late``
+semantics stay byte-untouched). ``GET /chat/voice-turns`` (guarded by the SAME
+``X-Wombat-Chat-Token`` check, identical 401 shape, and CORS preflight as the existing routes)
+answers a JSON array snapshot of ``{id, transcript, captured_at, reply: text|null}`` — the server
+only prunes by cap/TTL, never pops (the pane dedupes by id, TK-281, out of scope here).
 """
 
 from __future__ import annotations
@@ -63,6 +76,8 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -84,6 +99,11 @@ CHAT_REPLY_TIMEOUT_SECONDS = 30.0
 LATE_SLOT_MAX_SIZE = 128
 LATE_SLOT_TTL_SECONDS = 900.0
 
+# TK-280 (DEC-60c): the voice-turn ledger's bounds — same shape as the late slot above (oldest
+# evicted first at the cap; each entry pruned past its TTL).
+VOICE_TURN_LEDGER_MAX_SIZE = 32
+VOICE_TURN_LEDGER_TTL_SECONDS = 3600.0
+
 # Defensive bounds on the hand-rolled HTTP parse below — this is a loopback, token-gated surface
 # (CON-7), but a malformed/adversarial connection must still never hang or exhaust memory.
 _MAX_HEADER_LINES = 64
@@ -104,6 +124,18 @@ _CORS_HEADERS = (
 )
 
 _LATE_REPLY_PATH_PREFIX = "/chat/reply/"
+_VOICE_TURNS_PATH = "/chat/voice-turns"
+
+
+@dataclass(frozen=True)
+class _VoiceTurn:
+    """One voice-turn ledger entry (TK-280) — ``reply`` is ``None`` until a matching
+    ``resolve(item_id, text)`` arrives."""
+
+    transcript: str
+    captured_at: str
+    reply: str | None
+    inserted_at: float
 
 
 class ChatReplyBroker:
@@ -118,6 +150,11 @@ class ChatReplyBroker:
         # fills it in. Presence here (regardless of ``text``) is exactly what makes a late-
         # expected id structurally distinct from one this broker never saw at all.
         self._late: dict[str, tuple[str | None, float]] = {}
+        # TK-280 (DEC-60c): the bounded voice-turn ledger — item_id -> _VoiceTurn. Populated by
+        # register_voice_turn() (the composition root's ASRSource.turn_hook); filled in by the
+        # SAME resolve() every composed item already flows through, at its unknown-id fall-
+        # through (a voice id is never registered into _pending).
+        self._voice_turns: dict[str, _VoiceTurn] = {}
 
     def register(self, item_id: str) -> asyncio.Future[str]:
         """Create and store a fresh, unresolved future for ``item_id`` on the CURRENT running
@@ -154,6 +191,53 @@ class ChatReplyBroker:
             # Refresh the timestamp on arrival so a genuinely-late reply gets its own full TTL
             # window to be picked up, rather than inheriting the age of the original timeout.
             self._late[item_id] = (text, time.monotonic())
+            return
+        # TK-280: the unknown-to-_pending/_late fall-through — a voice-registered id lands here
+        # (it is never put in _pending), parking its composed reply into the ledger entry. An id
+        # this broker has no record of at all (never registered anywhere) stays a strict no-op.
+        self._prune_voice_turns()
+        if item_id in self._voice_turns:
+            self._voice_turns[item_id] = replace(self._voice_turns[item_id], reply=text)
+
+    def register_voice_turn(self, item_id: str, transcript: str, captured_at: str) -> None:
+        """TK-280 (DEC-60c): register a voice turn in the bounded, TTL'd ledger — mirrors the
+        DEC-56(b) late slot's bounding discipline verbatim (oldest evicted at the cap). Creates
+        an entry with ``reply=None``; a subsequent ``resolve(item_id, ...)`` fills it in (see
+        ``resolve``'s unknown-id fall-through above)."""
+        self._prune_voice_turns()
+        at_cap = len(self._voice_turns) >= VOICE_TURN_LEDGER_MAX_SIZE
+        if item_id not in self._voice_turns and at_cap:
+            oldest_id = next(iter(self._voice_turns))
+            del self._voice_turns[oldest_id]
+        self._voice_turns[item_id] = _VoiceTurn(
+            transcript=transcript, captured_at=captured_at, reply=None, inserted_at=time.monotonic()
+        )
+
+    def voice_turns_snapshot(self) -> list[dict[str, str | None]]:
+        """``GET /chat/voice-turns`` semantics (TK-280): a snapshot — pruned by cap/TTL only,
+        never popped (the pane dedupes by id, TK-281)."""
+        self._prune_voice_turns()
+        return [
+            {
+                "id": item_id,
+                "transcript": turn.transcript,
+                "captured_at": turn.captured_at,
+                "reply": turn.reply,
+            }
+            for item_id, turn in self._voice_turns.items()
+        ]
+
+    def _prune_voice_turns(self) -> None:
+        """Drop voice-turn entries older than ``VOICE_TURN_LEDGER_TTL_SECONDS`` (monotonic-
+        clocked) — mirrors ``_prune_late`` verbatim."""
+        now = time.monotonic()
+        expired = [
+            item_id
+            for item_id, turn in self._voice_turns.items()
+            if now - turn.inserted_at > VOICE_TURN_LEDGER_TTL_SECONDS
+        ]
+        for item_id in expired:
+            del self._voice_turns[item_id]
 
     def discard(self, item_id: str) -> None:
         """Move a pending registration into the bounded late slot (DEC-56(b), the timeout path) —
@@ -334,12 +418,17 @@ class ChatSurface:
         body: bytes,
         writer: asyncio.StreamWriter,
     ) -> None:
-        if method == "OPTIONS" and (path == "/chat" or path.startswith(_LATE_REPLY_PATH_PREFIX)):
+        if method == "OPTIONS" and (
+            path == "/chat" or path.startswith(_LATE_REPLY_PATH_PREFIX) or path == _VOICE_TURNS_PATH
+        ):
             # A CORS preflight never carries the app's custom headers — answered token-free.
             await self._respond(writer, 204, None)
             return
         if method == "GET" and path.startswith(_LATE_REPLY_PATH_PREFIX):
             await self._handle_late_reply_get(path, headers, writer)
+            return
+        if method == "GET" and path == _VOICE_TURNS_PATH:
+            await self._handle_voice_turns_get(headers, writer)
             return
         if method != "POST" or path != "/chat":
             await self._respond(writer, 404, {"error": "not_found"})
@@ -373,6 +462,16 @@ class ChatSurface:
         else:
             await self._respond(writer, 200, {"status": "replied", "text": text})
 
+    async def _handle_voice_turns_get(
+        self, headers: dict[str, str], writer: asyncio.StreamWriter
+    ) -> None:
+        """``GET /chat/voice-turns`` (TK-280, DEC-60c) — guarded by the SAME token header check
+        as ``POST /chat``, identical 401 shape."""
+        if headers.get("x-wombat-chat-token") != self._token:
+            await self._respond(writer, 401, {"error": "unauthorized"})
+            return
+        await self._respond(writer, 200, self._broker.voice_turns_snapshot())
+
     async def _accept_message(self, text: str, writer: asyncio.StreamWriter) -> None:
         """The ONE egress point for an accepted message: register a broker future, THEN push onto
         the ``ChatSource`` (register-before-push, Q-110(d) ruling 4) — no other queue/enqueue
@@ -398,7 +497,10 @@ class ChatSurface:
         await self._respond(writer, 200, {"status": "replied", "text": reply_text})
 
     async def _respond(
-        self, writer: asyncio.StreamWriter, status: int, payload: dict[str, object] | None
+        self,
+        writer: asyncio.StreamWriter,
+        status: int,
+        payload: dict[str, object] | Sequence[object] | None,
     ) -> None:
         reason = _REASON_PHRASES.get(status, "OK")
         body = b"" if payload is None else json.dumps(payload).encode("utf-8")
@@ -419,6 +521,8 @@ __all__ = [
     "CHAT_REPLY_TIMEOUT_SECONDS",
     "LATE_SLOT_MAX_SIZE",
     "LATE_SLOT_TTL_SECONDS",
+    "VOICE_TURN_LEDGER_MAX_SIZE",
+    "VOICE_TURN_LEDGER_TTL_SECONDS",
     "ChatReplyBroker",
     "ChatSurface",
 ]

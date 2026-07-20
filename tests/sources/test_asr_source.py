@@ -38,6 +38,11 @@ behavior — proving the hook is a pure pass-through for anything the grammar do
 AC3 (degrade): ``LivePersona.set`` raising inside the hook logs ONE loud WARNING, still consumes
 the command (no ``SourceEvent``, file in ``processed/``), and the source keeps processing
 subsequent files; a raising ``speak`` degrades loud the same way, without blocking the apply.
+
+TK-280 (DEC-60c server half, EP-32) acceptance criteria — the ``turn_hook`` seam:
+
+AC3: ``turn_hook`` fires with ``(event_key, transcript, captured_at)`` for a non-command drop;
+``turn_hook=None`` (the default) is byte-identical; a command-consumed utterance never fires it.
 """
 
 from __future__ import annotations
@@ -644,4 +649,92 @@ async def test_command_consumed_utterance_emits_no_event(tmp_path: Path) -> None
     events = await source.poll()
 
     assert events == []
+    assert (drop_dir / "processed" / "note.wav").exists()
+
+
+# ----------------------------------------------------------------------------------- TK-280: AC3
+
+
+async def test_turn_hook_fires_with_event_key_transcript_captured_at_for_a_non_command_drop(
+    tmp_path: Path,
+) -> None:
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    audio_bytes = b"turn-hook-bytes"
+    (drop_dir / "note.wav").write_bytes(audio_bytes)
+    expected_event_key = hashlib.sha256(audio_bytes).hexdigest()
+
+    turn_calls: list[tuple[str, str, str]] = []
+
+    def turn_hook(event_key: str, transcript: str, captured_at: str) -> None:
+        turn_calls.append((event_key, transcript, captured_at))
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's the weather"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        turn_hook=turn_hook,
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert turn_calls == [(expected_event_key, "what's the weather", _NOW.isoformat())]
+    assert events[0].payload["captured_at"] == _NOW.isoformat()
+
+
+async def test_turn_hook_none_leaves_the_source_event_byte_identical(tmp_path: Path) -> None:
+    """AC3: turn_hook defaulting to None is a byte-identical boot -- the SAME payload as with a
+    (no-op-recording) turn_hook wired, aside from the hook simply never firing."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"no-hook-bytes")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's the weather"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "what's the weather",
+        "captured_at": _NOW.isoformat(),
+    }
+
+
+async def test_command_consumed_utterance_never_fires_turn_hook(tmp_path: Path) -> None:
+    """AC3: a command_hook-consumed utterance never reaches turn_hook -- the command_hook check
+    runs first and returns before the turn_hook call site."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"command-turn-bytes")
+    live_persona = _live_persona()
+    speak = _RecordingSpeak()
+    command_hook = make_persona_command_hook(live_persona, speak)
+
+    turn_calls: list[tuple[str, str, str]] = []
+
+    def turn_hook(event_key: str, transcript: str, captured_at: str) -> None:
+        turn_calls.append((event_key, transcript, captured_at))
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("be warmer"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=command_hook,
+        turn_hook=turn_hook,
+    )
+
+    events = await source.poll()
+
+    assert events == []
+    assert turn_calls == []
     assert (drop_dir / "processed" / "note.wav").exists()

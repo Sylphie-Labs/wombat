@@ -697,3 +697,129 @@ async def test_ac4_cancelled_future_resolve_evicts_the_oldest_entry_at_the_size_
     assert len(broker._late) == chat_surface.LATE_SLOT_MAX_SIZE
     assert ids[0] not in broker._late
     assert broker.poll_late("overflow-item") == "text"
+
+
+# --- TK-280 (DEC-60c server half): the voice-turn ledger + GET /chat/voice-turns -----------------
+
+
+def test_ac1_register_voice_turn_then_resolve_snapshot_shows_transcript_and_reply() -> None:
+    broker = ChatReplyBroker()
+    broker.register_voice_turn("voice-1", "buy milk", "2026-07-20T12:00:00+00:00")
+
+    before = broker.voice_turns_snapshot()
+    assert before == [
+        {
+            "id": "voice-1",
+            "transcript": "buy milk",
+            "captured_at": "2026-07-20T12:00:00+00:00",
+            "reply": None,
+        }
+    ]
+
+    broker.resolve("voice-1", "milk added to the list")
+
+    after = broker.voice_turns_snapshot()
+    assert after == [
+        {
+            "id": "voice-1",
+            "transcript": "buy milk",
+            "captured_at": "2026-07-20T12:00:00+00:00",
+            "reply": "milk added to the list",
+        }
+    ]
+    # A voice id is never in _pending/_late — the existing semantics stay byte-untouched.
+    assert "voice-1" not in broker._pending
+    assert "voice-1" not in broker._late
+
+
+def test_ac2_voice_turn_ledger_evicts_the_oldest_entry_at_the_size_cap() -> None:
+    broker = ChatReplyBroker()
+    ids = [f"voice-{i}" for i in range(chat_surface.VOICE_TURN_LEDGER_MAX_SIZE + 1)]
+    for item_id in ids:
+        broker.register_voice_turn(item_id, "hi", "2026-07-20T00:00:00+00:00")
+
+    assert len(broker._voice_turns) == chat_surface.VOICE_TURN_LEDGER_MAX_SIZE
+    assert ids[0] not in broker._voice_turns
+    assert ids[-1] in broker._voice_turns
+
+
+def test_ac2_voice_turn_ledger_expires_entries_past_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    broker = ChatReplyBroker()
+    broker.register_voice_turn("stale-voice", "hi", "2026-07-20T00:00:00+00:00")
+
+    monkeypatch.setattr(chat_surface, "VOICE_TURN_LEDGER_TTL_SECONDS", 0.0)
+
+    broker.register_voice_turn("fresh-voice", "hi", "2026-07-20T00:00:01+00:00")
+    assert "stale-voice" not in broker._voice_turns
+    assert "fresh-voice" in broker._voice_turns
+
+
+def test_ac3_resolve_for_an_unregistered_id_is_still_a_strict_noop() -> None:
+    """The unknown-id fall-through the voice-turn check is homed at stays a no-op for an id
+    this broker never saw anywhere (not _pending, not _late, not the voice ledger)."""
+    broker = ChatReplyBroker()
+    broker.resolve("nobody-home", "dropped")  # must not raise
+    assert broker.voice_turns_snapshot() == []
+
+
+async def test_ac1_get_voice_turns_requires_the_token_and_answers_the_snapshot(
+    tmp_path: Path,
+) -> None:
+    stack = await _start_stack(tmp_path)
+    try:
+        host, port = stack.surface.address
+        stack.broker.register_voice_turn(
+            "voice-x", "what's the weather", "2026-07-20T01:02:03+00:00"
+        )
+
+        # No token -> 401, identical shape to every other guarded route.
+        status, _headers, body = await _http_request(
+            host, port, method="GET", path="/chat/voice-turns"
+        )
+        assert status == 401
+        assert json.loads(body) == {"error": "unauthorized"}
+
+        status, headers, body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path="/chat/voice-turns",
+            headers={"X-Wombat-Chat-Token": _TOKEN},
+        )
+        assert status == 200
+        assert headers.get("access-control-allow-origin") == "*"
+        assert json.loads(body) == [
+            {
+                "id": "voice-x",
+                "transcript": "what's the weather",
+                "captured_at": "2026-07-20T01:02:03+00:00",
+                "reply": None,
+            }
+        ]
+
+        stack.broker.resolve("voice-x", "it's sunny")
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path="/chat/voice-turns",
+            headers={"X-Wombat-Chat-Token": _TOKEN},
+        )
+        assert json.loads(body)[0]["reply"] == "it's sunny"
+    finally:
+        await _stop_stack(stack)
+
+
+async def test_ac1_voice_turns_options_preflight_is_answered_without_a_token(
+    tmp_path: Path,
+) -> None:
+    stack = await _start_stack(tmp_path)
+    try:
+        host, port = stack.surface.address
+        status, headers, _body = await _http_request(
+            host, port, method="OPTIONS", path="/chat/voice-turns"
+        )
+        assert status == 204
+        assert headers.get("access-control-allow-origin") == "*"
+    finally:
+        await _stop_stack(stack)

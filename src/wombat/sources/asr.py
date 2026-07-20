@@ -65,6 +65,16 @@ event_key)``, returns nothing, and the ``SourceEvent`` is still built and emitte
 either way (AC2) — this is a pure side effect, not a branch. The hook itself
 (``sources.bootstrap.make_persona_feedback_hook``) is documented to NEVER raise (the factory
 guards the call); this module adds no try/except of its own, mirroring the TK-212 pattern.
+
+TK-280 (DEC-60c server half, EP-32): an optional ctor kwarg ``turn_hook`` gives ``ASRSource`` a
+side-channel feed into the composition root's voice-turn ledger (``chat.surface.
+ChatReplyBroker.register_voice_turn``), mirroring the TK-212/TK-213 optional-hook precedent
+verbatim: ``None`` (the default) leaves this module byte-identical to pre-TK-280 behavior. When
+set, it fires in ``_process_one`` for EVERY non-command transcript — after the ``command_hook``
+check, and NEVER for a command-consumed utterance (same gate ``feedback_hook`` sits behind) —
+with ``(event_key, transcript, captured_at)``. Like ``command_hook``/``feedback_hook``, the
+factory that builds it (``sources.bootstrap``, composition root) is documented to never raise;
+this module adds no try/except of its own around the call.
 """
 
 from __future__ import annotations
@@ -145,6 +155,7 @@ class ASRSource:
         clock: Callable[[], datetime] = _utc_now,
         command_hook: Callable[[str], bool] | None = None,
         feedback_hook: Callable[[str, str], None] | None = None,
+        turn_hook: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.poll_interval_seconds = poll_interval_seconds
         self._drop_dir = drop_dir
@@ -152,6 +163,7 @@ class ASRSource:
         self._clock = clock
         self._command_hook = command_hook
         self._feedback_hook = feedback_hook
+        self._turn_hook = turn_hook
 
     async def start(self) -> None:
         """No lifecycle setup needed — the injected transcriber is already constructed."""
@@ -216,8 +228,8 @@ class ASRSource:
         TK-282 (DEC-60d): ONLY the pure ``transcriber.transcribe(path)`` call runs off the event
         loop, via ``asyncio.to_thread`` — this is what kills the proven ~11s event-loop freeze
         from synchronous whisper decode. ``read_bytes``/``sha256``, ``command_hook``,
-        ``feedback_hook``, and ``_safe_move`` all stay ON the event loop: asyncio primitives and
-        the ``LivePersona`` hooks are not thread-safe."""
+        ``feedback_hook``, ``turn_hook``, and ``_safe_move`` all stay ON the event loop: asyncio
+        primitives and the ``LivePersona``/``ChatReplyBroker`` hooks are not thread-safe."""
         started = time.monotonic()
         try:
             raw = path.read_bytes()
@@ -247,12 +259,19 @@ class ASRSource:
             # TK-213: a pure side effect — never consumes, never changes the SourceEvent below.
             self._feedback_hook(transcript, event_key)
 
+        captured_at = self._clock().isoformat()
+        if self._turn_hook is not None:
+            # TK-280: a pure side effect (like feedback_hook above) — never consumes, never
+            # changes the SourceEvent below. Never fires for a command-consumed utterance (the
+            # early return above already left).
+            self._turn_hook(event_key, transcript, captured_at)
+
         self._safe_move(path, _PROCESSED_DIRNAME)
         payload = {
             "item_kind": "chat",
             "voice_turn": True,
             "transcript": transcript,
-            "captured_at": self._clock().isoformat(),
+            "captured_at": captured_at,
         }
         self._log_outcome(event_key, "processed", time.monotonic() - started)
         return SourceEvent(event_key=event_key, payload=payload)

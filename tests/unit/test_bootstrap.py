@@ -6,6 +6,7 @@ import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, time
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -20,6 +21,7 @@ from cogworx.testing.doubles import InMemoryGraphStore, InMemoryJournal, InMemor
 from google.auth.exceptions import RefreshError
 from pydantic import SecretStr
 
+import wombat.sources.bootstrap as sources_bootstrap_module
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
 from wombat.bootstrap import (
@@ -30,6 +32,7 @@ from wombat.bootstrap import (
     reset_engine,
 )
 from wombat.config import ConfigurationError, WombatConfig, load_config
+from wombat.domain.item_identity import idempotency_key as derive_key
 from wombat.external_store import ExternalItemStore
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
@@ -260,6 +263,107 @@ def test_assemble_runtime_chat_source_is_the_same_instance_registered_into_sourc
     assert bundle.chat_source is not None
     assert bundle.chat_source is bundle.chat_surface._source
     assert bundle.chat_source.wake is None  # unwired at assembly time -- _drive_and_serve's job
+
+
+# --- TK-280 (DEC-60c server half): the ASR turn_hook -> voice-turn ledger wiring ------------------
+
+
+class _FakeVoiceTranscriber:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def transcribe(self, path: Path) -> str:
+        return self._text
+
+
+async def test_assemble_runtime_wires_asr_turn_hook_into_the_voice_turn_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-280: with chat enabled, ASRSource's turn_hook registers a real drop-dir transcript into
+    the SAME broker's voice-turn ledger, under the item_id derived via idempotency_key('asr',
+    event_key) -- the EXACT canonical derivation sources/registry.py's own enqueue path uses
+    (ASRSource.id == 'asr'), proving the composition-root closure and the registry agree."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's the weather"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"turn-hook-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_chat_handshake_file": str(tmp_path / "chat_handshake.json"),
+            "wombat_asr_drop_dir": str(drop_dir),
+        }
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.chat_surface is not None
+    broker = bundle.chat_surface._broker
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+
+    assert len(events) == 1
+    expected_id = derive_key("asr", events[0].event_key)
+    assert broker.voice_turns_snapshot() == [
+        {
+            "id": expected_id,
+            "transcript": "what's the weather",
+            "captured_at": events[0].payload["captured_at"],
+            "reply": None,
+        }
+    ]
+
+
+def test_assemble_runtime_asr_turn_hook_is_none_when_chat_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-280: chat disabled (blank handshake path, broker None) -> ASRSource's turn_hook stays
+    None -- a byte-identical ASRSource, no ledger side effect wired at all."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WOMBAT_CHAT_HANDSHAKE_FILE", raising=False)
+    captured_kwargs: dict[str, Any] = {}
+
+    class _SpyASRSource:
+        id: str = "asr"
+
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+            self.poll_interval_seconds = kwargs.get("poll_interval_seconds", 1.0)
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def poll(self) -> list[Any]:
+            return []
+
+    monkeypatch.setattr(sources_bootstrap_module, "ASRSource", _SpyASRSource)
+    monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
+
+    op = load_operating_params()
+    config = _config().model_copy(update={"wombat_asr_drop_dir": str(tmp_path)})
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+
+    assert bundle.chat_surface is None  # chat disabled
+    assert captured_kwargs["turn_hook"] is None
 
 
 # --- TK-46 (Q-85): wombat.dream registers UNCONDITIONALLY, connection-free -----------------------
