@@ -5928,6 +5928,172 @@ nodes:
     files_in_scope:
       - scripts/wombat-console.ps1
       - scripts/restart-wombat.ps1
+  - id: TK-278
+    kind: ticket
+    parent: EP-29
+    title: "Voice transcripts are CHAT turns - ASRSource stamps item_kind:'chat' + voice_turn:true on every non-command transcript payload, so the gate rates it CHAT and the DEC-57 always-answer routing (compose, no pending-set absorption) applies by construction (DEC-60a)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-60(a). Live-proven defect (runtime-20260720-152408.log, 15:24:41): every ASR transcript hits the gate as item_kind='generic' and is hold-absorbed into the PendingSet - never composed, never in the pane, zero TTS - the exact ISS-23 structural-absorption pattern; DEC-57's always-answer ruling keys on ItemKind.CHAT, which ASRSource never emitted (its payload has no item_kind key, so the Q-41 total fallback resolves GENERIC). Fix at the payload seam: ASRSource._process_one builds the SourceEvent payload as {'item_kind': 'chat', 'voice_turn': True, 'transcript': ..., 'captured_at': ...} - the ChatSource 'item_kind' key precedent (chat/surface.py builds exactly this key for typed sends). Persona command interception (TK-212) and feedback hook (TK-213) evaluate BEFORE the payload is built and stay byte-identical - a matched voice command still never enqueues (DEC-35). Gate scoring/rating/learning on chat items untouched (DEC-57d - chat keeps the GENERIC EventClass mapping). Verify at build the exact payload-to-ItemKind parse site the drain path uses (the gate stage side) and pin the whole route with a real-gate test: an asr-shaped QueueItem rates as ItemKind.CHAT, a held rating routes to compose carrying held_chat=True instead of the terminal hold_report ack (DEC-57a), and the pending set gains nothing (DEC-57c)."
+    complexity_budget: "Payload-dict construction change in _process_one + docstring correction (the module docstring's 'no event_class key is ever stamped' prose updates honestly) + tests. No new EventClass, no gate/stage code changes, no provenance machinery."
+    acceptance_criteria:
+      - given: "ASRSource processes a transcript that no command_hook consumes"
+        when: "the SourceEvent is built"
+        then: "its payload carries item_kind 'chat' and voice_turn true alongside the existing transcript/captured_at keys; a command-consumed utterance still emits NO event (TK-212 byte-identical); the feedback hook still fires as a pure side effect (TK-213 byte-identical)."
+      - given: "a QueueItem with an asr-shaped payload (item_kind 'chat', voice_turn true, transcript text) drained through the REAL gate stage with a rating below the urgency threshold"
+        when: "the gate decides and review_or_speak consumes the decision"
+        then: "the decision carries item_kind=chat, the item routes onward to compose with held_chat=True (never the terminal hold_report ack), and the durable pending set gains NO entry - the 15:24:41 absorption repro is dead."
+      - given: "the surrounding seams"
+        when: "the change lands"
+        then: "gate scoring/EventClass mapping, ReviewOrSpeakStage, and the queue/registry are byte-untouched (diff confined to asr.py payload construction + docstrings + tests)."
+    non_goals:
+      - "No new EventClass and no urgency change - DEC-57(d) stands; the routing key is the whole fix."
+      - "No speak-path change here - the spoken-reply half is TK-279."
+      - "No PTT-vs-manual-Record provenance split - every non-command drop-dir utterance is operator speech addressed to wombat (DEC-60 alternatives)."
+    depends_on:
+      - TK-277
+      - TK-272
+    files_in_scope:
+      - src/wombat/sources/asr.py
+      - tests/sources/test_asr_source.py
+      - tests/unit/test_review_or_speak.py
+  - id: TK-279
+    kind: ticket
+    parent: EP-30
+    title: "Voice-originated replies SPEAK even when held - the voice_turn marker threads through the held-chat wire (review_or_speak -> compose_request -> composed_output) and speech_shape treats held_chat+voice_turn as the FULL speak path (one shaping call + TTS, DEC-55 discipline verbatim); typed held chat stays quiet text-only byte-identically (DEC-60b)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-60(b), superseding DEC-57(b) IN PART for voice-originated turns only. Jim's directive is a hands-free conversation - the reply to a SPOKEN turn must be spoken back; DEC-57's quiet-held rule was minted for TYPED chat, where quiet text is the honest channel mirror. Wire shape: ReviewOrSpeakStage reads voice_turn from the held CHAT item's payload and threads it as an additive optional bool (default False, plain-JSON-native per the Q-49 wire rule) alongside held_chat on the compose_request and composed_output artifact (stages/artifacts.py accessors, the TK-272 held_chat pattern byte-for-byte). SpeechShapeStage's pass-through condition changes from 'not voice_enabled or not adapter_present or held_chat' to 'not voice_enabled or not adapter_present or (held_chat and not voice_turn)' - a held voice turn makes the ONE speech-shaping model call and produces a real speech artifact, so SpeakSink's EXISTING speech-text-present branch speaks it (sinks/speak.py expected ZERO functional diff - verify, do not change); voice disabled or no adapter still honestly degrades to text-only. Typed held chat (held_chat=True, voice_turn absent/False) stays quiet text-only BYTE-IDENTICALLY; surfaced chat unchanged in both origins. The text reply keeps its full existing chat_reply delivery either way - the pane gets composed text, the ear gets the DEC-55 shaped summary."
+    complexity_budget: "One threaded optional bool through the existing held_chat wire + one condition change in speech_shape + tests. No new stage, no SpeakSink changes, no persona/mouth changes, no config."
+    acceptance_criteria:
+      - given: "a held-rated CHAT item whose payload carries voice_turn true, voice enabled, adapter present (recording fakes)"
+        when: "the drain path runs review_or_speak -> compose -> chat_reply -> speech_shape -> speak"
+        then: "speech_shape makes exactly ONE shaping model call, the speech artifact carries real speech text, and SpeakSink speaks it (adapter received audio-shaping output) - while the composed TEXT reply still delivers via broker.resolve unchanged."
+      - given: "a held-rated CHAT item WITHOUT voice_turn (a typed send)"
+        when: "the same path runs"
+        then: "byte-identical to today - ZERO speech_shape model calls, speech_text None, no TTS, quiet Done (spoken=False, degraded=False); the TK-272 tests still pass verbatim."
+      - given: "a voice_turn held item with voice disabled OR no adapter"
+        when: "speech_shape runs"
+        then: "the existing voice-off pass-through fires (no model call, no TTS) - the reply is honestly text-only, never degraded-marked."
+      - given: "older artifacts without the voice_turn key"
+        when: "the accessors read them"
+        then: "voice_turn resolves False (additive-optional, plain-JSON-native) - no artifact-compat break."
+    non_goals:
+      - "No change for surfaced chat (already full speak path) and no change to any non-chat kind's hold-silence (DEC-57e verbatim)."
+      - "No verbatim-composed-text speech - the spoken reply is the DEC-55 shaped summary, all its failure-means-silence rules verbatim."
+      - "No SpeakSink logic changes - its speech-artifact branches already carry both outcomes; verify zero-diff."
+    depends_on:
+      - TK-278
+      - TK-272
+      - TK-267
+    files_in_scope:
+      - src/wombat/stages/review_or_speak.py
+      - src/wombat/stages/artifacts.py
+      - src/wombat/stages/speech_shape.py
+      - tests/unit/test_review_or_speak.py
+      - tests/stages/test_speech_shape.py
+      - tests/sinks/test_speak_sink.py
+  - id: TK-282
+    kind: ticket
+    parent: EP-29
+    title: "Conversation-grade drop-dir pickup - DEFAULT_ASR_POLL_INTERVAL_SECONDS drops 300 -> 2.0 (asr only), the blocking transcribe() call moves off the event loop via asyncio.to_thread, and the scan gets never-silent logging (files-found count + per-file outcome with duration) (DEC-60d)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-60(d). Live evidence: two operator WAVs (15:24:48/51) sat unprocessed in the drop root while the log stayed silent - at best the 300s scan beat makes PTT structurally deaf for conversation, at worst something froze quietly with zero log evidence either way. Three changes. (1) sources/bootstrap.py DEFAULT_ASR_POLL_INTERVAL_SECONDS = 2.0 - a non-recursive stat-scan of a local directory every 2s is trivially cheap; gmail/gcal/feedback stay 300s (their batch cadence is design, DEC-56a untouched - the 5.0s pump beat, source-proven in Q-117, already bounds enqueue-to-drain, so NO wake seam is needed). (2) ASRSource._process_one's transcriber.transcribe(path) call runs via await asyncio.to_thread(...) so a whisper CPU decode never freezes the event loop (the boot backlog provably blocked the whole runtime for ~11s); _process_one becomes async, and EVERYTHING ELSE - read_bytes/hash, command/feedback/turn hooks, file moves - stays ON the loop (asyncio primitives and LivePersona hooks are not thread-safe; only the pure transcribe call crosses). (3) Never-silent scan: when candidates are found, ONE INFO line naming the count; per file, ONE INFO line naming the event_key prefix, processed/failed outcome, and transcribe duration - so a dead or wedged scan loop is diagnosable from the per-boot log custody (TK-259) instead of invisible. Empty scans stay silent (2s beats must not spam)."
+    complexity_budget: "One constant change, one to_thread wrapper (with the async ripple through poll's call), two log lines, tests. No watchdog/filesystem-events dependency, no wake seam, no config field for the interval."
+    acceptance_criteria:
+      - given: "the shipped defaults"
+        when: "build_source_registry wires ASRSource"
+        then: "the asr poll interval is 2.0s while gmail/gcal/feedback remain 300s (asserted on the constructed sources)."
+      - given: "a poll with two audio files and a transcriber whose transcribe records its executing thread"
+        when: "poll() runs"
+        then: "transcribe executed OFF the event loop thread; hooks and file moves executed ON the loop thread; both files processed with the same success/failed/move semantics as today (existing per-file degrade tests still green)."
+      - given: "a poll finding N>0 files"
+        when: "it completes"
+        then: "caplog carries one found-count INFO line and one per-file outcome INFO line naming outcome + duration; an empty scan logs NOTHING at INFO."
+    non_goals:
+      - "No filesystem-watcher dependency - a 2s local stat-scan is the whole mechanism (DEC-60 alternatives)."
+      - "No drain-wake extension to asr - the 5.0s pump beat already bounds drain latency; DEC-56a's exclusion stands."
+      - "No interval config surface - a constant, like every other source default."
+    depends_on:
+      - TK-278
+    files_in_scope:
+      - src/wombat/sources/asr.py
+      - src/wombat/sources/bootstrap.py
+      - tests/sources/test_asr_source.py
+      - tests/sources/test_bootstrap.py
+  - id: TK-280
+    kind: ticket
+    parent: EP-32
+    title: "Voice-turn ledger + GET /chat/voice-turns - ChatReplyBroker gains a bounded voice-turn ledger (transcript registered at ASR time via a new optional ASRSource turn_hook; chat_reply's existing resolve parks the reply into it); the chat surface serves a token-guarded snapshot route so the pane can render voice turns (DEC-60c)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-60(c). Today the WAV path bypasses the pane entirely - nothing ever shows the operator's spoken words or the reply in the chat pane. Server side, all in the runtime process. (1) ChatReplyBroker (chat/surface.py) gains a BOUNDED voice-turn ledger (the TK-270 late-slot discipline: size cap ~32 oldest-evicted + TTL ~3600s): register_voice_turn(item_id, transcript, captured_at) creates an entry with reply=None; resolve(item_id, text) - the call chat_reply already makes for EVERY composed item - additionally parks text into a matching ledger entry (existing pending/late-slot semantics byte-untouched; a voice item_id is never in _pending so the no-op fall-through is where the ledger check homes). (2) NEW GET /chat/voice-turns, guarded by the SAME X-Wombat-Chat-Token header (401 shape + CORS preflight per the existing routes), answers a JSON snapshot of live ledger entries {id, transcript, captured_at, reply: text|null}; the server prunes by cap/TTL only - the client dedupes by id (snapshot-not-pop, so transcript and reply can render at different poll ticks without fussy per-field pop state). (3) ASRSource gains an optional turn_hook ctor kwarg (the TK-212/213 hook precedent verbatim: default None = byte-identical behavior, documented never-raise at the factory) fired in _process_one for every non-command transcript with (event_key, transcript, captured_at). (4) Wiring: bootstrap/_maybe_register_asr accepts the hook; the composition root builds it to derive the canonical item id via idempotency_key('asr', event_key) - MUST equal the id chat_reply resolves with (pin with a test through the real derivation) - and register on the bundle's broker; follow the chat_source late-bind precedent for whatever wiring-time seam is needed (broker custody verified at build). CON-1: ids and ledger fields are surface-side only, never model-visible."
+    complexity_budget: "One ledger dict + two methods + one HTTP route on the existing surface, one hook kwarg on ASRSource, wiring + tests. No websocket/SSE, no DB persistence (process-lifetime ledger like the late slot), no app changes (TK-281)."
+    acceptance_criteria:
+      - given: "a registered voice turn and a later broker.resolve(item_id, text) from chat_reply"
+        when: "GET /chat/voice-turns is called (correct token)"
+        then: "the snapshot carries the entry with transcript AND reply text; before the resolve it carried reply null; a wrong/absent token gets the existing 401 shape; typed-chat register/resolve/discard/poll_late semantics are byte-identical (existing surface tests green)."
+      - given: "the ledger at its size cap plus TTL-expired entries"
+        when: "registration and pruning run"
+        then: "oldest entries evict and expired entries vanish from snapshots - bounded memory by construction."
+      - given: "ASRSource with the turn_hook wired through bootstrap and a real drop-dir file"
+        when: "the file processes"
+        then: "the hook fires with (event_key, transcript, captured_at), the derived ledger item_id equals idempotency_key('asr', event_key) - the SAME id the drained item's chat_reply resolve carries (proven end-to-end through the real derivation); hook None = byte-identical ASRSource; a command-consumed utterance never registers a turn."
+    non_goals:
+      - "No pane work - TK-281 consumes the route."
+      - "No persistence/chat-log store - process-lifetime bounded ledger, the late-slot posture (a chat history store is a separate future directive)."
+      - "No push transport - the pane polls, per the DEC-56 alternatives precedent."
+    depends_on:
+      - TK-278
+      - TK-282
+      - TK-270
+    files_in_scope:
+      - src/wombat/chat/surface.py
+      - src/wombat/sources/asr.py
+      - src/wombat/sources/bootstrap.py
+      - src/wombat/runtime.py
+      - tests/chat/test_chat_surface.py
+      - tests/sources/test_asr_source.py
+      - tests/sources/test_bootstrap.py
+  - id: TK-281
+    kind: ticket
+    parent: EP-32
+    title: "Chat pane renders voice turns - the pane polls GET /chat/voice-turns (~3s while mounted, abort discipline), appends unseen transcripts as the operator's message with a visible voice marker, and appends replies as they land; poll failure never breaks typed chat (DEC-60c app half)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-60(c) app half - Jim verbatim: the button isn't 'appending text to the chat pane'. app/src/chat.ts gains getVoiceTurns() over the existing token/abort fetch discipline (TK-266 AbortController precedent; the same loopback port/token custody as sendChat/pollChatReply). ChatPane polls it on a ~3s interval while mounted (interval + in-flight abort cleared on unmount), keeps a seen-set keyed by turn id, and appends: an unseen transcript renders as the OPERATOR's message with a visible voice marker (mic glyph/label per the DEC-39 token discipline - theme tokens, never hardcoded color); a turn whose reply text has landed appends the reply as wombat's message exactly like a typed reply renders (dedupe so it appends once). Ordering is arrival-order append - honest and simple. A failed/aborted poll logs nothing to the user and NEVER disturbs the typed-chat flow (send/held/late machinery byte-identical); polling silently resumes next tick. Zero analytics (DEC-29)."
+    complexity_budget: "One api function + one poll effect + message-append logic + tests. No chat-history persistence, no reordering/threading UI, no settings surface."
+    acceptance_criteria:
+      - given: "a mounted ChatPane and a mocked voice-turns endpoint that grows a transcript then its reply across ticks"
+        when: "the poll runs"
+        then: "the transcript appends ONCE as the operator's message with the visible voice marker, the reply appends ONCE as wombat's message when it lands, and re-polls of the same snapshot append nothing (seen-set dedupe)."
+      - given: "the endpoint erroring or timing out"
+        when: "polls fail repeatedly"
+        then: "typed chat send/held/reply flows are byte-identical (existing ChatPane tests green) and the pane shows no error spam; polling resumes on later ticks."
+      - given: "unmount"
+        when: "the pane unmounts mid-poll"
+        then: "the interval is cleared and any in-flight fetch aborted (TK-266 discipline) - no state updates after unmount."
+    non_goals:
+      - "No chat history persistence across app restarts - the pane renders what the process-lifetime ledger serves."
+      - "No voice-turn UI beyond the marker + normal message rows - Jim owns visual direction (DEC-47b)."
+    depends_on:
+      - TK-280
+    files_in_scope:
+      - app/src/chat.ts
+      - app/src/chat.test.ts
+      - app/src/components/ChatPane.tsx
+      - app/src/components/ChatPane.test.tsx
   - id: TK-277
     kind: ticket
     parent: EP-31
@@ -7752,6 +7918,15 @@ governance:
       consequences: "(+) The live break is fixed at its root with a one-line seam change - deterministic on every box regardless of GPU/driver state, fully consistent with the local-only ASR posture (CST-2) and the laptop v1 deployment. (+) The single-constructor seam keeps a future GPU option a one-line, DEC-supersedable change. (-) A box WITH a working CUDA runtime forgoes GPU speedup - accepted; v1 workloads are short PTT clips and daily-cadence composition, where whisper-base CPU latency is immaterial. Realized by TK-277.",
       alternatives: ["Try-CUDA-then-fallback-to-CPU at construction with a loud WARNING (rejected - CTranslate2's CUDA failure is LAZY, raising at first encode rather than at WhisperModel construction, so an honest construction-time fallback requires probe-inference machinery; complexity without a v1 payoff, and a per-transcribe fallback would retry-and-fail on every file)", "App-editable/config device field (rejected - speculative configuration no ticket asked for; the single seam keeps it cheap to add later under a superseding DEC)", "Install the CUDA 12 runtime on the operator box (rejected as the fix - an operator-environment dependency for what should be deterministic-local v1 behavior)"],
       links: ["DEC-58","TK-277","TK-162","EP-31","CST-2","Q-97"] }
+  - { id: ISS-25, type: issue, status: resolved, scope: EP-29, date_raised: "2026-07-20", date_updated: "2026-07-20", title: "LIVE DEFECT PAIR, Jim-reported + log-proven - push-to-talk records and transcribes but wombat never converses. (A) ASR transcripts are structurally gate-absorbed (runtime-20260720-152408.log 15:24:41 - three asr items rated item_kind='generic', action='hold', absorbed into the PendingSet; never composed, never in the pane, zero TTS - the exact ISS-23 pattern, because the DEC-57 always-answer routing keys on ItemKind.CHAT and ASRSource's payload carries no item_kind key, falling back GENERIC). (B) post-boot drop-dir captures are not picked up promptly - two live WAVs (15:24:48/51, ~40s after boot) sat unprocessed in the drop root with the log silent, and even nominally the 300s asr scan beat makes hands-free conversation structurally deaf; the boot backlog transcription also provably froze the whole event loop for ~11s (synchronous whisper decode inside async poll). Jim verbatim - 'the button isn't actually appending text to the chat pane or actually speaking to wombat at all. I should be able to have a conversation with wombat with STT/TTS only when I'm doing other things'",
+      resolution: "Converted to DEC-60 - voice turns ARE conversation. Every non-command ASR transcript becomes an ItemKind.CHAT turn with a voice_turn origin marker (the DEC-57 always-answer rule applies by construction); voice-originated replies SPEAK even when held (supersedes the quiet-held clause IN PART for voice origin only - the reply channel mirrors the ask channel); the transcript + reply surface in the chat pane via a bounded broker voice-turn ledger + token-guarded GET /chat/voice-turns the pane polls; pickup becomes conversation-grade (2.0s asr scan, transcribe off-loop via to_thread, never-silent scan logging). Carried by TK-278 -> TK-279 -> TK-282 -> TK-280 -> TK-281. The two live WAVs are re-verified after land; if the new logging proves the scan loop was DEAD rather than slow-and-quiet, that becomes a new ISS with hard evidence.",
+      links: ["DEC-60","DEC-57","DEC-58","DEC-59","ISS-23","TK-278","TK-279","TK-280","TK-281","TK-282","EP-29","EP-32"] }
+  - { id: DEC-60, type: decision, status: accepted, scope: EP-29, date_raised: "2026-07-20", converted_from: "ISS-25", title: "Voice turns ARE conversation (JIM DIRECTIVE, verbatim intent honored) - every non-command ASR transcript is an ItemKind.CHAT turn carrying a voice_turn origin marker; a voice-originated reply is SPOKEN even when gate-held (supersedes the DEC-57 quiet-held clause IN PART, exactly for voice-originated turns - the reply channel mirrors the ask channel); the transcript and reply render in the chat pane via a bounded voice-turn ledger + token-guarded GET; drop-dir pickup becomes conversation-grade (2.0s scan, off-loop transcription, never-silent scan logging); gate spine, DEC-55 speech-summary discipline, and DEC-56 wake exclusions all stand",
+      context: "Jim, 2026-07-20, verbatim - 'the button isn't actually appending text to the chat pane or actually speaking to wombat at all. I should be able to have a conversation with wombat with STT/TTS only when I'm doing other things.' ISS-25 evidence - transcripts enter as GENERIC (no item_kind key in ASRSource's payload; Q-41 fallback) and are hold-absorbed (the ISS-23 class, one source over); nothing echoes the transcript or reply into the pane (the WAV path bypasses the UI entirely); the 300s asr scan + synchronous whisper decode on the event loop make the pipeline structurally deaf and freeze-prone. Source-verified seams - chat/surface.py builds typed sends as payload {'item_kind' 'chat'} with item_id = idempotency_key(source_id, event_key), the SAME canonical derivation ASRSource's sha256 event keys ride; chat_reply already calls broker.resolve(item_id, text) for EVERY composed item (no-op for unknown ids); speech_shape's held-chat branch is a clean pass-through condition; the pump beat is 5.0s (Q-117 source-proven), so drain latency needs NO new wake.",
+      decision: "(a) ROUTING (TK-278) - ASRSource stamps every non-command transcript payload with item_kind 'chat' + voice_turn true; the DEC-57 always-answer + no-pending-absorption clauses then apply by construction; DEC-35/DEC-36 pre-queue command/feedback interception and the gate scoring/EventClass mapping byte-untouched. (b) SPOKEN REPLIES (TK-279) - the voice_turn bool threads the existing held-chat wire (additive optional, Q-49 plain-JSON); speech_shape treats held+voice_turn as the FULL speak path (one DEC-55 shaping call + TTS via the speech artifact; all failure-means-silence rules verbatim); typed held chat stays quiet text-only byte-identically; surfaced chat unchanged. Rationale - DEC-57 ruled chat SOLICITED and gave the gate the interruption channel; answering ALOUD what was asked ALOUD is the solicited response on the requesting channel, not an interruption; the gate keeps full voice authority over everything unsolicited. (c) PANE ECHO (TK-280 + TK-281) - ChatReplyBroker gains a bounded voice-turn ledger (the TK-270 cap+TTL discipline) registered at transcript time via a new optional ASRSource turn_hook (TK-212/TK-213 precedent; the composition root derives the canonical item id, provably equal to what chat_reply resolves); chat_reply's existing resolve parks the reply; NEW token-guarded GET /chat/voice-turns snapshot; ChatPane polls ~3s while mounted and renders the transcript as the operator's message with a visible voice marker plus the reply when landed; ids/ledger never model-visible (CON-1). (d) CONVERSATION-GRADE PICKUP (TK-282) - DEFAULT_ASR_POLL_INTERVAL_SECONDS 300 -> 2.0 (asr only; gmail/gcal/feedback keep 300; the DEC-56 no-wake-for-asr exclusion stands - the 5.0s pump beat bounds enqueue-to-drain); the transcribe() call moves off-loop via asyncio.to_thread (hooks/moves stay on-loop - asyncio primitives and LivePersona are not thread-safe); found-files + per-file outcome INFO logging (empty scans silent). (e) LIVENESS HONESTY - the two stranded 15:24 WAVs are re-driven after land; a provably dead scan loop becomes a NEW ISS with the new logging as evidence, never hand-waved.",
+      consequences: "(+) The hands-free loop Jim asked for exists end-to-end - hold PTT -> transcript in the pane as your message -> composed text reply in the pane -> shaped summary spoken; worst-case machine latency ~2s pickup + decode + 5s beat + compose/shape/TTS. (+) The ISS-23 absorption class is now closed for BOTH chat origins. (+) Typed chat semantics, gate spine, DEC-55 and DEC-56 rulings all byte-preserved. (-) A voice reply speaks even when the gate scored the turn low - accepted by design (solicited symmetry; wombat_voice_enabled remains the operator's off switch). (-) One more payload routing key, one hook, one ledger + route, one poll loop - each on an existing named precedent. (-) 2s scan beats cost negligible local stat calls all day - accepted for a conversation surface.",
+      alternatives: ["Extend the DrainWake to asr enqueue (rejected - the 5.0s pump beat already bounds drain latency, source-proven in Q-117; the DEC-56 exclusion survives intact rather than superseded for zero user-visible gain)", "Filesystem-watcher (watchdog) for instant pickup (rejected - a native/threaded dependency to beat a 2s stat-scan of a local dir; nothing observable improves)", "Renderer-side transcript echo at capture time (rejected - transcription is Python-side; the renderer has no transcript and a second transcription channel would fork the DEC-58 single-path design)", "A voice-only websocket/SSE push (rejected - the DEC-56 polling-a-token-guarded-GET precedent covers it; a new transport for the same data)", "Only PTT-originated WAVs become chat while manual Record stays generic (rejected - the drop dir's only producers are operator speech addressed to wombat; a provenance split adds plumbing for a distinction without a difference)", "Keep held voice replies quiet like typed (rejected - it is the defect as experienced; Jim spoke aloud and wombat must answer aloud; the DEC-57 solicited-exchange thesis itself extends the channel symmetry)"],
+      links: ["ISS-25","DEC-57","DEC-55","DEC-56","DEC-58","DEC-59","TK-278","TK-279","TK-280","TK-281","TK-282","TK-212","TK-270","TK-272","CON-1","Q-97","Q-117","EP-29","EP-30","EP-32"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -8084,3 +8259,4 @@ changelog:
   - { date: "2026-07-20", version: "2.126", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-276 DONE - BOARD RE-CLOSES 193/193 - DEC-58(a)/(b)/(e) hold-to-talk listener LANDS (EP-32, closing the v2.124 push-to-talk pair). NEW app/src/ptt.ts - pure parseBinding/isEditableTarget, a module-level single-capture-at-a-time latch (acquireCaptureLatch/releaseCaptureLatch, owners 'ptt'|'manual'), and usePushToTalk() - a self-contained hook (own getSettings fetch, AudioPanel's own-fetch style) installing document keydown/keyup + mousedown/mouseup listeners ONLY for a non-empty wombat_ptt_binding, driving MicCapture.start()/stop() through the EXISTING saveCapture drop-dir path byte-untouched, returning {active, degraded}. All DEC-58(e) guards land with visible truths - event.repeat never restarts capture; an editable-target press is IGNORED (typing in chat never opens the mic); the shared latch defers to a manual Record session (AudioPanel acquires/releases 'manual' around its session - its Stop state is the visible reason); unbound installs NO listeners; drop-dir-not-configured surfaces via degraded. ADDITIVE announcePttBinding() so TK-275's Set-push-to-talk persist updates the live App-level binding immediately (no reload; the existing no-restart-notice test stands). Mounted ONCE in App.tsx with a fixed-position recording/degrade indicator per the DEC-58(f) always-visible-indicator posture. audio.ts and components/index.ts sat in files_in_scope but needed ZERO diff (MicCapture consumed as-built) - narrower than scoped, recorded not silent. Builder self-ran the full bar green - npx vitest run 27 files / 303 tests (incl. ptt.test.ts's 12 and the new AudioPanel latch-defer AC2 case); tsc clean; uv run pytest -q 1683 passed / 93 pg-gated skips (Python untouched); ruff clean; mypy Success 334 files. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - one Opus review audits the whole TK-275+TK-276 batch, then the operator ear-checks live hold-to-talk end-to-end (hold binding, speak, release, transcription arrives)." }
   - { date: "2026-07-20", version: "2.127", by: "architect (live-break routed - fix shape decided within authority)", change: "DEC-59 ACCEPTED + TK-277 MINTED (EP-31; board 193/194) - LIVE ASR BREAK, Jim-diagnosed: every voice-drop transcription raises RuntimeError cublas64_12.dll-not-found inside CTranslate2, because FasterWhisperTranscriber constructs WhisperModel with default device='auto', CUDA gets auto-selected on the target Windows box, the CUDA 12 runtime DLLs are absent, and CTranslate2's CUDA init is LAZY (constructor succeeds, first encode raises) - so select.py's construction-failure degrade never fires and ASRSource's per-file handler moves EVERY capture to failed/, silently severing the just-landed DEC-58 push-to-talk path at the transcription hop (mic + drop-dir work, nothing ever transcribes). RULING (shape a of the routed candidates) - pin device='cpu' explicitly at the one constructor seam plus ONE loud construction log naming the pinned device/model (never-silent posture); try-CUDA-then-fallback REJECTED (the lazy failure mode means an honest fallback needs probe-inference machinery, and a transcribe-time fallback would fail per file), a device config field REJECTED (speculative; the single seam keeps a future GPU option a one-line supersedable change); whisper-base on CPU is comfortably fast for short PTT clips. TK-277 (P1, S, mvp, dep TK-162; files asr.py + tests/sources/test_asr.py) - constructor kwarg + log line + modelless fake-module tests asserting the device kwarg and the caplog line; Transcriber protocol, lazy import, select.py degrade, and ASRSource per-file handling byte-untouched." }
   - { date: "2026-07-20", version: "2.128", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-277 DONE - BOARD RE-CLOSES 194/194 - DEC-59 CPU PIN LANDS (EP-31, sole ticket of the v2.127 batch). src/wombat/sources/asr.py FasterWhisperTranscriber.__init__ now constructs WhisperModel(model_name, device=cpu) explicitly - CTranslate2 can never lazily auto-select the absent CUDA runtime - plus exactly ONE logger.info line at construction naming the pinned device and model (never-silent posture; the device choice lands in every boot process log). Diff confined EXACTLY to the constructor + tests per AC3 (3-line asr.py delta) - Transcriber protocol, lazy faster_whisper import, select.py construction-failure degrade, and ASRSource per-file failed/ handling all byte-untouched; no config field, no CUDA fallback per the DEC-59 rejections. tests/sources/test_asr.py +2 modelless fake-module tests (device kwarg recorded via sys.modules injection per the existing posture; caplog-asserted single line). Builder self-ran the full bar green - test_asr.py 10 passed; uv run pytest -q 1685 passed / 93 pg-gated skips; ruff clean; mypy Success 334 files. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - one Opus review audits this batch, then the operator ear-checks the live push-to-talk round-trip end-to-end (the DEC-58 path is whole again on paper - hold, speak, release, transcription arrives instead of failed/)." }
+  - { date: "2026-07-20", version: "2.129", by: "architect (Jim directive routed - live defect pair investigated in source, decision recorded within authority)", change: "DEC-60 ACCEPTED + ISS-25 RECORDED-RESOLVED + FIVE TICKETS MINTED (board 194 -> 199): VOICE TURNS ARE CONVERSATION - Jim verbatim ('the button isn't actually appending text to the chat pane or actually speaking to wombat at all... a conversation with wombat with STT/TTS only'). Live diagnosis log-proven (runtime-20260720-152408.log): (A) ASR transcripts hit the gate as item_kind='generic' and are hold-absorbed into the PendingSet at 15:24:41 - the ISS-23 structural-absorption class one source over, because DEC-57's always-answer keys on ItemKind.CHAT which ASRSource never emitted; (B) two live WAVs (15:24:48/51) stranded in the drop root - the 300s asr scan beat is structurally deaf for conversation and the synchronous whisper decode provably froze the event loop ~11s at boot. RULED (DEC-60): (a) ASRSource stamps every non-command transcript item_kind 'chat' + voice_turn true (TK-278, EP-29, S) - DEC-57 compose/no-absorption applies by construction, DEC-35/36 interception + gate scoring untouched; (b) voice-originated replies SPEAK even when held - voice_turn threads the held-chat wire and speech_shape runs the FULL DEC-55 shaped-summary + TTS path for held+voice_turn while typed held chat stays quiet text-only byte-identically (TK-279, EP-30, M; supersedes the DEC-57 quiet-held clause IN PART for voice origin only - answering aloud what was asked aloud is the solicited response, not an interruption); (c) pane echo - bounded broker voice-turn ledger (TK-270 cap+TTL discipline) fed by a new optional ASRSource turn_hook with the canonical idempotency_key identity, replies parked by chat_reply's existing resolve, NEW token-guarded GET /chat/voice-turns (TK-280, EP-32, M) + ChatPane ~3s poll rendering transcript-as-operator-message with a visible voice marker and the landed reply (TK-281, EP-32, M); (d) conversation-grade pickup - DEFAULT_ASR_POLL_INTERVAL_SECONDS 300 -> 2.0 asr-only, transcribe via asyncio.to_thread (hooks/moves stay on-loop), never-silent found/outcome INFO logging (TK-282, EP-29, S); DEC-56's no-wake-for-asr exclusion STANDS (5.0s pump beat bounds drain, Q-117 source-proven); (e) the stranded WAVs re-driven live after land - a provably dead scan loop becomes a new ISS with the new logging as evidence. BUILD ORDER TK-278 -> TK-279 -> TK-282 -> TK-280 -> TK-281 (asr.py touches serialized by deps). Steer for the batch: verify OUTSIDE repo root (TK-268/ISS-20 discipline), no live-db from tests (throwaway pg only), sinks/speak.py expected ZERO-diff in TK-279 (verify not change), thread-affinity AC in TK-282 is load-bearing." }
