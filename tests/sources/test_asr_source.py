@@ -46,6 +46,8 @@ import asyncio
 import hashlib
 import inspect
 import logging
+import shutil
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -253,6 +255,126 @@ async def test_one_failing_file_moves_to_failed_the_other_still_emits_and_poll_n
     assert "bad.wav" in caplog.text
 
 
+# ------------------------------------------------------------------------------- TK-282: AC2/AC3
+
+
+class _ThreadRecordingTranscriber:
+    """Records the ident of the thread ``transcribe`` actually executes on — the LOAD-BEARING
+    proof that ``asyncio.to_thread`` really moves the decode off the event loop (TK-282)."""
+
+    def __init__(self, text: str = "hello wombat") -> None:
+        self.text = text
+        self.transcribe_thread_idents: list[int] = []
+
+    def transcribe(self, path: Path) -> str:
+        self.transcribe_thread_idents.append(threading.get_ident())
+        return self.text
+
+
+async def test_transcribe_runs_off_loop_thread_while_hooks_and_moves_stay_on_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-282 (DEC-60d) AC2: over two dropped files, ``transcriber.transcribe`` runs on a thread
+    OTHER than the event-loop thread, while ``command_hook``/``feedback_hook``/the file move all
+    run ON the loop thread — and both files keep today's success/move semantics."""
+    (tmp_path / "a.wav").write_bytes(b"a-bytes")
+    (tmp_path / "b.wav").write_bytes(b"b-bytes")
+    loop_thread_ident = threading.get_ident()
+    transcriber = _ThreadRecordingTranscriber()
+
+    command_hook_threads: list[int] = []
+
+    def command_hook(transcript: str) -> bool:
+        command_hook_threads.append(threading.get_ident())
+        return False  # never consume -- both files must still enqueue
+
+    feedback_hook_threads: list[int] = []
+
+    def feedback_hook(transcript: str, event_key: str) -> None:
+        feedback_hook_threads.append(threading.get_ident())
+
+    move_threads: list[int] = []
+    real_move = shutil.move
+
+    def _spy_move(src: str, dst: str) -> str:
+        move_threads.append(threading.get_ident())
+        return real_move(src, dst)
+
+    monkeypatch.setattr(shutil, "move", _spy_move)
+
+    source = ASRSource(
+        drop_dir=tmp_path,
+        transcriber=transcriber,
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=command_hook,
+        feedback_hook=feedback_hook,
+    )
+
+    events = await source.poll()  # must not raise
+
+    assert len(events) == 2
+    assert len(transcriber.transcribe_thread_idents) == 2
+    for ident in transcriber.transcribe_thread_idents:
+        assert ident != loop_thread_ident  # OFF the loop thread (asyncio.to_thread)
+    assert command_hook_threads == [loop_thread_ident, loop_thread_ident]  # ON the loop thread
+    assert feedback_hook_threads == [loop_thread_ident, loop_thread_ident]  # ON the loop thread
+    assert move_threads == [loop_thread_ident, loop_thread_ident]  # ON the loop thread
+    assert (tmp_path / "processed" / "a.wav").exists()
+    assert (tmp_path / "processed" / "b.wav").exists()
+
+
+async def test_empty_poll_logs_nothing_at_info(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-282 (DEC-60d) AC3: an empty scan (no candidate files) logs ZERO INFO lines — the 2.0s
+    poll beat must never spam."""
+    source = ASRSource(
+        drop_dir=tmp_path,
+        transcriber=_FakeTranscriber(),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+    )
+
+    with caplog.at_level(logging.INFO):
+        events = await source.poll()
+
+    assert events == []
+    assert [r for r in caplog.records if r.levelno == logging.INFO] == []
+
+
+async def test_nonempty_poll_logs_one_found_count_line_and_one_per_file_outcome_line(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-282 (DEC-60d) AC3: N>0 candidates -> exactly one found-count INFO line naming the
+    count, plus exactly one per-file outcome INFO line naming the event_key prefix, the
+    processed/failed outcome, and the transcribe duration."""
+    (tmp_path / "note.wav").write_bytes(b"note-bytes")
+    expected_event_key = hashlib.sha256(b"note-bytes").hexdigest()
+
+    source = ASRSource(
+        drop_dir=tmp_path,
+        transcriber=_FakeTranscriber("hi"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+    )
+
+    with caplog.at_level(logging.INFO):
+        events = await source.poll()
+
+    assert len(events) == 1
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_records) == 2
+    found_records = [r for r in info_records if "found 1 candidate" in r.getMessage()]
+    assert len(found_records) == 1
+    outcome_records = [
+        r
+        for r in info_records
+        if expected_event_key[:12] in r.getMessage() and "processed" in r.getMessage()
+    ]
+    assert len(outcome_records) == 1
+
+
 # --------------------------------------------------------------------------------- TK-212: AC1
 
 
@@ -307,11 +429,15 @@ async def test_matched_command_is_consumed_never_enqueued_stepped_matrix_one_ack
     assert (drop_dir / "processed" / "note.wav").exists()
     assert not (drop_dir / "failed" / "note.wav").exists()
 
-    trail_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    # TK-282 (DEC-60d): poll() ALSO logs its own found-count + per-file-outcome INFO lines now —
+    # isolate the persona-command hook's own trail line from those by content, not by "the only
+    # INFO record", to keep this order-assert scoped to what the hook itself is documented to do.
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    trail_records = [r for r in info_records if "be warmer" in r.getMessage()]
     assert len(trail_records) == 1
-    assert "be warmer" in trail_records[0].getMessage()
-    # The trail line was ALREADY emitted (count == 1) by the time set() ran.
-    assert log_count_at_set == [1]
+    # The trail line was ALREADY emitted by the time set() ran; only the per-file outcome line
+    # (TK-282) logs AFTER, once the command has been consumed and the file moved.
+    assert log_count_at_set == [len(info_records) - 1]
 
 
 async def test_matched_reset_command_uses_the_fixed_reset_ack_template(tmp_path: Path) -> None:

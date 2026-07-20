@@ -54,6 +54,10 @@ from wombat.persona.matrix import DEFAULT_MATRIX
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.base import SourceEvent
 from wombat.sources.bootstrap import (
+    DEFAULT_ASR_POLL_INTERVAL_SECONDS,
+    DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS,
+    DEFAULT_GCAL_POLL_INTERVAL_SECONDS,
+    DEFAULT_GMAIL_POLL_INTERVAL_SECONDS,
     build_brief_fetches,
     build_external_item_sink,
     build_source_registry,
@@ -640,6 +644,71 @@ def test_build_source_registry_defaults_construct_asr_source_with_no_command_hoo
 
     assert _is_registered(registry, "asr")
     assert captured_kwargs["command_hook"] is None
+    assert consent_calls == []
+
+
+def test_build_source_registry_wires_asr_at_2s_while_others_stay_at_300s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-282 (DEC-60d): with every source configured and using ITS OWN default poll interval
+    (no explicit override), asr is constructed at the new 2.0s cadence while gcal/gmail/feedback
+    stay at their pre-existing 300.0s cadence — asserted on the actual constructed source
+    instances, not just the module-level constants."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+
+    class _FakeCalendarAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            return _FakeCredentials()
+
+    class _FakeGmailAuth:
+        def __init__(self, *, config: WombatConfig, token_store: Any = None) -> None:
+            pass
+
+        def get_credentials(self) -> _FakeCredentials:
+            return _FakeCredentials()
+
+    monkeypatch.setattr(gcal_session_module, "CalendarAuth", _FakeCalendarAuth)
+    monkeypatch.setattr(
+        gcal_session_module, "AuthorizedSession", lambda creds: _one_calendar_event_session(creds)
+    )
+    monkeypatch.setattr(gmail_session_module, "GmailAuth", _FakeGmailAuth)
+    monkeypatch.setattr(
+        gmail_session_module, "AuthorizedSession", lambda creds: _one_gmail_message_session(creds)
+    )
+    _wire_spy_asr_source(monkeypatch)
+
+    config = WombatConfig(
+        deepseek_api_key=SecretStr("unused-in-this-test"),
+        deepseek_base_url="https://unused.example",
+        google_oauth_client_id=_CONFIGURED["client_id"],
+        google_oauth_client_secret=SecretStr(_CONFIGURED["client_secret"]),
+        wombat_asr_drop_dir=str(tmp_path),
+        wombat_feedback_file=str(tmp_path / "feedback.jsonl"),
+    )
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial="gcal-token"),
+        gmail_token_store=_FakeTokenStore(initial="gmail-token"),
+    )
+
+    assert registry._sources["gcal"].poll_interval_seconds == DEFAULT_GCAL_POLL_INTERVAL_SECONDS
+    assert registry._sources["gmail"].poll_interval_seconds == DEFAULT_GMAIL_POLL_INTERVAL_SECONDS
+    assert (
+        registry._sources["feedback"].poll_interval_seconds
+        == DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS
+    )
+    assert registry._sources["asr"].poll_interval_seconds == DEFAULT_ASR_POLL_INTERVAL_SECONDS
+    assert DEFAULT_ASR_POLL_INTERVAL_SECONDS == 2.0
+    assert DEFAULT_GCAL_POLL_INTERVAL_SECONDS == 300.0
+    assert DEFAULT_GMAIL_POLL_INTERVAL_SECONDS == 300.0
+    assert DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS == 300.0
     assert consent_calls == []
 
 

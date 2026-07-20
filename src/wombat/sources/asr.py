@@ -69,9 +69,11 @@ guards the call); this module adds no try/except of its own, mirroring the TK-21
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import shutil
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -183,14 +185,25 @@ class ASRSource:
             )
             return []
 
+        if candidates:
+            # TK-282 (DEC-60d): never-silent scan — exactly one INFO line naming the count so a
+            # 2.0s poll loop still tells a human something is happening (an empty scan logs
+            # NOTHING at INFO — the 2s beat must not spam).
+            logger.info(
+                "asr source %r: found %d candidate file(s) in %s",
+                self.id,
+                len(candidates),
+                self._drop_dir,
+            )
+
         events: list[SourceEvent] = []
         for path in candidates:
-            event = self._process_one(path)
+            event = await self._process_one(path)
             if event is not None:
                 events.append(event)
         return events
 
-    def _process_one(self, path: Path) -> SourceEvent | None:
+    async def _process_one(self, path: Path) -> SourceEvent | None:
         """Transcribe and move a single file. Returns its ``SourceEvent`` on success; ``None``
         on any caught transcription error (already logged and moved to ``failed/``) OR when
         ``command_hook`` consumes the transcript as a matched persona command (TK-212) — that
@@ -198,11 +211,18 @@ class ASRSource:
         just handled here instead of enqueued). When the utterance was NOT consumed,
         ``feedback_hook`` (TK-213) runs as a pure side effect before the ``SourceEvent`` is built
         — it never changes what is returned. Never raises — a bad file must never kill this
-        poll or another file's processing (AC4)."""
+        poll or another file's processing (AC4).
+
+        TK-282 (DEC-60d): ONLY the pure ``transcriber.transcribe(path)`` call runs off the event
+        loop, via ``asyncio.to_thread`` — this is what kills the proven ~11s event-loop freeze
+        from synchronous whisper decode. ``read_bytes``/``sha256``, ``command_hook``,
+        ``feedback_hook``, and ``_safe_move`` all stay ON the event loop: asyncio primitives and
+        the ``LivePersona`` hooks are not thread-safe."""
+        started = time.monotonic()
         try:
             raw = path.read_bytes()
             event_key = hashlib.sha256(raw).hexdigest()
-            transcript = self._transcriber.transcribe(path)
+            transcript = await asyncio.to_thread(self._transcriber.transcribe, path)
         except Exception:
             logger.warning(
                 "asr source %r: failed to transcribe %s — moving to %s/",
@@ -212,6 +232,7 @@ class ASRSource:
                 exc_info=True,
             )
             self._safe_move(path, _FAILED_DIRNAME)
+            self._log_outcome(path.name, "failed", time.monotonic() - started)
             return None
 
         if self._command_hook is not None and self._command_hook(transcript):
@@ -219,6 +240,7 @@ class ASRSource:
             # becomes a SourceEvent, so it never enqueues, is never gate-rated, and never reaches
             # a mouth. The file still moves to processed/ since it was successfully handled.
             self._safe_move(path, _PROCESSED_DIRNAME)
+            self._log_outcome(event_key, "processed", time.monotonic() - started)
             return None
 
         if self._feedback_hook is not None:
@@ -232,7 +254,20 @@ class ASRSource:
             "transcript": transcript,
             "captured_at": self._clock().isoformat(),
         }
+        self._log_outcome(event_key, "processed", time.monotonic() - started)
         return SourceEvent(event_key=event_key, payload=payload)
+
+    def _log_outcome(self, event_key_prefix: str, outcome: str, duration_seconds: float) -> None:
+        """TK-282 (DEC-60d): ONE INFO line per file naming the event_key prefix, the
+        processed/failed outcome, and the transcribe duration — the never-silent per-file half
+        of the scan logging (the found-count half lives in ``poll()``)."""
+        logger.info(
+            "asr source %r: %s %s (%.2fs)",
+            self.id,
+            event_key_prefix[:12],
+            outcome,
+            duration_seconds,
+        )
 
     def _safe_move(self, path: Path, dest_dirname: str) -> None:
         """Best-effort move of ``path`` into ``drop_dir/<dest_dirname>/`` — a failure here is
