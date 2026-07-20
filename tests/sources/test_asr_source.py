@@ -344,7 +344,8 @@ async def test_unmatched_transcript_yields_a_byte_identical_source_event_even_wi
     tmp_path: Path,
 ) -> None:
     """AC2: a command_hook is wired, but the transcript doesn't match the grammar — the
-    SourceEvent payload is pinned byte-identical to pre-ticket (no command_hook) behavior."""
+    SourceEvent payload is pinned byte-identical to pre-ticket (no command_hook) behavior aside
+    from TK-278's item_kind/voice_turn stamp (DEC-60a), which is unrelated to command_hook."""
     drop_dir = tmp_path / "drop"
     drop_dir.mkdir()
     live_persona = _live_persona()
@@ -366,9 +367,11 @@ async def test_unmatched_transcript_yields_a_byte_identical_source_event_even_wi
     assert len(events) == 1
     assert events[0].event_key == expected_event_key
     assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
         "transcript": "buy milk tomorrow",
         "captured_at": _NOW.isoformat(),
-    }  # explicit equality pin — byte-identical to pre-TK-212 behavior
+    }  # explicit equality pin — byte-identical to pre-TK-212 behavior plus TK-278's stamp
     assert live_persona.matrix == DEFAULT_MATRIX  # untouched — never a persona-command match
     assert (drop_dir / "processed" / "note.wav").exists()
 
@@ -452,3 +455,67 @@ async def test_speak_raising_degrades_loud_without_blocking_the_applied_persona_
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert "speak" in warnings[0].getMessage()
+
+
+# ----------------------------------------------------------------------------------- TK-278: AC1
+
+
+async def test_non_command_transcript_is_stamped_chat_and_feedback_hook_still_fires(
+    tmp_path: Path,
+) -> None:
+    """TK-278 (DEC-60a): a non-command transcript's SourceEvent payload carries item_kind
+    'chat' + voice_turn True alongside transcript/captured_at, AND feedback_hook still fires as
+    a pure side effect (its own return value never changes what is emitted)."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    audio_bytes = b"chat-stamp-bytes"
+    (drop_dir / "note.wav").write_bytes(audio_bytes)
+    expected_event_key = hashlib.sha256(audio_bytes).hexdigest()
+
+    feedback_calls: list[tuple[str, str]] = []
+
+    def feedback_hook(transcript: str, event_key: str) -> None:
+        feedback_calls.append((transcript, event_key))
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's on my calendar"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        feedback_hook=feedback_hook,
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "what's on my calendar",
+        "captured_at": _NOW.isoformat(),
+    }
+    assert feedback_calls == [("what's on my calendar", expected_event_key)]
+
+
+async def test_command_consumed_utterance_emits_no_event(tmp_path: Path) -> None:
+    """TK-278 (DEC-60a): a command-consumed utterance still emits NO SourceEvent — the
+    command_hook check runs BEFORE the (now item_kind-stamped) payload is ever built."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"command-bytes")
+    live_persona = _live_persona()
+    speak = _RecordingSpeak()
+    hook = make_persona_command_hook(live_persona, speak)
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("be warmer"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=hook,
+    )
+
+    events = await source.poll()
+
+    assert events == []
+    assert (drop_dir / "processed" / "note.wav").exists()

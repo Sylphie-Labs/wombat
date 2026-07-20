@@ -20,9 +20,15 @@ file never kills the source — poller degrade parity with ``CalendarPoller``/``
 unexpected SCAN-level error (``drop_dir`` itself missing/unreadable) is caught around the whole
 scan, logged loud, and degrades this poll to ``[]``.
 
-The ``SourceEvent`` payload is ``{"transcript": <str>, "captured_at": <aware UTC ISO str>}`` —
-user-facing fields ONLY (CON-1). No ``event_class`` key is ever stamped (the Q-41 total fallback
-resolves this to ``ItemKind.GENERIC`` downstream — the TK-72 ``CalendarPoller`` precedent).
+The ``SourceEvent`` payload is ``{"item_kind": "chat", "voice_turn": True, "transcript": <str>,
+"captured_at": <aware UTC ISO str>}`` — user-facing fields ONLY (CON-1). TK-278 (DEC-60a, EP-29):
+every non-command voice transcript IS a chat turn — the payload stamps ``item_kind: "chat"``
+(the same key/value ``chat/surface.py`` uses for typed sends, its :27 docstring) plus
+``voice_turn: True`` (the marker TK-279 will read to shape the reply as SPOKEN rather than
+composed-only). Stamping ``item_kind`` here means ``gate.gate_item_from_queue_item`` resolves
+``ItemKind.CHAT`` directly — no Q-41 fallback involved — so DEC-57/TK-272's always-compose
+exception applies to every voice turn by construction (kills the prior GENERIC-fallback
+hold-absorption defect, Q-41).
 Content-hash keying (the sha256 event key) means the registry's canonical TK-12
 ``idempotency_key(source_id="asr", event_key=<sha256>)`` derivation makes a re-drop of
 identical bytes dedupe at the queue (``EnqueueResult.ALREADY_QUEUED``) even across a restart —
@@ -220,7 +226,12 @@ class ASRSource:
             self._feedback_hook(transcript, event_key)
 
         self._safe_move(path, _PROCESSED_DIRNAME)
-        payload = {"transcript": transcript, "captured_at": self._clock().isoformat()}
+        payload = {
+            "item_kind": "chat",
+            "voice_turn": True,
+            "transcript": transcript,
+            "captured_at": self._clock().isoformat(),
+        }
         return SourceEvent(event_key=event_key, payload=payload)
 
     def _safe_move(self, path: Path, dest_dirname: str) -> None:

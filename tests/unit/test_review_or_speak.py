@@ -18,8 +18,13 @@ from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Done, Transition
 
 from tests.support.stage_context_fake import StageContextFake
+from wombat.gate.decay import LedgerReset
+from wombat.gate.gate import gate_item_from_queue_item
 from wombat.gate.models import GateAction, GateDecision, ItemKind, ScoredItem
+from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
+from wombat.gate.pipeline import Gate
 from wombat.queue import QueueItem
+from wombat.rating.params import EventClass, RatingParams
 from wombat.stages import review_or_speak as review_or_speak_module
 from wombat.stages.artifacts import (
     GATE_DECISIONS,
@@ -194,6 +199,82 @@ async def test_held_non_chat_stays_a_hold_report_held_chat_never_set() -> None:
     holds = hold_report_from_artifact_data(result.output.data)
     assert len(holds) == 1
     assert holds[0]["item_id"] == "h-2"
+
+
+# --- TK-278 AC2: an asr-shaped chat item, scored by the REAL production gate ----------------------
+
+
+class _NoOpRollover:
+    def check(self) -> LedgerReset | None:
+        return None
+
+
+@dataclass
+class _FakeUserModel:
+    rating_params: RatingParams
+
+    def resolve_event_class(self, item: object) -> EventClass:
+        return EventClass.GENERIC
+
+    async def ratings_for(self, item: object) -> RatingParams:
+        return self.rating_params
+
+
+@dataclass
+class _FakeCeiling:
+    def allow(self, event_class: EventClass) -> bool:
+        return True
+
+    def record(self, event_class: EventClass) -> None:
+        pass
+
+
+async def test_asr_chat_item_through_real_gate_routes_to_compose_and_never_pends() -> None:
+    """TK-278 (DEC-60a): an asr-shaped QueueItem (item_kind 'chat', voice_turn True,
+    transcript) drained through the REAL production ``Gate`` (not the TK-6 stub) with a
+    below-threshold rating still produces a HOLD decision carrying item_kind=CHAT, routes to
+    compose_dispatch with held_chat=True via ReviewOrSpeakStage's DEC-57/TK-272 branch, and the
+    durable pending set gains NO entry (DEC-57/TK-272 R1: chat never absorbs)."""
+    queue_item = QueueItem(
+        idempotency_key="asr-1",
+        payload={"item_kind": "chat", "voice_turn": True, "transcript": "buy milk"},
+        item_id=11,
+    )
+    gate_item = gate_item_from_queue_item(queue_item)
+    assert gate_item.item_kind is ItemKind.CHAT  # stamped by construction, no Q-41 fallback
+
+    pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=50)
+    below_threshold_params = RatingParams(
+        urgency_base=0.0, urgency_gain=0.0, load_base=0.0, load_gain=0.0
+    )
+    gate = Gate(
+        user_model=_FakeUserModel(rating_params=below_threshold_params),
+        pending_set=pending_set,
+        ceiling=_FakeCeiling(),
+        urgency_threshold=0.5,
+        load_flush_threshold=10.0,
+        flush_min_age_seconds=100.0,
+        decay_ttl_seconds=float("inf"),
+        day_rollover=_NoOpRollover(),
+        clock=lambda: 1000.0,
+    )
+
+    decision = await gate.pipeline([gate_item])
+
+    assert decision.action is GateAction.HOLD
+    assert decision.items[0].item_kind is ItemKind.CHAT
+    assert pending_set.list() == []  # never absorbed into the durable pending set
+
+    queue = _FakeQueue()
+    stage = ReviewOrSpeakStage(queue=queue)
+    ctx = _ctx([(decision, queue_item)])
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert result.to == "compose_dispatch"
+    assert queue.acked == [11]
+    assert surfaced_item_held_chat_from_artifact_data(result.output.data) is True
 
 
 # --- hold_report wire: json.dumps round-trip regression (Q-49) ------------------------------------
