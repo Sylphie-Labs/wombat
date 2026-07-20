@@ -36,6 +36,12 @@ DEC-57/TK-272: when the composed-output artifact carries ``held_chat=True`` (a c
 held for voice purposes only), ``run()`` takes the EXACT SAME voice-off pass-through shape as
 today — ZERO model calls, ``speech_text=None``, ``degraded=False`` — regardless of
 ``voice_enabled``/``adapter_present``. A held chat reply is quiet by design, never degraded.
+
+TK-279 (DEC-60b, supersedes DEC-57 IN PART — voice origin only): the pass-through gate becomes
+``held_chat and not voice_turn`` — a held reply to a SPOKEN turn (``voice_turn=True``, read off
+the SAME composed-output artifact) falls through to the real shaping call exactly as a surfaced
+item would; a held TYPED chat (``voice_turn=False``) stays byte-identical to the pre-TK-279
+quiet pass-through above.
 """
 
 from __future__ import annotations
@@ -57,6 +63,7 @@ from wombat.stages.artifacts import (
     SPEECH_OUTPUT,
     composed_output_from_artifact_data,
     composed_output_held_chat_from_artifact_data,
+    composed_output_voice_turn_from_artifact_data,
     speech_output_to_artifact_data,
 )
 
@@ -148,8 +155,9 @@ class SpeechShapeStage:
             raise RuntimeError(msg)
         composed_text, item_id, item_kind, _degraded = composed_output_from_artifact_data(art.data)
         held_chat = composed_output_held_chat_from_artifact_data(art.data)
+        voice_turn = composed_output_voice_turn_from_artifact_data(art.data)
 
-        if not self._voice_enabled or not self._adapter_present or held_chat:
+        if not self._voice_enabled or not self._adapter_present or (held_chat and not voice_turn):
             # ZERO model calls (AC4): a silent pass-through — the voice-off/no-adapter outcome at
             # speak stays byte-identical to today. DEC-57/TK-272: a held chat reply takes this
             # EXACT same voice-off shape (speech_text=None, degraded=False) — quiet-by-design,

@@ -36,6 +36,13 @@ DEC-57/TK-272: a SURFACED chat item reaches this sink exactly as any other item 
 routing is unaffected by hold-vs-surface) but carries ``held_chat=True`` on the composed-output
 artifact; this sink folds that flag into the SAME voice-off branch above — quiet-by-design, never
 the speech-text-None ``Degraded`` outcome below.
+
+TK-279 (DEC-60b, supersedes DEC-57 IN PART — voice origin only): the silent branch's condition
+becomes ``held_chat and not voice_turn`` (``voice_turn`` read off the SAME composed-output
+artifact this sink already reads) — an exact lock-step mirror of ``SpeechShapeStage``'s own gate.
+A held reply to a SPOKEN turn falls through to the existing ``speech_shape`` read below exactly
+as a surfaced item would (no new branch); a shaping failure/rejection still hits the existing
+speech-text-None ``Degraded`` path, never speaking the raw composed text (DEC-55c).
 """
 
 from __future__ import annotations
@@ -52,6 +59,7 @@ from wombat.stages.artifacts import (
     SPOKEN_OUTPUT,
     composed_output_from_artifact_data,
     composed_output_held_chat_from_artifact_data,
+    composed_output_voice_turn_from_artifact_data,
     speech_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
@@ -77,8 +85,9 @@ class SpeakSink:
             raise RuntimeError(msg)
         _composed_text, item_id, item_kind, _degraded = composed_output_from_artifact_data(art.data)
         held_chat = composed_output_held_chat_from_artifact_data(art.data)
+        voice_turn = composed_output_voice_turn_from_artifact_data(art.data)
 
-        if not self._voice_enabled or self._adapter is None or held_chat:
+        if not self._voice_enabled or self._adapter is None or (held_chat and not voice_turn):
             # Voice-off (or no adapter wired) is a silent no-op — the text path is unaffected;
             # voice is additive only (CON-3). Byte-identical to before TK-267 (speech_shape is
             # never even consulted on this branch). DEC-57/TK-272: a held chat reply takes this

@@ -29,9 +29,11 @@ from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     compose_request_from_artifact_data,
     compose_request_to_artifact_data,
+    compose_request_voice_turn_from_artifact_data,
     composed_output_from_artifact_data,
     composed_output_held_chat_from_artifact_data,
     composed_output_to_artifact_data,
+    composed_output_voice_turn_from_artifact_data,
 )
 from wombat.stages.compose import ComposeStage
 
@@ -338,6 +340,20 @@ def test_compose_request_artifact_data_is_json_native_and_round_trips() -> None:
         ItemKind.DRAFT,
         {"subject": "hi", "n": 1},
     )
+    # AC5 (TK-279, DEC-60b): voice_turn is additive — absent/omitted defaults False.
+    assert compose_request_voice_turn_from_artifact_data(json.loads(serialized)) is False
+
+
+def test_compose_request_voice_turn_is_additive_and_round_trips() -> None:
+    """TK-279 (DEC-60b): voice_turn=True rides the compose-request wire plain-JSON-native."""
+    data = compose_request_to_artifact_data(
+        _ITEM_ID, ItemKind.CHAT, _PAYLOAD, held_chat=True, voice_turn=True
+    )
+
+    serialized = json.dumps(data)
+    round_tripped = json.loads(serialized)
+    assert compose_request_from_artifact_data(round_tripped) == (_ITEM_ID, ItemKind.CHAT, _PAYLOAD)
+    assert compose_request_voice_turn_from_artifact_data(round_tripped) is True
 
 
 def test_composed_output_artifact_data_is_json_native_and_round_trips() -> None:
@@ -353,6 +369,9 @@ def test_composed_output_artifact_data_is_json_native_and_round_trips() -> None:
     # AC4 (TK-272, DEC-57): held_chat is ADDITIVE — absent/omitted defaults False, never a
     # KeyError, and every caller predating TK-272 (like the positional call above) is unaffected.
     assert composed_output_held_chat_from_artifact_data(json.loads(serialized)) is False
+    # AC5 (TK-279, DEC-60b): voice_turn is a SECOND additive field — same absent-defaults-False
+    # posture.
+    assert composed_output_voice_turn_from_artifact_data(json.loads(serialized)) is False
 
 
 def test_composed_output_held_chat_is_additive_and_round_trips() -> None:
@@ -370,6 +389,25 @@ def test_composed_output_held_chat_is_additive_and_round_trips() -> None:
         False,
     )
     assert composed_output_held_chat_from_artifact_data(round_tripped) is True
+
+
+def test_composed_output_voice_turn_is_additive_and_round_trips() -> None:
+    """TK-279 (DEC-60b): voice_turn=True rides the composed-output wire plain-JSON-native,
+    independently of held_chat."""
+    data = composed_output_to_artifact_data(
+        "spoken reply", _ITEM_ID, ItemKind.CHAT, False, held_chat=True, voice_turn=True
+    )
+
+    serialized = json.dumps(data)
+    round_tripped = json.loads(serialized)
+    assert composed_output_from_artifact_data(round_tripped) == (
+        "spoken reply",
+        _ITEM_ID,
+        ItemKind.CHAT,
+        False,
+    )
+    assert composed_output_held_chat_from_artifact_data(round_tripped) is True
+    assert composed_output_voice_turn_from_artifact_data(round_tripped) is True
 
 
 # --- TemplateComposer.render is pure/deterministic ------------------------------------------------

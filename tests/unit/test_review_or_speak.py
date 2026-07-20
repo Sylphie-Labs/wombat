@@ -34,6 +34,7 @@ from wombat.stages.artifacts import (
     hold_report_to_artifact_data,
     surfaced_item_from_artifact_data,
     surfaced_item_held_chat_from_artifact_data,
+    surfaced_item_voice_turn_from_artifact_data,
 )
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
 
@@ -275,6 +276,49 @@ async def test_asr_chat_item_through_real_gate_routes_to_compose_and_never_pends
     assert result.to == "compose_dispatch"
     assert queue.acked == [11]
     assert surfaced_item_held_chat_from_artifact_data(result.output.data) is True
+    # TK-279 (DEC-60b): the queue item's payload voice_turn=True threads through onto the wire.
+    assert surfaced_item_voice_turn_from_artifact_data(result.output.data) is True
+
+
+# --- TK-279 (DEC-60b): voice_turn threads from queue_item.payload onto the surfaced-item wire -----
+
+
+async def test_held_chat_with_voice_turn_payload_threads_voice_turn_true() -> None:
+    scored = ScoredItem(item_id="c-2", item_kind=ItemKind.CHAT, urgency=0.1, load=0.1)
+    decision = GateDecision(action=GateAction.HOLD, items=(scored,))
+    queue_item = QueueItem(
+        idempotency_key="c-2",
+        payload={"item_kind": "chat", "text": "buy milk", "voice_turn": True},
+        item_id=6,
+    )
+    queue = _FakeQueue()
+    stage = ReviewOrSpeakStage(queue=queue)
+    ctx = _ctx([(decision, queue_item)])
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert surfaced_item_held_chat_from_artifact_data(result.output.data) is True
+    assert surfaced_item_voice_turn_from_artifact_data(result.output.data) is True
+
+
+async def test_held_typed_chat_without_voice_turn_payload_defaults_voice_turn_false() -> None:
+    """AC5: a typed (non-voice) held chat item's payload carries no voice_turn key at all —
+    resolves False, never a KeyError."""
+    scored = ScoredItem(item_id="c-3", item_kind=ItemKind.CHAT, urgency=0.1, load=0.1)
+    decision = GateDecision(action=GateAction.HOLD, items=(scored,))
+    queue_item = QueueItem(
+        idempotency_key="c-3", payload={"item_kind": "chat", "text": "hi"}, item_id=7
+    )
+    queue = _FakeQueue()
+    stage = ReviewOrSpeakStage(queue=queue)
+    ctx = _ctx([(decision, queue_item)])
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert surfaced_item_held_chat_from_artifact_data(result.output.data) is True
+    assert surfaced_item_voice_turn_from_artifact_data(result.output.data) is False
 
 
 # --- hold_report wire: json.dumps round-trip regression (Q-49) ------------------------------------

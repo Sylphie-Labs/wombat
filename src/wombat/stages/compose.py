@@ -44,6 +44,9 @@ TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona`
 (the default) keeps the frozen-at-``__init__`` instruction above, byte-identical to every existing
 caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.COMPOSE)`` fresh EVERY
 turn instead, so a hot-applied persona matrix change lands on the NEXT rendered turn, no restart.
+
+TK-279 (DEC-60b): ``voice_turn`` threads through identically to ``held_chat`` — read off the
+compose-request wire and re-stamped onto the composed-output wire, unchanged otherwise.
 """
 
 from __future__ import annotations
@@ -65,6 +68,7 @@ from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     compose_request_from_artifact_data,
     compose_request_held_chat_from_artifact_data,
+    compose_request_voice_turn_from_artifact_data,
     composed_output_to_artifact_data,
 )
 
@@ -133,6 +137,7 @@ class ComposeStage:
             raise RuntimeError(msg)
         item_id, item_kind, payload = compose_request_from_artifact_data(art.data)
         held_chat = compose_request_held_chat_from_artifact_data(art.data)
+        voice_turn = compose_request_voice_turn_from_artifact_data(art.data)
 
         # TK-209: render-time read when a LivePersona is wired — a matrix change applies on the
         # NEXT rendered turn, no restart. None -> the frozen-at-__init__ instruction (unchanged).
@@ -235,6 +240,7 @@ class ComposeStage:
                     degraded,
                     tokens_spent=tokens_spent,
                     held_chat=held_chat,
+                    voice_turn=voice_turn,
                 ),
             ),
         )

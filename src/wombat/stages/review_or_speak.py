@@ -38,6 +38,13 @@ is ``ItemKind.CHAT`` (``gate_item_from_queue_item(queue_item).item_kind``) is fo
 like a surfaced item (``held_chat=True`` on the wire) instead of becoming a hold-report record, so
 chat always reaches ``compose`` for a text reply even when the gate keeps voice authority quiet.
 Every other kind's HOLD stays byte-identical (DEC-57e).
+
+TK-279 (DEC-60b): the surfaced-item wire additionally threads ``voice_turn`` — read off the
+ORIGINAL queue item's payload (``bool(queue_item.payload.get("voice_turn", False))``; TK-278
+stamps this ``True`` on every non-command ASR transcript), never off a scored_item or a
+SURFACE_FLUSH digest. Downstream, ``speech_shape``/``speak`` use it to let a HELD reply to a
+SPOKEN turn still speak, while a typed held chat stays quiet (DEC-60b supersedes DEC-57 IN PART,
+voice origin only).
 """
 
 from __future__ import annotations
@@ -221,6 +228,10 @@ class ReviewOrSpeakStage:
                         hold["item_id"],
                         hold["reason"],
                     )
+            # TK-279, DEC-60b: read voice_turn off the ORIGINAL queue item's payload (TK-278
+            # stamps it True on every non-command ASR transcript) — never off a scored_item or
+            # digest, mirroring the held_chat thread exactly.
+            voice_turn = bool(queue_item.payload.get("voice_turn", False))
             return Transition(
                 to="compose_dispatch",
                 output=Artifact(
@@ -228,7 +239,7 @@ class ReviewOrSpeakStage:
                     produced_by=self.name,
                     provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                     data=surfaced_item_to_artifact_data(
-                        action, scored_item, queue_item, held_chat=held_chat
+                        action, scored_item, queue_item, held_chat=held_chat, voice_turn=voice_turn
                     ),
                 ),
             )

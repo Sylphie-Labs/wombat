@@ -36,13 +36,15 @@ def _config(api_key: str = "sk-test") -> WombatConfig:
     return WombatConfig(deepseek_api_key=api_key, deepseek_base_url="https://api.deepseek.com")
 
 
-def _compose_output_artifact(text: str = _COMPOSED_TEXT, *, held_chat: bool = False) -> Artifact:
+def _compose_output_artifact(
+    text: str = _COMPOSED_TEXT, *, held_chat: bool = False, voice_turn: bool = False
+) -> Artifact:
     return Artifact(
         kind=COMPOSED_OUTPUT,
         produced_by="compose",
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
         data=composed_output_to_artifact_data(
-            text, _ITEM_ID, _ITEM_KIND, False, held_chat=held_chat
+            text, _ITEM_ID, _ITEM_KIND, False, held_chat=held_chat, voice_turn=voice_turn
         ),
     )
 
@@ -132,6 +134,52 @@ async def test_held_chat_is_a_zero_model_call_pass_through_even_with_voice_fully
     assert text is None
     assert degraded is False  # quiet-by-design, never a degraded outcome
     assert model.calls == []  # ZERO model calls
+
+
+# --- TK-279 (DEC-60b): held_chat AND voice_turn falls through to the real shaping call ------------
+
+
+async def test_held_voice_turn_falls_through_to_real_shaping_call() -> None:
+    model = FakeModel(response=_response("You have a new alert about your account."))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
+    ctx = _ctx(model, compose_output=_compose_output_artifact(held_chat=True, voice_turn=True))
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    assert result.to == "speak"
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text == "You have a new alert about your account."
+    assert degraded is False
+    assert len(model.calls) == 1  # exactly ONE shaping call
+
+
+async def test_held_voice_turn_but_voice_disabled_stays_a_quiet_pass_through() -> None:
+    model = FakeModel(response=_response("should never be used"))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=False, adapter_present=True)
+    ctx = _ctx(model, compose_output=_compose_output_artifact(held_chat=True, voice_turn=True))
+
+    result = await stage.run(ctx)
+
+    assert model.calls == []
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is None
+    assert degraded is False  # honest pass-through, never marked degraded
+
+
+async def test_held_voice_turn_shaping_failure_degrades_never_falls_back_to_composed_text() -> None:
+    model = FakeModel(raises=ConnectionError("503 Service Unavailable"))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
+    ctx = _ctx(model, compose_output=_compose_output_artifact(held_chat=True, voice_turn=True))
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is None
+    assert degraded is True
+    assert text != _COMPOSED_TEXT
 
 
 # --- AC2: the no-placebo validator, one case per enumerated closed token class + overlong ---------

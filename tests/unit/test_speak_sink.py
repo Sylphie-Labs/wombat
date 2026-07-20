@@ -59,12 +59,21 @@ class _RaisingAdapter:
         raise self._exc
 
 
-def _composed_output_artifact(*, degraded: bool = False) -> Artifact:
+def _composed_output_artifact(
+    *, degraded: bool = False, held_chat: bool = False, voice_turn: bool = False
+) -> Artifact:
     return Artifact(
         kind=COMPOSED_OUTPUT,
         produced_by="compose",
         provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
-        data=composed_output_to_artifact_data(_COMPOSED_TEXT, _ITEM_ID, _ITEM_KIND, degraded),
+        data=composed_output_to_artifact_data(
+            _COMPOSED_TEXT,
+            _ITEM_ID,
+            _ITEM_KIND,
+            degraded,
+            held_chat=held_chat,
+            voice_turn=voice_turn,
+        ),
     )
 
 
@@ -246,6 +255,93 @@ async def test_absent_speech_shape_output_degrades_speak_and_never_touches_the_a
     assert isinstance(result, Degraded)
     assert result.to is None
     assert "speech_shape" in result.reason
+
+
+# --- TK-279 (DEC-60b): held_chat AND voice_turn speaks — the exact lock-step mirror of
+# SpeechShapeStage's own gate ---------------------------------------------------------------------
+
+
+async def test_held_voice_turn_speaks_the_shaped_text_never_the_composed_text() -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(
+        compose_output=_composed_output_artifact(held_chat=True, voice_turn=True),
+        speech_output=_speech_output_artifact(text=_TEXT),
+    )
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == [_TEXT]  # the SHAPED text, never _COMPOSED_TEXT
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is True
+    assert degraded is False
+
+
+async def test_held_typed_chat_voice_turn_false_stays_the_quiet_no_op() -> None:
+    """AC2: held+typed (voice_turn defaults False) is byte-identical to the pre-TK-279 quiet
+    path."""
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(compose_output=_composed_output_artifact(held_chat=True))
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == []
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is False
+
+
+async def test_held_voice_turn_but_voice_disabled_is_still_the_quiet_no_op() -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=False, adapter=adapter)
+    ctx = _ctx(compose_output=_composed_output_artifact(held_chat=True, voice_turn=True))
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == []
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is False
+
+
+async def test_held_voice_turn_shaping_failure_degrades_never_speaks_composed_text() -> None:
+    """AC4 (load-bearing): a failed/rejected shaping call for a held voice turn returns the
+    loud Degraded outcome, never the quiet Done, and never speaks the raw composed text."""
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(
+        compose_output=_composed_output_artifact(held_chat=True, voice_turn=True),
+        speech_output=_speech_output_artifact(text=None, degraded=True),
+    )
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == []
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True
+
+
+async def test_surfaced_voice_turn_speaks_exactly_once_no_double_speak() -> None:
+    """Pin: a SURFACED voice turn (held_chat=False) passes the gate exactly as today — one speak
+    per run, no new branch fires twice."""
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(compose_output=_composed_output_artifact(held_chat=False, voice_turn=True))
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == [_TEXT]
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is True
+    assert degraded is False
 
 
 # --- wire round-trip: json.dumps + inverse must be lossless (Q-49 regression) -------------------

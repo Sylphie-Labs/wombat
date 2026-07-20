@@ -199,6 +199,7 @@ def test_surfaced_item_artifact_data_is_json_native_and_round_trips() -> None:
             "item_id": 6,
         },
         "held_chat": False,
+        "voice_turn": False,
     }
 
     serialized = json.dumps(data)

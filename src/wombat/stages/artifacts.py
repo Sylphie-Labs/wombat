@@ -65,6 +65,14 @@ DeepSeek summary ``SpeakSink`` actually speaks — NEVER the composed text (DEC-
 — or ``None`` when voice is off/no adapter is wired (a pass-through, non-degraded outcome) or
 when the model call/validation failed (a degraded no-speech outcome); ``degraded`` distinguishes
 the two ``None`` cases.
+
+``voice_turn`` is a THIRD additive optional field (TK-279, DEC-60b) on ``surfaced_item``,
+``compose_request``, and ``composed_output`` — threaded byte-for-byte on the exact ``held_chat``
+pattern (TK-272). ``True`` only for a CHAT item whose originating queue-item payload carried
+``voice_turn=True`` (TK-278 stamps this on every non-command ASR transcript); it rides the wire so
+``speech_shape``/``speak`` can tell a HELD chat reply that came from a spoken turn apart from one
+typed at the keyboard, without a second gate-decision or queue-payload read. Defaults ``False``,
+so every caller/artifact predating TK-279 is unaffected (AC5).
 """
 
 from __future__ import annotations
@@ -160,7 +168,12 @@ def gate_decisions_from_artifact_data(data: dict[str, Any]) -> list[GateDecision
 
 
 def compose_request_to_artifact_data(
-    item_id: str, item_kind: ItemKind, payload: dict[str, Any], *, held_chat: bool = False
+    item_id: str,
+    item_kind: ItemKind,
+    payload: dict[str, Any],
+    *,
+    held_chat: bool = False,
+    voice_turn: bool = False,
 ) -> dict[str, Any]:
     """Serialize a single compose request into an Artifact ``data`` payload (TK-8, Q-50).
 
@@ -170,12 +183,16 @@ def compose_request_to_artifact_data(
 
     ``held_chat`` is an ADDITIVE optional field (TK-272, DEC-57), threaded through by
     ``ComposeDispatchRouter`` from the surfaced-item wire. Defaults ``False``.
+
+    ``voice_turn`` is a SECOND additive optional field (TK-279, DEC-60b), threaded through
+    identically. Defaults ``False``.
     """
     return {
         "item_id": item_id,
         "item_kind": item_kind.value,
         "payload": payload,
         "held_chat": held_chat,
+        "voice_turn": voice_turn,
     }
 
 
@@ -198,6 +215,14 @@ def compose_request_held_chat_from_artifact_data(data: dict[str, Any]) -> bool:
     return bool(data.get("held_chat", False))
 
 
+def compose_request_voice_turn_from_artifact_data(data: dict[str, Any]) -> bool:
+    """Read the ADDITIVE optional ``voice_turn`` field back off a compose-request wire (TK-279).
+
+    Absent on data written before TK-279 -> ``False``, never a ``KeyError``.
+    """
+    return bool(data.get("voice_turn", False))
+
+
 def composed_output_to_artifact_data(
     text: str,
     item_id: str,
@@ -206,6 +231,7 @@ def composed_output_to_artifact_data(
     tokens_spent: int | None = None,
     *,
     held_chat: bool = False,
+    voice_turn: bool = False,
 ) -> dict[str, Any]:
     """Serialize ``ComposeStage``'s terminal output into an Artifact ``data`` payload (TK-8, Q-50).
 
@@ -217,6 +243,10 @@ def composed_output_to_artifact_data(
     ``held_chat`` is a SECOND additive field (TK-272, DEC-57) — threaded through from the compose
     request so ``speech_shape``/``speak`` downstream can suppress voice for a held chat reply
     without a second gate-decision read. Defaults ``False``.
+
+    ``voice_turn`` is a THIRD additive field (TK-279, DEC-60b) — threaded through identically, so
+    ``speech_shape``/``speak`` can tell a held reply that originated from a SPOKEN turn apart from
+    one typed at the keyboard. Defaults ``False``.
     """
     return {
         "text": text,
@@ -225,6 +255,7 @@ def composed_output_to_artifact_data(
         "degraded": degraded,
         "tokens_spent": tokens_spent,
         "held_chat": held_chat,
+        "voice_turn": voice_turn,
     }
 
 
@@ -255,12 +286,21 @@ def composed_output_held_chat_from_artifact_data(data: dict[str, Any]) -> bool:
     return bool(data.get("held_chat", False))
 
 
+def composed_output_voice_turn_from_artifact_data(data: dict[str, Any]) -> bool:
+    """Read the ADDITIVE optional ``voice_turn`` field back off a composed-output wire (TK-279).
+
+    Absent on data written before TK-279 -> ``False``, never a ``KeyError``.
+    """
+    return bool(data.get("voice_turn", False))
+
+
 def surfaced_item_to_artifact_data(
     action: GateAction,
     scored_item: ScoredItem,
     queue_item: QueueItem,
     *,
     held_chat: bool = False,
+    voice_turn: bool = False,
 ) -> dict[str, Any]:
     """Serialize ONE surfaced gate entry into an Artifact ``data`` payload (TK-10, Q-51).
 
@@ -273,6 +313,10 @@ def surfaced_item_to_artifact_data(
     ``review_or_speak`` forwarded from its HOLD branch (Q-50 payload boundary forbids carrying
     this on ``queue_item.payload``, so it rides the artifact instead). Defaults ``False``, so
     every caller predating TK-272 is unaffected.
+
+    ``voice_turn`` is a SECOND additive optional field (TK-279, DEC-60b) — ``True`` when the
+    originating queue item's payload carried ``voice_turn=True`` (TK-278 stamps this on every
+    non-command ASR transcript). Defaults ``False``.
     """
     scored_dict = asdict(scored_item)
     scored_dict["item_kind"] = scored_item.item_kind.value
@@ -281,6 +325,7 @@ def surfaced_item_to_artifact_data(
         "scored_item": scored_dict,
         "queue_item": asdict(queue_item),
         "held_chat": held_chat,
+        "voice_turn": voice_turn,
     }
 
 
@@ -309,6 +354,14 @@ def surfaced_item_held_chat_from_artifact_data(data: dict[str, Any]) -> bool:
     Absent on data written before TK-272 -> ``False``, never a ``KeyError``.
     """
     return bool(data.get("held_chat", False))
+
+
+def surfaced_item_voice_turn_from_artifact_data(data: dict[str, Any]) -> bool:
+    """Read the ADDITIVE optional ``voice_turn`` field back off a surfaced-item wire (TK-279).
+
+    Absent on data written before TK-279 -> ``False``, never a ``KeyError``.
+    """
+    return bool(data.get("voice_turn", False))
 
 
 def hold_report_to_artifact_data(holds: list[dict[str, Any]]) -> dict[str, Any]:
@@ -441,10 +494,12 @@ __all__ = [
     "compose_request_from_artifact_data",
     "compose_request_held_chat_from_artifact_data",
     "compose_request_to_artifact_data",
+    "compose_request_voice_turn_from_artifact_data",
     "composed_output_from_artifact_data",
     "composed_output_held_chat_from_artifact_data",
     "composed_output_to_artifact_data",
     "composed_output_tokens_spent_from_artifact_data",
+    "composed_output_voice_turn_from_artifact_data",
     "gate_decisions_from_artifact_data",
     "gate_decisions_to_artifact_data",
     "hold_report_from_artifact_data",
@@ -458,4 +513,5 @@ __all__ = [
     "surfaced_item_from_artifact_data",
     "surfaced_item_held_chat_from_artifact_data",
     "surfaced_item_to_artifact_data",
+    "surfaced_item_voice_turn_from_artifact_data",
 ]
