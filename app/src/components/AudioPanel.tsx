@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getSettings, putSettings } from "../api";
 import { listInputDevices, MicCapture, type AudioCaptureDevice } from "../audio";
+import { acquireCaptureLatch, announcePttBinding, releaseCaptureLatch } from "../ptt";
 import { ink } from "../tokens";
 import { Button } from "./Button";
 import { Panel } from "./Panel";
@@ -105,6 +106,9 @@ export function AudioPanel() {
       setPttRejection(null);
       setPttBinding(encoded);
       void putSettings({ wombat_ptt_binding: encoded });
+      // TK-276: no restart notice accompanies this PUT (TK-275, ruled) - the App-level
+      // push-to-talk listener needs to adopt the new binding immediately.
+      announcePttBinding(encoded);
     }
 
     function onKeyDown(event: KeyboardEvent): void {
@@ -147,6 +151,7 @@ export function AudioPanel() {
       captureRef.current = null;
       setRecording(false);
       if (!capture) return;
+      releaseCaptureLatch("manual");
       const outcome = await capture.stop();
       if (outcome.kind === "saved" && !outcome.result.ok) {
         if (outcome.result.reason === "drop-dir-not-configured") {
@@ -159,10 +164,17 @@ export function AudioPanel() {
     }
 
     setCaptureError(null);
+    // TK-276 (DEC-58 e): the shared capture latch - never a silent no-op if push-to-talk is
+    // already holding it.
+    if (!acquireCaptureLatch("manual")) {
+      setCaptureError("Push-to-talk is currently recording.");
+      return;
+    }
     const capture = new MicCapture();
     try {
       await capture.start(selectedDeviceId || undefined, muted);
     } catch {
+      releaseCaptureLatch("manual");
       setCaptureError("Could not access the microphone.");
       return;
     }

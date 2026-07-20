@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetBridgeCacheForTests } from "../api";
+import { acquireCaptureLatch, releaseCaptureLatch, resetCaptureLatchForTests } from "../ptt";
 import { AudioPanel } from "./AudioPanel";
 
 /**
@@ -126,6 +127,7 @@ function installFakeAudioEnv(options: InstallOptions = {}): { calls: FetchCall[]
 
 beforeEach(() => {
   resetBridgeCacheForTests();
+  resetCaptureLatchForTests();
 });
 
 afterEach(() => {
@@ -172,6 +174,25 @@ describe("AudioPanel (TK-224 AC2: mute + device select)", () => {
 
     const select = (await screen.findByLabelText("Input device")) as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.value)).toEqual(["dev-1", "dev-2"]);
+  });
+
+  it("TK-276 AC2: defers to a push-to-talk hold that already owns the shared capture latch, with the Stop-state visible truth", async () => {
+    installFakeAudioEnv();
+    render(<AudioPanel />);
+    await screen.findByLabelText("Input device");
+
+    expect(acquireCaptureLatch("ptt")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /^record$/i }));
+
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Push-to-talk is currently recording."),
+    ).toBeTruthy();
+    // The Record button itself never silently flips to a Stop state it can't back up.
+    expect(screen.getByRole("button", { name: /^record$/i })).toBeTruthy();
+
+    releaseCaptureLatch("ptt");
   });
 
   it("applies a device selection change to the NEXT capture's getUserMedia constraints", async () => {

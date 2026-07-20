@@ -16,7 +16,8 @@ import {
   type SelectOption,
   type ViewId,
 } from "./components";
-import { font, ink, surface } from "./tokens";
+import { usePushToTalk } from "./ptt";
+import { font, ink, interactive, radius, surface } from "./tokens";
 import {
   getSettings,
   putKey,
@@ -189,6 +190,9 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
 }
 
 export function App() {
+  // TK-276 (DEC-58 a/b/e): mounted ONCE here so the persisted `wombat_ptt_binding` drives the
+  // mic anywhere in the app while the window is focused - fully self-contained, see ptt.ts.
+  const pushToTalk = usePushToTalk();
   const [view, setView] = useState<ViewId>("today");
   const [formState, setFormState] = useState<FormState | null>(null);
   const [touched, setTouched] = useState<ReadonlySet<FormField>>(new Set());
@@ -302,6 +306,22 @@ export function App() {
 
   return (
     <div className={`${surface.canvas} ${font.sans} ${ink.primary} flex h-screen flex-col`}>
+      {pushToTalk.active && (
+        <div
+          role="status"
+          className={`fixed top-4 right-4 z-50 ${radius.md} ${interactive.danger.bg} ${interactive.danger.text} px-3 py-1.5 text-sm`}
+        >
+          Recording (push-to-talk)
+        </div>
+      )}
+      {pushToTalk.degraded && (
+        <div
+          role="status"
+          className={`fixed top-4 right-4 z-50 ${radius.md} ${surface.elevated} px-3 py-1.5 text-sm ${ink.muted}`}
+        >
+          voice drop-dir not configured - set WOMBAT_ASR_DROP_DIR
+        </div>
+      )}
       <Header />
       <div className="flex min-h-0 flex-1">
         <NavRail active={view} onSelect={setView} />
