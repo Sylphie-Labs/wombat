@@ -91,6 +91,20 @@ class _CappedCeiling:
 
 
 @dataclass
+class _FakeFlushLatch:
+    allowed: bool = True
+
+    def allow(self) -> bool:
+        return self.allowed
+
+    def record(self) -> None:
+        pass
+
+    def note_denied(self) -> None:
+        pass
+
+
+@dataclass
 class _EventRecorder:
     events: list[object] = field(default_factory=list)
 
@@ -239,6 +253,7 @@ async def test_ac1_gate_decay_removes_stale_item_emits_decay_event_and_it_is_nev
         decay_ttl_seconds=50.0,
         day_rollover=_NoOpRollover(),
         clock=lambda: 100.0,
+        flush_latch=_FakeFlushLatch(),
         on_event=recorder,
     )
 
@@ -266,6 +281,7 @@ async def test_gate_decay_method_returns_the_same_events_it_emits() -> None:
         decay_ttl_seconds=1.0,
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
         on_event=recorder,
     )
 
@@ -470,6 +486,7 @@ async def test_ac3ii_restart_never_refreshes_the_day_budget(clean_table: None) -
                 decay_ttl_seconds=float("inf"),
                 day_rollover=_NoOpRollover(),
                 clock=lambda: 1000.0,
+                flush_latch=_FakeFlushLatch(),
             )
 
         gate = _make_gate()
@@ -505,6 +522,7 @@ async def test_ac3iii_surface_path_books_ceiling_only_hold_path_adds_pending_onl
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
     )
 
     surfaced = await gate.pipeline([_gate_item("surface-me")])
@@ -594,6 +612,7 @@ async def test_ac4_wake_burst_bounds_at_ceiling_resets_once_and_decays_pre_sleep
         decay_ttl_seconds=decay_ttl_seconds,
         day_rollover=rollover,
         clock=_epoch,
+        flush_latch=_FakeFlushLatch(),
         on_event=recorder,
     )
 

@@ -36,6 +36,11 @@ Composition (all values keyword-injected — NO inline literals; composition pas
   never optional-defaulted (the Q-69 orphaned-budget lesson: an optional decay would ship
   dead in the runnable path). Tests not exercising decay pass ``decay_ttl_seconds=float("inf")``
   plus a no-op ``day_rollover`` fake whose ``check()`` always returns ``None``.
+* ``flush_latch`` — TK-287 (DEC-63b): the once-per-wombat-day gate on the flush arm
+  (``FlushLatchProtocol``; ``FlushDayLatch`` in production, ``gate/ceiling.py``). REQUIRED, no
+  default (the Q-69 lesson again — construction without it is a ``TypeError``). Checked FIRST
+  in ``_try_flush``, before the cumulative-load/age checks; a denial never clears the pending
+  set. Tests not exercising the once-per-day limit pass an always-allow fake.
 
 TK-28 (Q-73) prepends two hygiene steps to every ``pipeline()`` call, in order:
 ``day_rollover.check()`` (routed via ``on_event``) then ``self.decay()`` — BEFORE the
@@ -74,6 +79,24 @@ class UserModelProtocol(Protocol):
     async def ratings_for(self, item: GateItem) -> RatingParams: ...
 
 
+@runtime_checkable
+class FlushLatchProtocol(Protocol):
+    """The once-per-wombat-day gate for the load-flush arm (TK-287, DEC-63b).
+
+    ``allow()`` answers whether the flush arm may fire AT ALL today; ``record()`` books today's
+    flush (called exactly when ``SURFACE_FLUSH`` is returned). ``note_denied()`` logs the
+    once-per-wombat-day INFO line for a denied attempt. ``FlushDayLatch`` (``gate/ceiling.py``)
+    is the production implementation over the shared ``DailyLedger``; tests inject a fake
+    satisfying this same structural shape.
+    """
+
+    def allow(self) -> bool: ...
+
+    def record(self) -> None: ...
+
+    def note_denied(self) -> None: ...
+
+
 def _log_event_loudly(event: object) -> None:
     """Default ``on_event``: log every gate event loudly (never silently swallowed)."""
     _log.warning("gate event: %r", event)
@@ -94,6 +117,7 @@ class Gate:
         decay_ttl_seconds: float,
         day_rollover: DayRolloverProtocol,
         clock: Clock,
+        flush_latch: FlushLatchProtocol,
         on_event: Callable[[object], None] = _log_event_loudly,
         threshold_fn: Callable[[], float] | None = None,
     ) -> None:
@@ -106,6 +130,7 @@ class Gate:
         self._decay_ttl_seconds = decay_ttl_seconds
         self._day_rollover = day_rollover
         self._clock = clock
+        self._flush_latch = flush_latch
         self._on_event = on_event
         self._threshold_fn = threshold_fn
 
@@ -128,7 +153,16 @@ class Gate:
         return event_class, scored
 
     def _try_flush(self) -> GateDecision | None:
-        """Evaluate the flush arm; ``None`` if it does not fire (caller then holds)."""
+        """Evaluate the flush arm; ``None`` if it does not fire (caller then holds).
+
+        TK-287 (DEC-63b): the once-per-wombat-day ``flush_latch`` is checked FIRST, before the
+        cumulative-load/age checks — a denial logs at most one INFO line per wombat day (via
+        ``flush_latch.note_denied()``) and leaves the pending set UNTOUCHED (items keep aging
+        toward decay or tomorrow's flush), never clearing it on denial.
+        """
+        if not self._flush_latch.allow():
+            self._flush_latch.note_denied()
+            return None
         if self._pending_set.cumulative_load() <= self._load_flush_threshold:
             return None
         oldest_added_at = self._pending_set.oldest_added_at()
@@ -141,6 +175,7 @@ class Gate:
             sorted(self._pending_set.list(), key=lambda scored: scored.urgency, reverse=True)
         )
         self._pending_set.clear()  # TK-25's durable, journaled bulk drain-all
+        self._flush_latch.record()
         return GateDecision(action=GateAction.SURFACE_FLUSH, items=flushed)
 
     def decay(self) -> tuple[DecayEvent, ...]:
@@ -227,4 +262,4 @@ class Gate:
         return worthy
 
 
-__all__ = ["Gate", "UserModelProtocol"]
+__all__ = ["FlushLatchProtocol", "Gate", "UserModelProtocol"]

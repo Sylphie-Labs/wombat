@@ -44,7 +44,7 @@ from wombat.gate.models import ItemKind
 from wombat.gate.pending_journal_pg import PgPendingJournal
 from wombat.gate.pending_journal_pg import ensure_schema as ensure_pending_journal_schema
 from wombat.gate.pending_set import PendingSet, PendingSetAdd
-from wombat.gate.pipeline import Gate, UserModelProtocol
+from wombat.gate.pipeline import FlushLatchProtocol, Gate, UserModelProtocol
 from wombat.gate.trigger import CeilingProtocol
 from wombat.params import load_operating_params
 from wombat.queue import QueueItem
@@ -125,6 +125,7 @@ def _spy_on_gate_pending_set(monkeypatch: pytest.MonkeyPatch) -> list[PendingSet
         decay_ttl_seconds: float,
         day_rollover: DayRolloverProtocol,
         clock: Callable[[], float],
+        flush_latch: FlushLatchProtocol,
         threshold_fn: Callable[[], float] | None = None,
     ) -> Gate:
         captured.append(pending_set)
@@ -138,6 +139,7 @@ def _spy_on_gate_pending_set(monkeypatch: pytest.MonkeyPatch) -> list[PendingSet
             decay_ttl_seconds=decay_ttl_seconds,
             day_rollover=day_rollover,
             clock=clock,
+            flush_latch=flush_latch,
             threshold_fn=threshold_fn,
         )
 

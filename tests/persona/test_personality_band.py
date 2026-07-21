@@ -70,6 +70,20 @@ class _FakeCeiling:
         self.recorded.append(event_class)
 
 
+@dataclass
+class _FakeFlushLatch:
+    allowed: bool = True
+
+    def allow(self) -> bool:
+        return self.allowed
+
+    def record(self) -> None:
+        pass
+
+    def note_denied(self) -> None:
+        pass
+
+
 # ------------------------------------------------------------------------------------- AC1
 
 
@@ -115,6 +129,7 @@ async def test_ac4_live_persona_proactivity_flip_changes_the_next_scored_item_no
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
         threshold_fn=lambda: effective_urgency_threshold(
             base_threshold, live_persona.matrix.proactivity, band
         ),

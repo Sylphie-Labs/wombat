@@ -160,7 +160,7 @@ from .domain.brief_schedule import BriefRunLedger
 from .domain.daily_ledger import DailyLedger, wombat_today
 from .domain.item_identity import idempotency_key
 from .external_store import ExternalItemStore
-from .gate.ceiling import CeilingLedger
+from .gate.ceiling import CeilingLedger, FlushDayLatch
 from .gate.decay import DayRollover
 from .gate.gate import gate_item_from_queue_item
 from .gate.models import GateAction, GateDecision, ItemKind
@@ -733,8 +733,9 @@ def assemble_runtime(
 
     Registers the TK-7 drain pathway (id ``DRAIN_PATHWAY_ID``) and wires the REAL production
     ``Gate`` (TK-27) — a durable ``PendingSet`` backed by the TK-29 Postgres ``PendingJournal``
-    (the Q-70/RISK-5 boot obligation), a ``CeilingLedger`` over a real ``DailyLedger``, the real
-    presence provider, and ``UserModel`` ratings — over the SAME ``build_engine``/
+    (the Q-70/RISK-5 boot obligation), a ``CeilingLedger`` over a real ``DailyLedger``, a
+    ``FlushDayLatch`` (TK-287) over the SAME ``DailyLedger``, the real presence provider, and
+    ``UserModel`` ratings — over the SAME ``build_engine``/
     ``build_compose_stage``/``build_source_registry`` factories every other composition path
     uses (never hand-rolled, closing the ``scripts/demo_drain.py`` Q-69 budget-bypass gap).
 
@@ -798,6 +799,11 @@ def assemble_runtime(
     # (ceiling.py precedent) so the exactly-once boundary observation and the per-class ceiling
     # share ONE durable row lifecycle.
     day_rollover = DayRollover(daily_ledger=daily_ledger)
+    # TK-287 (DEC-63b): FlushDayLatch composed over the SAME DailyLedger instance too — the
+    # once-per-wombat-day gate on the load-flush arm, restart-durable (Postgres-backed, not
+    # in-memory). No tunable to inject: once per wombat day is pinned (DEC-63 rejected a
+    # cooldown knob).
+    flush_latch = FlushDayLatch(daily_ledger=daily_ledger)
 
     # TK-176: ONE shared user-scope entity KG (replaces the TK-53 throwaway InMemoryEntityKG())
     # threaded into BOTH the read seam (UserModel) and the write seam (ObservationWriter, via
@@ -820,6 +826,7 @@ def assemble_runtime(
         decay_ttl_seconds=op.decay_ttl_seconds,
         day_rollover=day_rollover,
         clock=_epoch_now,
+        flush_latch=flush_latch,
         # TK-215 (DEC-37(a)/Q-107(a)): reads the LIVE proactivity level at scoring time — a
         # live_persona.set() between two scored items lands on the very next item, no restart.
         threshold_fn=lambda: effective_urgency_threshold(

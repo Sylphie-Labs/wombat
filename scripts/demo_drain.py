@@ -88,7 +88,7 @@ from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig, load_config
 from wombat.domain.daily_ledger import DailyLedger
 from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
-from wombat.gate.ceiling import CeilingLedger
+from wombat.gate.ceiling import CeilingLedger, FlushDayLatch
 from wombat.gate.decay import DayRollover
 from wombat.gate.models import GateItem, ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
@@ -479,6 +479,8 @@ async def main(argv: list[str] | None = None) -> int:
     )
     # TK-28 (Q-73): DayRollover shares the SAME daily_ledger instance as ceiling above.
     day_rollover = DayRollover(daily_ledger=daily_ledger)
+    # TK-287 (DEC-63b): FlushDayLatch shares the SAME daily_ledger instance too.
+    flush_latch = FlushDayLatch(daily_ledger=daily_ledger)
     gate = Gate(
         user_model=user_model,
         pending_set=pending_set,
@@ -489,6 +491,7 @@ async def main(argv: list[str] | None = None) -> int:
         decay_ttl_seconds=op.decay_ttl_seconds,
         day_rollover=day_rollover,
         clock=demo_clock.epoch,
+        flush_latch=flush_latch,
     )
 
     _bar("Presence")

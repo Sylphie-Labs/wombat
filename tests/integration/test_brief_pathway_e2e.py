@@ -88,6 +88,20 @@ class _UntouchedCeiling:
         raise AssertionError("select_items must never record the ceiling")
 
 
+class _UntouchedFlushLatch:
+    """A ``FlushLatchProtocol`` double that raises if ever touched — ``Gate.select_items``
+    (TK-287 AC3) must never read/record the flush latch either."""
+
+    def allow(self) -> bool:  # pragma: no cover - must never be reached
+        raise AssertionError("select_items must never read the flush latch")
+
+    def record(self) -> None:  # pragma: no cover - must never be reached
+        raise AssertionError("select_items must never record the flush latch")
+
+    def note_denied(self) -> None:  # pragma: no cover - must never be reached
+        raise AssertionError("select_items must never note-deny the flush latch")
+
+
 def _config() -> WombatConfig:
     return WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com")
 
@@ -103,6 +117,7 @@ def _real_gate() -> Gate:
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: _FIXED_NOW.timestamp(),
+        flush_latch=_UntouchedFlushLatch(),
     )
 
 

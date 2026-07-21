@@ -84,6 +84,20 @@ class _FakeCeiling:
 
 
 @dataclass
+class _FakeFlushLatch:
+    allowed: bool = True
+
+    def allow(self) -> bool:
+        return self.allowed
+
+    def record(self) -> None:
+        pass
+
+    def note_denied(self) -> None:
+        pass
+
+
+@dataclass
 class _EventRecorder:
     events: list[object] = field(default_factory=list)
 
@@ -125,6 +139,7 @@ async def test_ac1_worthy_item_under_ceiling_surfaces_immediate_and_records_ceil
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
     )
 
     decision = await gate.pipeline([_item("a", sender_class="vip")])
@@ -152,6 +167,7 @@ async def test_ac2_ceiling_denies_worthy_item_holds_and_emits_ceiling_hit() -> N
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
         on_event=recorder,
     )
 
@@ -184,6 +200,7 @@ async def test_ac3_flush_arm_fires_all_pending_urgency_desc_and_clears() -> None
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: clock_time[0],
+        flush_latch=_FakeFlushLatch(),
     )
 
     # Two items accumulate as HOLD (not worthy): "vip" (u=0.45) then "automated" (u=0.045).
@@ -228,6 +245,7 @@ async def test_ac4_select_items_returns_worthy_sorted_and_preserves_pending_unto
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
     )
     # Seed the LIVE pending set with an item unrelated to the brief-items list below.
     already_pending = ScoredItem(
@@ -273,6 +291,7 @@ async def test_capacity_eviction_from_a_held_add_routes_through_on_event() -> No
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
         on_event=recorder,
     )
 
@@ -328,6 +347,7 @@ async def test_ac2_balanced_threshold_fn_matches_the_zero_config_gate_exactly() 
             decay_ttl_seconds=float("inf"),
             day_rollover=_NoOpRollover(),
             clock=lambda: 1000.0,
+            flush_latch=_FakeFlushLatch(),
             threshold_fn=threshold_fn,
         )
         return gate, pending_set

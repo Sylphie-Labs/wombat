@@ -137,6 +137,19 @@ class _UntouchedCeiling:
         raise AssertionError("select_items must never record the ceiling")
 
 
+class _UntouchedFlushLatch:
+    """TK-287 AC3: ``select_items`` must never read or record the flush latch either."""
+
+    def allow(self) -> bool:  # pragma: no cover - never reached
+        raise AssertionError("select_items must never read the flush latch")
+
+    def record(self) -> None:  # pragma: no cover - never reached
+        raise AssertionError("select_items must never record the flush latch")
+
+    def note_denied(self) -> None:  # pragma: no cover - never reached
+        raise AssertionError("select_items must never note-deny the flush latch")
+
+
 @dataclass
 class _Scheduler:
     """A fully-wired real scheduler stack over docker pg — everything a test drives."""
@@ -174,6 +187,7 @@ def _build_scheduler(
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: now_holder[0].timestamp(),
+        flush_latch=_UntouchedFlushLatch(),
     )
     gather = BriefGatherStage(
         fetch_calendar=fetch_calendar or (lambda: [_one_event()]),  # type: ignore[arg-type]

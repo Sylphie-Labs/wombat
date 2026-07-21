@@ -41,7 +41,7 @@ from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
 from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
-from wombat.gate.ceiling import CeilingLedger
+from wombat.gate.ceiling import CeilingLedger, FlushDayLatch
 from wombat.gate.decay import LedgerReset
 from wombat.gate.models import ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
@@ -226,6 +226,7 @@ def _build_real_gate_stack(
     pending_set = PendingSet(journal=InMemoryPendingJournal(), max_pending=100)
     daily_ledger = DailyLedger(_DSN, tz=ZoneInfo("UTC"), clock=lambda: _FIXED_NOW)
     ceiling = CeilingLedger(daily_ledger=daily_ledger, per_class_daily_ceiling=3)
+    flush_latch = FlushDayLatch(daily_ledger=daily_ledger)
     gate = Gate(
         user_model=user_model,
         pending_set=pending_set,
@@ -236,6 +237,7 @@ def _build_real_gate_stack(
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: _FIXED_NOW.timestamp(),
+        flush_latch=flush_latch,
     )
 
     drain_queue_stage = DrainQueueStage(queue, batch_size=1, poll_interval_seconds=5.0)

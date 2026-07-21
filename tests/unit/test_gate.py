@@ -493,6 +493,20 @@ class _AlwaysAllowCeiling:
         pass
 
 
+class _AlwaysAllowFlushLatch:
+    """A ``FlushLatchProtocol`` double that never denies (TK-287) — this module covers the
+    ``make_gate_evaluator`` adapter, not the once-per-day flush limit."""
+
+    def allow(self) -> bool:
+        return True
+
+    def record(self) -> None:
+        pass
+
+    def note_denied(self) -> None:
+        pass
+
+
 class _NoOpRollover:
     """A ``DayRolloverProtocol`` double that never fires (TK-28, Q-73) — this module covers the
     ``make_gate_evaluator`` adapter, not decay/rollover."""
@@ -512,6 +526,7 @@ def _real_gate(*, rating_params: RatingParams, urgency_threshold: float = 0.5) -
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: _TAKEN_AT,
+        flush_latch=_AlwaysAllowFlushLatch(),
     )
 
 

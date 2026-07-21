@@ -230,6 +230,18 @@ class _FakeCeiling:
         pass
 
 
+@dataclass
+class _FakeFlushLatch:
+    def allow(self) -> bool:
+        return True
+
+    def record(self) -> None:
+        pass
+
+    def note_denied(self) -> None:
+        pass
+
+
 async def test_asr_chat_item_through_real_gate_routes_to_compose_and_never_pends() -> None:
     """TK-278 (DEC-60a): an asr-shaped QueueItem (item_kind 'chat', voice_turn True,
     transcript) drained through the REAL production ``Gate`` (not the TK-6 stub) with a
@@ -258,6 +270,7 @@ async def test_asr_chat_item_through_real_gate_routes_to_compose_and_never_pends
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=_FakeFlushLatch(),
     )
 
     decision = await gate.pipeline([gate_item])

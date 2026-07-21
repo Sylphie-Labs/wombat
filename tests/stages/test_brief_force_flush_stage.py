@@ -81,8 +81,32 @@ class _SpyCeiling:
         self.record_calls.append(event_class)
 
 
+@dataclass
+class _SpyFlushLatch:
+    """A ``FlushLatchProtocol`` spy (TK-287): records every call so AC1 can assert it was NEVER
+    touched — ``select_items`` reads/records nothing on the flush latch either."""
+
+    allow_calls: int = 0
+    record_calls: int = 0
+    note_denied_calls: int = 0
+
+    def allow(self) -> bool:
+        self.allow_calls += 1
+        return True
+
+    def record(self) -> None:
+        self.record_calls += 1
+
+    def note_denied(self) -> None:
+        self.note_denied_calls += 1
+
+
 def _make_gate(
-    *, pending_set: PendingSet, ceiling: _SpyCeiling, urgency_threshold: float
+    *,
+    pending_set: PendingSet,
+    ceiling: _SpyCeiling,
+    urgency_threshold: float,
+    flush_latch: _SpyFlushLatch | None = None,
 ) -> Gate:
     return Gate(
         user_model=_FakeUserModel(rating_params=_IDENTITY_PARAMS),
@@ -94,6 +118,7 @@ def _make_gate(
         decay_ttl_seconds=float("inf"),
         day_rollover=_NoOpRollover(),
         clock=lambda: 1000.0,
+        flush_latch=flush_latch or _SpyFlushLatch(),
     )
 
 
@@ -184,19 +209,26 @@ async def test_ac1_real_gate_selects_worthy_brief_items_without_touching_live_pe
     journal_len_before = len(journal.replay())
 
     ceiling = _SpyCeiling()
-    gate = _make_gate(pending_set=pending_set, ceiling=ceiling, urgency_threshold=0.2)
+    flush_latch = _SpyFlushLatch()
+    gate = _make_gate(
+        pending_set=pending_set, ceiling=ceiling, urgency_threshold=0.2, flush_latch=flush_latch
+    )
     stage = BriefForceFlushStage(select_items=gate.select_items, tz=_TZ)
     ctx = _make_ctx(payload)
 
     result = await stage.run(ctx)
 
-    # --- audit-CRITICAL: the live pending set / journal / ceiling are completely untouched ---
+    # --- audit-CRITICAL: the live pending set / journal / ceiling / flush latch are completely
+    # untouched ---
     assert {item.item_id for item in pending_set.list()} == {"unrelated-1", "unrelated-2"}
     assert pending_set.list() == live_items_before
     assert pending_set.cumulative_load() == cumulative_load_before
     assert len(journal.replay()) == journal_len_before
     assert ceiling.allow_calls == []
     assert ceiling.record_calls == []
+    assert flush_latch.allow_calls == 0  # TK-287 AC3: select_items touches no latch state
+    assert flush_latch.record_calls == 0
+    assert flush_latch.note_denied_calls == 0
 
     # --- the artifact contains exactly the brief items that pass is_surfacing_worthy ---
     assert isinstance(result, Transition)
