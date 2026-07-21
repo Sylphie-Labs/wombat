@@ -4,7 +4,7 @@ DB tests (AC1/AC2) require a REAL Postgres and are gated on ``WOMBAT_TEST_PG_DSN
 convention as ``tests/unit/test_settings_store.py`` / ``tests/unit/test_external_store.py`` /
 ``tests/unit/test_schema_preflight.py``): absent it, tests are skipped LOUDLY.
 
-  AC1 pinned shape + idempotent ``ensure_schema``; the preflight carries exactly EIGHT entries;
+  AC1 pinned shape + idempotent ``ensure_schema``; the preflight carries exactly NINE entries;
       ``put``/``get_scope``/``delete_scope`` over two scopes — a re-put of the same (scope_key,
       entry_key) upserts with ``updated_at`` bumped while ``created_at`` stays byte-unchanged,
       ``get_scope`` returns only its own scope, ``delete_scope`` removes exactly its own scope.
@@ -88,14 +88,14 @@ def test_ac1_ensure_schema_creates_pinned_shape_and_is_idempotent(fresh_table: N
     assert cols["updated_at"] == "timestamp with time zone"
 
 
-def test_ac1_ensure_all_schemas_carries_exactly_eight_entries() -> None:
+def test_ac1_ensure_all_schemas_carries_exactly_nine_entries() -> None:
     source = inspect.getsource(schema_preflight.ensure_all_schemas)
     calls = [
         line.strip()
         for line in source.splitlines()
         if line.strip().startswith("ensure_") and line.strip().endswith("_schema(conn)")
     ]
-    assert len(calls) == 8
+    assert len(calls) == 9
     assert "ensure_scratchpad_schema(conn)" in source
 
 

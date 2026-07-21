@@ -224,6 +224,7 @@ from .sources.bootstrap import (
 from .sources.chat_source import ChatSource
 from .sources.presence import make_presence_provider
 from .sources.registry import SourceRegistry
+from .sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from .stages.brief_compose_stage import BriefComposeStage
 from .stages.brief_deliver_stage import BriefDeliverStage
 from .stages.brief_force_flush_stage import BriefForceFlushStage
@@ -1252,9 +1253,17 @@ def assemble_runtime(
     # TK-247 (ruling v2.68 r5): ALWAYS constructed (dsn is a required str here; the store is
     # fully lazy — no connection at construction), mirroring external_item_store above.
     scratchpad_store = ScratchpadStore(dsn)
+    # TK-286 (DEC-63a): the persisted exactly-once seam every source's enqueue shares — wraps the
+    # SAME shared queue instance so a source item, once successfully enqueued, never re-enters the
+    # queue on a later poll with an unchanged payload (closes the live repeat-flush defect:
+    # wombat_queue's own ON CONFLICT dedup only holds while the row is LIVE, and ack() DELETEs it).
+    # Threaded ONLY into build_source_registry below — PatternDetectorStage above KEEPS the raw
+    # queue.enqueue (an internally-derived nightly pattern event, not a re-polled source item).
+    seen_ledger = SeenLedger(dsn)
+    deduping_enqueue = DedupingEnqueuer(queue, seen_ledger)
     source_registry = build_source_registry(
         config,
-        queue,
+        deduping_enqueue,
         tz=tz,
         gcal_token_store=gcal_token_store,
         gmail_token_store=gmail_token_store,

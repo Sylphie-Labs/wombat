@@ -38,6 +38,7 @@ from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
 from wombat.scratchpad import ScratchpadStore
+from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.substrate import cold_boot_bundle
 
@@ -503,6 +504,36 @@ def test_assemble_runtime_exposes_a_real_scratchpad_store() -> None:
         tz=ZoneInfo("UTC"),
     )
     assert isinstance(bundle.scratchpad_store, ScratchpadStore)
+
+
+# --- TK-286 (DEC-63a): the DedupingEnqueuer/SeenLedger seam wires into build_source_registry
+# ONLY -- PatternDetectorStage keeps the raw queue.enqueue byte-untouched -----------------------
+
+
+def test_assemble_runtime_wires_deduping_enqueuer_into_source_registry_only() -> None:
+    """AC6: ``source_registry`` is driven by a ``DedupingEnqueuer`` wrapping the SAME shared
+    ``bundle.queue`` (never a second queue instance), while the nightly ``dream_pattern`` stage
+    (``PatternDetectorStage``) keeps the raw, un-deduped ``bundle.queue.enqueue`` -- an internally
+    -derived pattern event, not a re-polled source item, must never be silently swallowed by the
+    seen-ledger."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+
+    deduping_enqueuer = bundle.source_registry._enqueue
+    assert isinstance(deduping_enqueuer, DedupingEnqueuer)
+    assert deduping_enqueuer._inner is bundle.queue
+    assert isinstance(deduping_enqueuer._ledger, SeenLedger)
+
+    dream_graph = bundle.pathways.get(bundle.dream_pathway_id)
+    pattern_stage = dream_graph.get("dream_pattern")
+    # raw, byte-untouched (bound method equality) -- getattr keeps this mypy-clean over Stage
+    assert getattr(pattern_stage, "_enqueue") == bundle.queue.enqueue  # noqa: B009
 
 
 def test_assemble_runtime_registers_dream_pathway_unconditionally() -> None:
