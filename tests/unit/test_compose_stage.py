@@ -22,6 +22,7 @@ from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.gate.models import ItemKind
+from wombat.persona.capabilities import CAPABILITY_CHARTER
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Humor, PersonaMatrix
 from wombat.stages.artifacts import (
@@ -100,10 +101,12 @@ async def test_ac1_success_path_phrases_via_model_and_prompt_excludes_internals(
     assert "Renewal notice" in user_msg.content
     assert "billing@acme.com" in user_msg.content
 
-    # NONE of the gate/queue-internal keys appear anywhere in the captured prompt
-    full_prompt_text = system_msg.content + "\n" + user_msg.content
+    # NONE of the gate/queue-internal keys appear in the payload-derived user message. (TK-284,
+    # v2.143: the system message is excluded here — the capability charter legitimately contains
+    # "action" twice, and the system message's exact content is covered by the byte-equality pins
+    # elsewhere in this file.)
     for internal_key in _INTERNAL_KEYS:
-        assert internal_key not in full_prompt_text
+        assert internal_key not in user_msg.content
 
 
 # --- AC2(a): provider/connection/5xx error degrades, never raises --------------------------------
@@ -312,7 +315,7 @@ async def test_tk209_no_live_persona_preserves_the_frozen_default_instruction(
     system_msg, _user_msg = model.calls[0]
     assert system_msg.content == (
         "You are Steward, a quiet steward. Phrase this one item for the user in one terse, "
-        "calm line. No preamble."
+        "calm line. No preamble. " + CAPABILITY_CHARTER
     )
 
 
@@ -346,7 +349,7 @@ async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_tu
     # The FIRST turn still rendered under DEFAULT_MATRIX (no restart needed to prove that).
     assert first_system_msg.content == (
         "You are Steward, a quiet steward. Phrase this one item for the user in one terse, "
-        "calm line. No preamble."
+        "calm line. No preamble. " + CAPABILITY_CHARTER
     )
     # The SECOND turn, rendered AFTER set(), picks up the new matrix with zero restart.
     assert second_system_msg.content != first_system_msg.content

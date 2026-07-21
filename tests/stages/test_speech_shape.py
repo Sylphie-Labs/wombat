@@ -17,6 +17,8 @@ from cogworx.model.base import ModelResponse, Usage
 from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.gate.models import ItemKind
+from wombat.persona.builder import Mouth
+from wombat.persona.expression import guard_suffix
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
     SPEECH_OUTPUT,
@@ -111,7 +113,7 @@ async def test_ac1_voice_on_and_adapter_calls_model_once_and_carries_the_summary
     assert system_msg.role == "system"
     assert user_msg.role == "user"
     # the fixed prompt carries the guard suffix verbatim (Mouth.COMPOSE's -- no fifth mouth)
-    assert system_msg.content.endswith("No preamble.")
+    assert system_msg.content.endswith(guard_suffix(Mouth.COMPOSE))
     # the model sees the FULL composed text (it summarizes it), never sees anything else
     assert user_msg.content == _COMPOSED_TEXT
 

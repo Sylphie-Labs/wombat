@@ -63,6 +63,7 @@ from wombat.compose.templates import TemplateComposer, format_payload_fields
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
 from wombat.persona.builder import Mouth
+from wombat.persona.capabilities import CAPABILITY_CHARTER
 from wombat.persona.live import LivePersona
 from wombat.stages.artifacts import (
     COMPOSED_OUTPUT,
@@ -80,9 +81,12 @@ logger = logging.getLogger(__name__)
 # text is byte-identical to the pre-TK-194 fixed string. Display/persona only — never parsed,
 # never in the gate, never an event field.
 def _system_instruction(name: str = "Steward") -> str:
+    # TK-284, DEC-62(a): appends the same imported CAPABILITY_CHARTER as the render_expression
+    # seam (persona/expression.py) so this frozen fallback stays byte-equivalent to
+    # instruction_for(Mouth.COMPOSE, DEFAULT_MATRIX, name).
     return (
         f"You are {name}, a quiet steward. Phrase this one item for the user in one terse, "
-        "calm line. No preamble."
+        "calm line. No preamble. " + CAPABILITY_CHARTER
     )
 
 
