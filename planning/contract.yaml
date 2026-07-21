@@ -7169,6 +7169,163 @@ nodes:
       - tests/stages/test_brief_force_flush_stage.py
       - tests/unit/test_gate.py
       - tests/unit/test_review_or_speak.py
+  - id: TK-288
+    kind: ticket
+    parent: EP-30
+    title: "The last-spoken register + on_spoken seam - SpeakSink and BriefDeliverStage gain an optional hook fired ONLY after a successful speak, maintaining a TTL'd single-slot LastSpokenRegister so the runtime knows what the Steward just said aloud (DEC-64 gap A, half 1; the DEF-11 future auto-listen attachment point)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-64(A) first half. NEW src/wombat/voice/reply_context.py - LastSpokenRegister(clock=...) with note_spoken(item_id, text) (text truncated to a pinned _MAX_SPOKEN_CHARS = 600) and current() returning the text IFF its age is at most LAST_SPOKEN_TTL_SECONDS = 120.0; BOTH pinned module constants, NO new config/params field (the DEC-63 no-knob precedent; the TTL exists so a PTT turn an hour later is never misframed as a reply). Single slot, newest-wins; in-memory only - every touch point runs on the event loop (the asr.py turn_hook thread-safety note governs), so a plain object suffices. SpeakSink (sinks/speak.py) gains optional ctor kwarg on_spoken fired with (item_id, speech_text) strictly AFTER self._adapter.speak(speech_text) returns without raising (speak.py:136 - both TTS paths are synchronous-blocking, so post-call means the user actually heard it) - NEVER on the voice-off/held-chat silent Done branch (:90-106), NEVER on either Degraded branch. BriefDeliverStage gains the same optional hook, fired with ('brief:' + ctx.run_id, text) exactly when voice_spoken flips true (:126). A raising hook is caught with ONE WARNING and the stage result stands byte-identical - the register is a pure side effect (the ASRSource feedback_hook precedent). bootstrap.assemble_runtime constructs ONE shared LastSpokenRegister and threads note_spoken closures into both sites; TK-289 reads it."
+    complexity_budget: "One tiny new module (a register with two pinned constants), one optional kwarg + one guarded call site in each of the two speak surfaces, one shared instance at the composition root. NO persistence, NO multi-slot history, NO tunable, NO change to what is spoken or when, NO speech_shape/compose edits."
+    acceptance_criteria:
+      - given: "a SpeakSink with a recording fake adapter and a recording on_spoken hook wired"
+        when: "a voice-enabled composed output with a healthy speech_shape summary runs"
+        then: "the hook fires exactly ONCE, after the adapter call, with the item_id and the EXACT speech text passed to the adapter; the Done(spoken=True) result is unchanged."
+      - given: "the silent no-op branch (voice off / no adapter / held chat without voice_turn) and either Degraded branch (speech text absent; adapter raising)"
+        when: "the sink runs each case"
+        then: "the hook NEVER fires and every result is byte-identical to today."
+      - given: "a hook that raises"
+        when: "a successful speak completes"
+        then: "exactly one WARNING is logged and the result is still Done(spoken=True) - the register can never degrade speech."
+      - given: "a LastSpokenRegister with a fake clock"
+        when: "current() is read at ages below and above 120.0s, and note_spoken is called twice"
+        then: "below TTL returns the (600-char-truncated) text, above TTL returns None, and the second note replaces the first (single slot)."
+      - given: "a BriefDeliverStage with voice enabled and a working speak callable; one whose speak raises; one with voice off"
+        when: "each delivers a brief"
+        then: "the hook fires once with the brief-scoped id and the brief text in the FIRST case only; text delivery is unaffected in all three."
+      - given: "on_spoken left None at both sites"
+        when: "the existing speak/brief suites run"
+        then: "zero behavior diff - construction-site tests aside, they pass unmodified."
+    non_goals:
+      - "No persistence - a restart forgets the last spoken utterance (DEC-64 accepted consequence)."
+      - "No conversation history window - one slot is the walkie-talkie need."
+      - "No tunable TTL and no listen-window consumer - DEF-11 attaches here LATER."
+    depends_on:
+      - TK-164
+      - TK-101
+      - TK-267
+    files_in_scope:
+      - src/wombat/voice/reply_context.py
+      - src/wombat/sinks/speak.py
+      - src/wombat/stages/brief_deliver_stage.py
+      - src/wombat/bootstrap.py
+      - tests/voice/test_reply_context.py
+      - tests/sinks/test_speak_sink.py
+      - tests/stages/test_brief_deliver_stage.py
+      - tests/unit/test_bootstrap.py
+  - id: TK-289
+    kind: ticket
+    parent: EP-29
+    title: "ASRSource gains the FOURTH optional ctor hook - context_hook stamps replying_to (the fresh last-spoken text) into the voice-turn payload at build time, riding the existing payload wire into the compose prompt with ZERO compose change (DEC-64 gap A, half 2)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-64(A) second half. ASRSource's ctor (asr.py:149-166) gains context_hook returning a str-to-str mapping of extra payload fields - the command/feedback/turn hook lineage exactly. In _process_one, strictly AFTER the command_hook early-return (a consumed persona command never stamps) and at payload-build time (:270-277), call the hook once and merge its mapping UNDER the built-in fields - the reserved keys item_kind, voice_turn, transcript, captured_at are never overridable (the payload's own values win by merge order). A raising hook = ONE WARNING + the turn proceeds unstamped - it must never kill the file or the poll (the established never-raises posture). sources/bootstrap.py passes it through _maybe_register_asr and build_source_registry (the TK-280 turn_hook pass-through shape verbatim). bootstrap.assemble_runtime wires the closure - read the shared TK-288 LastSpokenRegister.current(); fresh text gives {'replying_to': text}; stale/None gives {} (key ABSENT, never empty-string). Compose is untouched by construction - format_payload_fields (compose.py:158) already renders every payload field into the user message, so replying_to reaches the mouth on the existing Q-50 payload-verbatim wire."
+    complexity_budget: "One optional ctor param + one guarded merge in asr.py, one pass-through param in sources/bootstrap.py, one closure at the composition root. NO compose/gate/queue edits, NO new artifact fields, NO payload schema type - plain dict merge with reserved-key protection."
+    acceptance_criteria:
+      - given: "a register noted with spoken text and a fake clock inside the 120s TTL"
+        when: "a dropped audio file is processed into a SourceEvent"
+        then: "the payload carries replying_to equal to the EXACT registered text alongside the four built-in fields."
+      - given: "the same setup with the clock advanced past the TTL"
+        when: "the next file is processed"
+        then: "the payload has NO replying_to key (absent, not empty)."
+      - given: "context_hook left None, and separately a command-consumed utterance with the hook wired"
+        when: "each is processed"
+        then: "the None case builds a payload byte-identical to today; the command case never invokes the hook."
+      - given: "a raising context_hook"
+        when: "a file is processed"
+        then: "one WARNING, the file still moves to processed/, and the SourceEvent carries the unstamped payload."
+      - given: "a hostile hook returning item_kind/voice_turn/transcript/captured_at overrides"
+        when: "the payload is built"
+        then: "all four reserved keys keep their built-in values."
+      - given: "a ComposeStage driven with a payload carrying replying_to (FakeModel spy)"
+        when: "the prompt is captured"
+        then: "the user message contains the replying_to field rendered by format_payload_fields, and compose.py shows a clean git diff (structural - it is NOT in files_in_scope)."
+    non_goals:
+      - "No compose.py change - the payload wire IS the delivery mechanism (Q-50 upheld)."
+      - "No stamping for typed ChatSource turns - voice-only by construction; typed-chat grounding is a recorded DEC-64 follow-up."
+      - "No multi-turn history - replying_to is the single fresh last-spoken text."
+    depends_on:
+      - TK-288
+      - TK-212
+      - TK-280
+    files_in_scope:
+      - src/wombat/sources/asr.py
+      - src/wombat/sources/bootstrap.py
+      - src/wombat/bootstrap.py
+      - tests/sources/test_asr.py
+      - tests/sources/test_asr_source.py
+      - tests/sources/test_bootstrap.py
+      - tests/unit/test_bootstrap.py
+  - id: TK-290
+    kind: ticket
+    parent: EP-29
+    title: "Voice-turn deterministic grounding - build_voice_context prefetches a bounded today-calendar + recent-gmail-subjects bundle from ExternalItemStore through the SAME context_hook payload stamp, so the mouth answers a voice question from data it was actually given (DEC-64 gap B)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-64(B). NEW src/wombat/voice/context_prefetch.py - build_voice_context(store, tz, clock, ...) returning at most two payload fields: context_calendar_today from store.get_window('gcal', start, end) over the CURRENT civil-local day's bounds in the configured tz (the DEC-21 wombat-day discipline, computed at call time), rendered as compact deterministic one-per-line entries under hard pinned caps (10 items / 800 chars); and context_recent_email from store.get_recent('gmail', 5), subject/from/received lines under caps (5 items / 400 chars). A source with zero rows contributes NO key; store None or ANY store raise gives {} plus ONE WARNING (CON-3 - grounding is strictly additive, a pg hiccup never blocks the turn). Wired into the SAME composition-root context_hook closure TK-289 minted (merge register read + prefetch into one mapping) - voice turns ONLY by construction, because the hook lives on ASRSource. DEC-26 held structurally: the store's gmail rows are the DEC-45 five-field whitelist projection (no body key exists in the table payload), and the renderer reads ONLY named projection fields - a body can never enter the prompt. Prompt growth is bounded by the caps; the compose daily token ceiling (compose.py:168-188) stands unchanged as the spend guard. The sync ms-fast pg read joins the capture path on the event loop - the DEF-5 accepted class, and the slow part (whisper decode) already runs off-loop."
+    complexity_budget: "One pure renderer module with pinned caps + two store reads, one closure merge at the composition root. NO new table/migration, NO store writes, NO new config field, NO compose/gate edits, NO retrieval for brief/draft/reflection/typed-chat surfaces, NO relevance ranking - the bundle is FIXED and deterministic (the gate-is-deterministic thesis extended to retrieval)."
+    acceptance_criteria:
+      - given: "a store (fake, plus a pg-gated WOMBAT_TEST_PG_DSN case) seeded with today-window gcal rows and recent gmail rows"
+        when: "a voice file is processed and the SourceEvent built"
+        then: "the payload carries context_calendar_today and context_recent_email, rendered deterministically (same input, same bytes), within the pinned caps."
+      - given: "gcal rows outside today's tz-local bounds and row counts above the caps"
+        when: "the bundle is built"
+        then: "out-of-window rows are excluded and the rendering truncates at the caps - never an unbounded prompt."
+      - given: "an empty store, an absent (None) store, and a raising store"
+        when: "a voice turn is processed in each case"
+        then: "the payload carries NO context keys, exactly one WARNING on the failure case, and the turn proceeds (transcript and replying_to unaffected)."
+      - given: "the renderer source"
+        when: "inspected structurally (unit + grep)"
+        then: "only named projection fields are ever read - no body/body_text reference exists anywhere in the module, so DEC-26 holds by construction."
+      - given: "typed ChatSource turns, gmail/gcal source events, and the brief pipeline"
+        when: "the suite runs"
+        then: "none of them carry context keys and their behavior is byte-identical - the bundle exists ONLY on voice-turn payloads."
+    non_goals:
+      - "No free-form retrieval, ranking, or LLM tool loop (DEC-64 rejected the tool loop - mouth-only stands)."
+      - "No grounding for typed chat or any other mouth in this ticket - recorded follow-up."
+      - "No store schema or sync-beat changes - read-only consumption of the EP-36 substrate."
+    depends_on:
+      - TK-289
+      - TK-244
+      - TK-245
+    files_in_scope:
+      - src/wombat/voice/context_prefetch.py
+      - src/wombat/bootstrap.py
+      - tests/voice/test_context_prefetch.py
+      - tests/unit/test_bootstrap.py
+  - id: TK-291
+    kind: ticket
+    parent: EP-29
+    title: "The walkie-talkie conversation arc proven end-to-end - a PTT reply inside the TTL reaches the REAL compose prompt carrying replying_to plus the grounding bundle, and every neighboring contract stays byte-untouched (DEC-64 proof ticket)"
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    intent: "ONE integration module driving the real seams with fakes only at the edges - real ASRSource (fake transcriber, tmp drop dir), the established registry/queue drive (pg-gated where the queue needs it), real Gate, real ComposeStage with a FakeModel spy, the TK-288 register + TK-289/TK-290 hook closure wired exactly as bootstrap wires them. Proves the DEC-64 arc end-to-end AND that nothing adjacent moved - the pinned suites for DEC-62 (charter still terminates the compose system instruction), DEC-57 (held-chat quiet text-only), DEC-60 (voice-turn spoken reply + pane ledger), and the brief/draft/reflection instruction pins all pass unmodified."
+    complexity_budget: "One new test module; ZERO src changes permitted - if the arc cannot be proven without a src edit, that finding routes back to the architect instead of being patched here."
+    acceptance_criteria:
+      - given: "note_spoken registered and an audio file dropped inside the TTL, store seeded"
+        when: "the drain drives the turn to compose (FakeModel spy)"
+        then: "the captured user message contains replying_to with the spoken text AND both context keys; the reply flows the normal DEC-60 voice path."
+      - given: "the clock advanced past 120s"
+        when: "a second file drives through"
+        then: "the captured prompt has NO replying_to (context keys still present while the store is seeded)."
+      - given: "the DEC-62/DEC-57/DEC-60 and brief/draft/reflection pinned suites"
+        when: "run on the landed arc"
+        then: "all pass unmodified - byte-untouched neighbors; no pin edits in this batch beyond those TK-288/TK-289/TK-290 declared in scope."
+    non_goals:
+      - "No live model calls - FakeModel spy only; the live walkie-talkie ear-check is the operator's."
+      - "No new src surface - proof only."
+    depends_on:
+      - TK-290
+    files_in_scope:
+      - tests/integration/test_voice_conversation_context_e2e.py
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -8168,6 +8325,18 @@ governance:
       consequences: "(+) The repeat loop is dead at the front door AND rate-bounded at the flush arm - either fix alone kills the observed drumbeat; together they hold even if thresholds retune or a future source re-emits. (+) One seam covers gmail/gcal/feedback/reply-intents uniformly and survives restarts (pg). (+) The at-most-1-load-flush/day contract target is finally enforced, not simulated. (-) wombat_seen_events grows unpruned - tiny rows, dozens/day; revisit on evidence. (-) An event whose payload changes while its old row is still queued processes the OLD payload once - accepted edge, rare and self-correcting. (-) A post-flush late item now waits for the next wombat day's flush (or the brief/immediate arm) - the quiet-by-default posture, accepted; decay is unchanged.",
       alternatives: ["A Gmail high-water poll cursor (rejected as THE fix - source-local, leaves gcal/feedback/reply-intents exposed, resets on restart unless separately persisted, and is redundant for correctness once the shared-seam ledger exists; the refetch API cost is a separate efficiency concern, deliberately out of scope)", "Ack becomes a tombstone instead of DELETE (rejected - drain/lease/pending_count/capacity semantics are load-bearing and every one would need rework to exclude tombstones, for the same guarantee the decorator gives with queue.py byte-untouched)", "A novelty/suppression filter at the speak boundary (rejected - treats the symptom at the last seam while re-ingestion keeps burning queue/gate/scoring work every 300s; the front door is the right seam)", "An in-memory seen set or in-memory flush cooldown (rejected - the runtime restarts often, crash-loop history included; both guards must be pg-durable)", "A flush cooldown tunable instead of the daily latch (rejected - weaker than the documented and sim-proven once/day target, adds a knob TK-13 would have to carry, and the DailyLedger latch is restart-durable for free)"],
       links: ["ISS-27","TK-286","TK-287","TK-2","TK-3","TK-12","TK-16","TK-26","TK-27","TK-152","DEC-13","Q-15","Q-18","Q-23","CON-3","EP-3","EP-9"] }
+  - { id: ISS-28, type: issue, status: resolved, scope: EP-29, date_raised: "2026-07-21", date_updated: "2026-07-21", title: "Jim-reported - the Steward does not CONVERSE. Jim verbatim intent - he 'just blurts out what he says and that's that - no listening for a response and re-pathing based on the response'. Orchestrator research (seams source-verified) confirmed the mechanical loop already exists end-to-end (app PTT capture app/src/ptt.ts -> drop dir -> ASRSource.poll 2s -> voice_turn CHAT payload asr.py:270-277 -> gate -> DEC-57 always-compose -> DEC-60 spoken reply) and isolated TWO real gaps - (A) compose has ZERO conversation context: the prompt is exactly [system, one user message from queue_item.payload] (compose.py:154-160; Q-50/CON-1 payload-verbatim), so a PTT reply of 'yes, do that' seconds after the Steward spoke is meaningless to the mouth; (B) the mouth has no data to answer with - no calendar/email grounding reaches a chat turn, so even a well-framed voice question earns an empty generality",
+      resolution: "Jim ruled the interaction model - NO VAD, the PTT button stays and replies are walkie-talkie style, with room left for VAD later. Converted to DEC-64 - the gaps close mouth-side on the existing payload wire (TTL'd last-spoken register + replying_to stamp via a new ASRSource context_hook; bounded deterministic calendar+gmail prefetch bundle on voice turns); auto-listen/VAD recorded as DEF-11 with the on_spoken seam pinned as its future attachment point; Q-97 stands untouched.",
+      links: ["DEC-64","DEF-11","TK-288","TK-289","TK-290","TK-291","DEC-60","DEC-57","Q-97","Q-50","EP-29","EP-30"] }
+  - { id: DEC-64, type: decision, status: accepted, scope: EP-29, date_raised: "2026-07-21", converted_from: "ISS-28", title: "The Steward converses WALKIE-TALKIE style (JIM RULING, verbatim intent honored - keep the push-to-talk button, respond like a walkie talkie, no VAD approach, leave room for VAD if the button gets annoying) - PTT stays the ONLY mic trigger AND the reply channel after the Steward speaks (source-confirmed - zero app changes needed, the existing app/src/ptt.ts capture -> drop dir -> ASRSource loop IS the reply channel); NO auto-opening mic, NO listen window, NO wake word in v1 (Q-97 stands UNTOUCHED; auto-listen = DEF-11, attachable later at the on_spoken seam without rework); the two conversation gaps close MOUTH-SIDE on the existing payload wire - (A) REPLY CONTEXT: on_spoken hooks at the two speak sites maintain a TTL'd single-slot last-spoken register, and a new optional ASRSource context_hook stamps replying_to into the voice-turn payload at build time, reaching the compose prompt via format_payload_fields with ZERO compose change; (B) DETERMINISTIC GROUNDING: the same context_hook attaches a bounded today-calendar + recent-gmail-subjects bundle read from ExternalItemStore (read-only local pg, DEC-26 whitelisted projections, bodies structurally absent), so the mouth answers from what it is given - the DEC-62 charter posture; a free LLM tool loop is REJECTED (mouth-not-brain stands; the taint tier structurally forbids web-read-then-dispatch in one drive); closed-vocab intent routing is a recorded UNSCHEDULED follow-up, not v1 work",
+      context: "ISS-28 (Jim complaint) + the Jim ruling on the conversational-Steward proposal. The whole-project fit is exact - the gate keeps FULL custody of whether/when (DEC-57 routes every chat turn to compose already; DEC-60 already made voice turns conversation with spoken replies); what was missing is purely WHAT THE MOUTH KNOWS at render time, which is a mouth-side prompt-content question, never a gate/loop question. Both gaps close by stamping deterministic user-facing fields into the SourceEvent payload at capture time, because Q-50's payload-verbatim rule then delivers them to the prompt with zero mouth edits - the context IS payload (CON-1 clean by definition: spoken text the user just heard, and DEC-45 whitelisted calendar/gmail projections).",
+      decision: "(A) TK-288 - LastSpokenRegister (src/wombat/voice/reply_context.py): note_spoken/current with LAST_SPOKEN_TTL_SECONDS = 120.0 and a 600-char truncation cap, BOTH pinned module constants, NO new tunable (the DEC-63 no-knob precedent; the TTL keeps an hour-later PTT turn from being misframed as a reply); single slot, newest-wins, in-memory (restart forgets - accepted); SpeakSink fires on_spoken ONLY after adapter.speak returns without raising (the DEC-55 shaped summary IS what the user heard, so that is what registers), BriefDeliverStage only when voice_spoken flips true; a raising hook = one WARNING, never degrades speech. TK-289 - ASRSource context_hook (fourth optional ctor hook, the command/feedback/turn lineage) merges hook fields into the payload strictly after command consumption, reserved keys unoverridable, raise = WARNING + unstamped turn; bootstrap composes ONE closure reading the register. (B) TK-290 - build_voice_context over ExternalItemStore.get_window('gcal', today's civil-local bounds in the configured tz - DEC-21) + get_recent('gmail', 5), rendered deterministic under hard caps (10/800 gcal, 5/400 gmail); store absent/raising = no keys + one WARNING (CON-3 additive); voice-only by construction since the hook lives on ASRSource. TK-291 - end-to-end FakeModel-spy proof + byte-untouched pins. Batch order TK-288 -> TK-289 -> TK-290 -> TK-291.",
+      consequences: "(+) The walkie-talkie loop becomes a real conversation - the mouth knows what it just said aloud and answers a fresh PTT reply in context, from real calendar/email data. (+) ZERO compose/gate/queue diffs - Q-50 is upheld rather than routed around, and the DEC-62 leak-check pins stay untouched. (+) The on_spoken seam + register are exactly where DEF-11's future listen-window consumer attaches - the ruling's leave-room-for-VAD honored structurally. (-) Voice-turn payload rows in queue/journal grow by the bounded bundle - accepted, caps pinned. (-) A sync ms-fast pg read joins the ASR capture path on the event loop - the DEF-5 accepted class. (-) Typed chat-pane turns stay ungrounded for now - a deliberate scope line, recorded follow-up (the shared register/prefetch components attach to ChatSource trivially when scheduled). (-) The register is in-memory - a reply across a restart is not a conversation; accepted.",
+      alternatives: ["A VAD/auto-listen window after the Steward speaks (REJECTED BY JIM - the ruling IS the interaction model; recorded as DEF-11 with the attachment seam pinned)", "T1 free LLM tool loop (rejected - breaks mouth-not-brain, and the taint tier structurally forbids web-read-then-dispatch in one drive per browse_and_read.py:4-9)", "T2 closed-vocabulary intent legs (recorded future growth path, deliberately unscheduled - zero v1 tickets)", "Compose-side injection via a provider on ComposeStage (rejected - touches the most-pinned mouth file, opens a second prompt-content channel Q-50 would need re-ruling around, and re-opens the TK-284 leak-check pins; the source-side payload stamp needs none of that)", "A multi-turn conversation-history window in the prompt (rejected for v1 - unbounded growth and custody questions; the single last-spoken slot is the minimal walkie-talkie need)", "Gate/persona re-pathing on replies (rejected - persona shapes only HOW output reads and the gate stays model-free; nothing here may touch whether/when anything surfaces)"],
+      links: ["ISS-28","DEF-11","TK-288","TK-289","TK-290","TK-291","DEC-60","DEC-57","DEC-62","DEC-55","DEC-21","DEC-26","DEC-45","Q-50","Q-97","CON-1","CON-3","DEF-5","EP-29","EP-30","EP-36"] }
+  - { id: DEF-11, type: deferral, status: deferred, scope: EP-29, date_raised: "2026-07-21", date_updated: "2026-07-21", title: "Defer the auto-listen window / VAD after the Steward speaks - Jim ruled PTT-only walkie-talkie replies for v1, explicitly leaving room for VAD if pressing the button every time gets annoying; the DEC-64 on_spoken seam + LastSpokenRegister are the PINNED future attachment point - a listen-window consumer subscribes to the same hook and opens a bounded VAD capture into the SAME drop-dir pipeline, with zero rework of the conversation plumbing (register, context_hook, replying_to stamp all reused as-is); Q-97's push-to-activate/no-wake-word/no-continuous-listening ruling stands untouched until that day; revisit trigger - Jim reports the button annoying",
+      revisit_trigger: "Jim reports that pressing the PTT button for every reply is annoying - then a listen-window ticket attaches a bounded VAD capture to the DEC-64 on_spoken seam; until then Q-97 governs.",
+      links: ["DEC-64","ISS-28","Q-97","TK-288","EP-29"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -8522,3 +8691,4 @@ changelog:
   - { date: "2026-07-21", version: "2.147", by: "architect (batch selection)", change: "BATCH SELECTED - TK-286 -> TK-287 (board 202/204; the DEC-63 pair, the only open tickets; order per the v2.146 mint). Pre-dispatch seam audit re-verified live - build_source_registry(config, queue: Enqueuer, ...) at sources/bootstrap.py:580-582 so the DedupingEnqueuer drops in type-clean; assemble_runtime call site bootstrap.py:1255-1266; PatternDetectorStage keeps raw queue.enqueue at bootstrap.py:1180; ack DELETE queue.py:229; EnqueueResult QUEUED/ALREADY_QUEUED + QueueFullError + QueueItem (item_id None pre-insert) queue.py:41-62; _try_flush pipeline.py:130-144 with Gate ctor :85-99 (no flush_latch kwarg yet, keyword-only ctor); CeilingLedger shape ceiling.py:22-39 over DailyLedger current_row/increment plus today() at daily_ledger.py:114-119 (gives FlushDayLatch its wombat-date for the once-a-day INFO denial dedup); Gate composition bootstrap.py:792-827; migration slot 010 free (008/009 last); WOMBAT_TEST_PG_DSN skip idiom tests/gate/test_pending_journal_pg.py:46-54. ONE PRE-BUILD RULING, TK-286 scope amended this version - the minted own-ensure-schema-mirroring-ExternalItemStore is NOT self-applying: ExternalItemStore ensure_schema is module-level and never invoked automatically (external_store.py:60-80); the live DB gets tables ONLY via schema_preflight.ensure_all_schemas (schema_preflight.py:35-54, run on the replay_pending=True production path bootstrap.py:780-781). Ruled - seen_ledger.py exports module-level ensure_schema(conn) reading migrations/010_seen_events.sql (the daily_ledger.py:73-85 idiom) AND ensure_all_schemas gains the ninth call; src/wombat/schema_preflight.py + tests/unit/test_schema_preflight.py join TK-286 files_in_scope. Without this the production table never exists and the wrapper dies on first enqueue after the operator relaunch. Atomicity holds (M + S, one pass each). Orchestrator-mandated batch guards recorded in both briefings - pg ACs touch throwaway WOMBAT_TEST_PG_DSN state only (never the live wombat DB), and DEC-57 chat-always-answers stays byte-untouched (chat uuid4 / asr per-file-sha256 keys are never-seen by construction, pinned by a TK-286 pass-through test). Nothing deferred - no other open ticket exists; operator OAuth/GCP/ear-check items stay outside the loop. validate + gate_check analyze run post-edit." }
   - { date: "2026-07-21", version: "2.148", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-286 DONE (board 203/204, DEC-63a landed) - exactly-once source ingest lands exactly per the v2.146 mint plus the v2.147 preflight ruling. NEW src/wombat/migrations/010_seen_events.sql (wombat_seen_events - idempotency_key TEXT PRIMARY KEY, payload_fingerprint NOT NULL, first/last_seen_at timestamptz) and NEW src/wombat/sources/seen_ledger.py - module-level ensure_schema(conn) reading the packaged migration (the daily_ledger idiom, per the v2.147 ruling), fingerprint() sha256 over canonical sort_keys json, SeenLedger lazy-conn store (Q-46 posture), SeenLedgerLike protocol for test doubles, and DedupingEnqueuer wrapping the inner Enqueuer - unchanged fingerprint short-circuits to ALREADY_QUEUED without touching the inner queue; never-seen or changed-fingerprint passes through and is recorded ONLY on a non-raising return, so QueueFullError (or any raise) propagates unrecorded and at-least-once redelivery survives. schema_preflight.ensure_all_schemas gains the ninth call (the v2.147 ruling - without it the production table never exists on the replay_pending boot path). bootstrap.assemble_runtime constructs SeenLedger(dsn) + DedupingEnqueuer(queue, seen_ledger) and threads it ONLY into build_source_registry; PatternDetectorStage keeps the raw queue.enqueue (AC6 asserted on the constructed objects); queue/registry/pollers byte-untouched and DEC-57 chat-always-answers untouched (chat uuid4 / asr sha256 keys pass through, pinned). files_in_scope normalized +tests/unit/test_external_store.py +tests/unit/test_scratchpad.py - the eight-to-nine preflight-count pin tests the ninth call forces (within authority, consequential not creep). Builder self-ran the full bar green - targeted suites 39 passed / 6 pg-skips without WOMBAT_TEST_PG_DSN and 45 passed against a THROWAWAY docker postgres:16 (port 5437, the mandated guard - live wombat DB never touched) covering all pg-gated ACs incl. the ack-delete live-defect repro and restart-survival; full repo suite on that DSN 1849 passed / 13 live-gated skips / 0 failed; ruff clean; mypy clean. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - one Opus review audits the whole DEC-63 batch diff after TK-287 lands. NEXT - TK-287, then the operator runtime restart to pick both up." }
   - { date: "2026-07-21", version: "2.149", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-287 DONE (board 204/204, BOARD CLOSED - DEC-63b landed, the DEC-63 pair complete) - the once-per-wombat-day FlushDayLatch lands exactly per the v2.146 mint. gate/ceiling.py gains FlushDayLatch beside CeilingLedger - the identical allow()/record() shape over the SAME shared DailyLedger, fixed ledger_name 'flush:load' (once per wombat day pinned, no new tunable - the BriefRunLedger precedent), plus note_denied() deduping the denial INFO line to at most one per wombat day via an in-memory last-denied wombat-date compared against daily_ledger.today() (a restart resets only the log dedup, never the durable count). pipeline.py gains FlushLatchProtocol (runtime_checkable) and the REQUIRED keyword-only flush_latch Gate kwarg (the Q-69 lesson - construction without it is a TypeError, AC5); _try_flush checks flush_latch.allow() FIRST before the cumulative-load/age checks - a denial logs once via note_denied() and returns None with the pending set UNTOUCHED (items keep aging toward decay or tomorrow's flush, AC1), and flush_latch.record() fires exactly when SURFACE_FLUSH is returned (AC2 next-day re-fire). Composed in bootstrap.assemble_runtime and scripts/demo_drain.py over the SAME DailyLedger instance as CeilingLedger/DayRollover. select_items/BriefForceFlushStage byte-untouched (Q-23/B upheld - the brief stays its own separately-counted surfacing class) and the immediate-voice arm is unbound by the latch (AC3). NEW pg-gated tests/gate/test_flush_latch_pg.py proves restart durability - a FRESH FlushDayLatch over the same DSN still denies after today's flush is recorded (AC4), cleaning only 'flush:load' rows. files_in_scope normalized +scripts/demo_drain.py and +the 11 Gate-construction test files that gained the always-allow fake (consequential ripple of the required kwarg, not creep). NO wombat_params.yaml/OperatingParams change - the line-26 'fires once/day' comment simply became true. Builder self-ran the full bar green - full suite on a THROWAWAY docker postgres (port 5437, the mandated guard - live wombat DB never touched) 1858 passed / 13 live-gated skips / 0 failed; targeted pipeline+latch+bootstrap suites 46 passed incl. the 3 pg-gated; ruff clean; mypy clean. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - one Opus review audits the whole DEC-63 batch diff (TK-286 + TK-287) now that both have landed. NEXT - the Opus batch review, then the operator runtime relaunch picks up DEC-60/61/62/63 live." }
+  - { date: "2026-07-21", version: "2.150", by: "architect (Jim ruling recorded + ISS intake -> decision + tickets)", change: "JIM RULING RECORDED on the conversational Steward + ISS-28 -> DEC-64 ACCEPTED + DEF-11 + TK-288..TK-291 MINTED (board reopens 204/208). Jim verbatim intent - no VAD approach, keep the push-to-talk button, respond like a walkie talkie, leave room for VAD if the button gets annoying. Recorded exactly - PTT stays the ONLY mic trigger and the reply channel (source-confirmed zero app changes: app/src/ptt.ts capture -> drop dir -> ASRSource already IS the loop); Q-97 stands UNTOUCHED (no supersession); auto-listen/VAD = DEF-11 with the new on_spoken seam pinned as the future attachment point. The two research-verified gaps close MOUTH-SIDE on the existing payload wire (Q-50 payload-verbatim UPHELD - the context IS payload, user-facing by definition): TK-288 (EP-30) LastSpokenRegister + on_spoken hooks at BOTH speak sites (SpeakSink post-adapter.speak with the DEC-55 shaped summary the user actually heard; BriefDeliverStage on voice_spoken), TTL 120.0s + 600-char cap as pinned constants (DEC-63 no-knob precedent); TK-289 (EP-29) ASRSource's FOURTH optional ctor hook context_hook stamps replying_to at payload-build time (after command consumption, reserved keys unoverridable, raise = WARNING + unstamped) with ZERO compose diff via format_payload_fields; TK-290 (EP-29) build_voice_context - deterministic bounded today-gcal (DEC-21 civil-local bounds) + 5-recent-gmail-subjects bundle from ExternalItemStore (DEC-26 whitelisted projections, bodies structurally absent; store failure = no keys + one WARNING, CON-3; voice-only by construction); TK-291 (EP-29) end-to-end FakeModel-spy proof + DEC-62/DEC-57/DEC-60 + brief/draft/reflection byte-untouched pins. Rejected alternatives recorded on DEC-64 - VAD (Jim), T1 free tool loop (mouth-not-brain + taint tier), T2 intent legs (unscheduled follow-up), compose-side injection, multi-turn history, gate/persona re-pathing. Typed-chat grounding = recorded follow-up, not scope. Batch order TK-288 -> TK-289 -> TK-290 -> TK-291. validate + gate_check analyze run post-edit." }
