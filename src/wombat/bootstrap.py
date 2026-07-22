@@ -246,6 +246,7 @@ from .user_model.observation_writer import ObservationWriter
 from .user_model.outcome_inference import ItemDisposition
 from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
+from .voice.context_prefetch import build_voice_context
 from .voice.reply_context import LastSpokenRegister
 from .voice.select import build_tts_adapter
 
@@ -1069,15 +1070,26 @@ def assemble_runtime(
             item_id = idempotency_key("asr", event_key)
             _voice_turn_broker.register_voice_turn(item_id, transcript, captured_at)
 
+    # TK-245 (ruling v2.68 r5): ALWAYS constructed (dsn is a required str here; the store is
+    # fully lazy — no connection at construction), regardless of replay_pending — this is the
+    # source-poll sink target, never a runtime boot mode of its own. Constructed HERE (rather than
+    # alongside scratchpad_store further down) so TK-290's asr_context_hook closure below has it
+    # in scope.
+    external_item_store = ExternalItemStore(dsn)
     # TK-289 (DEC-64 gap A, half 2): the ASR context_hook seam — reads the SAME shared
     # last_spoken_register above (unconditional; not gated on chat, unlike asr_turn_hook). Fresh
-    # (within-TTL) spoken text stamps {"replying_to": text}; stale/None yields {} (key ABSENT,
+    # (within-TTL) spoken text stamps {"replying_to": text}; stale/None yields no key (key ABSENT,
     # never an empty string) — ASRSource itself enforces the reserved-key merge order.
+    #
+    # TK-290 (DEC-64 gap B): merged into this SAME closure — build_voice_context reads the SAME
+    # external_item_store constructed above, over the SAME configured tz, at call time (a fresh
+    # today-window/recent-gmail read every poll, never memoized). A None/raising store degrades to
+    # {} plus its own single warning (CON-3); this hook still returns whatever replying_to gave.
     def asr_context_hook() -> dict[str, str]:
         text = last_spoken_register.current()
-        if text is None:
-            return {}
-        return {"replying_to": text}
+        extra: dict[str, str] = {} if text is None else {"replying_to": text}
+        extra.update(build_voice_context(external_item_store, tz=tz, clock=_utc_now))
+        return extra
 
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
@@ -1281,12 +1293,9 @@ def assemble_runtime(
     engine = build_engine(
         substrate, config=config, params=op, capability_registry=capability_registry
     )
-    # TK-245 (ruling v2.68 r5): ALWAYS constructed (dsn is a required str here; the store is
-    # fully lazy — no connection at construction), regardless of replay_pending — this is the
-    # source-poll sink target, never a runtime boot mode of its own.
-    external_item_store = ExternalItemStore(dsn)
     # TK-247 (ruling v2.68 r5): ALWAYS constructed (dsn is a required str here; the store is
-    # fully lazy — no connection at construction), mirroring external_item_store above.
+    # fully lazy — no connection at construction), mirroring external_item_store above (TK-245,
+    # now constructed earlier — TK-290 needs it in scope for asr_context_hook's closure).
     scratchpad_store = ScratchpadStore(dsn)
     # TK-286 (DEC-63a): the persisted exactly-once seam every source's enqueue shares — wraps the
     # SAME shared queue instance so a source item, once successfully enqueued, never re-enters the

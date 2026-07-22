@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import psycopg
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.graph import StageGraph
@@ -33,11 +36,18 @@ from wombat.bootstrap import (
 )
 from wombat.config import ConfigurationError, WombatConfig, load_config
 from wombat.domain.item_identity import idempotency_key as derive_key
-from wombat.external_store import ExternalItemStore
+from wombat.external_store import (
+    ExternalItem,
+    ExternalItemStore,
+)
+from wombat.external_store import (
+    ensure_schema as ensure_external_items_schema,
+)
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
 from wombat.scratchpad import ScratchpadStore
+from wombat.sources.chat_source import ChatSource
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.substrate import cold_boot_bundle
@@ -67,6 +77,21 @@ def _reset_singleton() -> Iterator[None]:
 
 def _config() -> WombatConfig:
     return WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com")
+
+
+# TK-290: pg-gated wiring case uses ONLY a throwaway WOMBAT_TEST_PG_DSN Postgres (same convention
+# as tests/unit/test_external_store.py) -- never the live wombat DB.
+_PG_DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
+
+_requires_pg = pytest.mark.skipif(
+    not _PG_DSN,
+    reason=(
+        "WOMBAT_TEST_PG_DSN is not set — skipping the TK-290 pg-gated context_hook wiring test. "
+        "Start one with:\n"
+        "  docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=wombat postgres:16\n"
+        "then export WOMBAT_TEST_PG_DSN=postgresql://postgres:wombat@localhost:5433/postgres"
+    ),
+)
 
 
 def test_ac1_cold_launch_returns_engine_with_all_ten_seams() -> None:
@@ -560,6 +585,146 @@ async def test_assemble_runtime_wires_asr_context_hook_reading_the_shared_regist
     (drop_dir / "note2.wav").write_bytes(b"context-hook-wiring-bytes-2")
     events_after = await asr_source.poll()
     assert events_after[0].payload["replying_to"] == "Should I send the reply now?"
+
+
+# --- TK-290 (DEC-64 gap B): build_voice_context merged into the SAME asr_context_hook closure ----
+
+
+async def test_assemble_runtime_asr_context_hook_merges_voice_context_with_replying_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composition-root closure calls build_voice_context with the SAME external_item_store
+    exposed on the bundle and the SAME configured tz, then merges its result UNDER replying_to --
+    proving TK-289's half and TK-290's half share one closure rather than two competing hooks."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my calendar"),
+    )
+    captured: dict[str, Any] = {}
+
+    def _fake_build_voice_context(store: object, *, tz: Any, clock: Any) -> dict[str, str]:
+        captured["store"] = store
+        captured["tz"] = tz
+        return {"context_calendar_today": "09:00 Standup"}
+
+    monkeypatch.setattr(bootstrap, "build_voice_context", _fake_build_voice_context)
+
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-290-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(update={"wombat_asr_drop_dir": str(drop_dir)})
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    asr_source = bundle.source_registry._sources["asr"]
+    speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
+    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    register.note_spoken("i-spoken", "Anything else?")
+
+    events = await asr_source.poll()
+
+    assert events[0].payload["context_calendar_today"] == "09:00 Standup"
+    assert events[0].payload["replying_to"] == "Anything else?"
+    assert captured["store"] is bundle.external_item_store
+    assert captured["tz"] == ZoneInfo("UTC")
+
+
+def test_chat_source_has_no_context_hook_seam() -> None:
+    """AC5 (structural): the context_hook seam is wired ONLY into ASRSource -- ChatSource's own
+    constructor never accepts or references it, so a typed chat turn can never carry a context
+    key by construction."""
+    params = inspect.signature(ChatSource.__init__).parameters
+    assert "context_hook" not in params
+
+
+@_requires_pg
+async def test_assemble_runtime_asr_context_hook_carries_real_pg_gcal_and_gmail_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1 (pg-gated): a real ExternalItemStore, seeded with a today-window gcal row and a
+    recent gmail row, is read live by the composition-root closure -- a real drop-dir transcript's
+    payload carries both context keys. Uses ONLY a throwaway WOMBAT_TEST_PG_DSN, never the live
+    wombat DB."""
+    assert _PG_DSN is not None
+    with psycopg.connect(_PG_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS wombat_external_items CASCADE")
+        conn.commit()
+        ensure_external_items_schema(conn)
+        conn.commit()
+
+    tz = ZoneInfo("UTC")
+    now = datetime.now(UTC)
+    store = ExternalItemStore(_PG_DSN)
+    try:
+        store.upsert_many(
+            "gcal",
+            [
+                ExternalItem(
+                    item_key="evt-tk290",
+                    payload={
+                        "event_id": "evt-tk290",
+                        "title": "Sprint planning",
+                        "start": now.isoformat(),
+                        "end": now.isoformat(),
+                        "all_day": False,
+                    },
+                    occurs_at=now,
+                )
+            ],
+            fetched_at=now,
+        )
+        store.upsert_many(
+            "gmail",
+            [
+                ExternalItem(
+                    item_key="msg-tk290",
+                    payload={
+                        "message_id": "msg-tk290",
+                        "subject": "Standup notes",
+                        "sender": "team@example.com",
+                        "received_at": now.isoformat(),
+                        "priority_band": "normal",
+                    },
+                    occurs_at=now,
+                )
+            ],
+            fetched_at=now,
+        )
+    finally:
+        store.close()
+
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's happening today"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-290-pg-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(update={"wombat_asr_drop_dir": str(drop_dir)})
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn=_PG_DSN,
+        params=op,
+        replay_pending=False,
+        tz=tz,
+    )
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+
+    assert "Sprint planning" in events[0].payload["context_calendar_today"]
+    assert "Standup notes" in events[0].payload["context_recent_email"]
 
 
 # --- TK-245 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ExternalItemStore(dsn) ------
