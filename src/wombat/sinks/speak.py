@@ -43,12 +43,24 @@ artifact this sink already reads) — an exact lock-step mirror of ``SpeechShape
 A held reply to a SPOKEN turn falls through to the existing ``speech_shape`` read below exactly
 as a surfaced item would (no new branch); a shaping failure/rejection still hits the existing
 speech-text-None ``Degraded`` path, never speaking the raw composed text (DEC-55c).
+
+TK-288 (DEC-64 gap A): an optional ctor kwarg ``on_spoken`` (``(item_id, speech_text) -> None``,
+default ``None``) feeds ``voice.reply_context.LastSpokenRegister`` — fired strictly AFTER
+``self._adapter.speak(speech_text)`` returns without raising, i.e. only once the Steward has
+genuinely been heard. NEVER fired on the silent ``Done`` branch above, and NEVER on either
+``Degraded`` branch (no speech text, or the adapter itself raising) — a hook only ever sees text
+that was actually spoken. Mirrors the ``ASRSource.feedback_hook`` precedent (``sources/asr.py``)
+in shape, but UNLIKE that precedent this call site DOES guard against a raising hook itself (the
+factory there is documented never to raise; this one is not) — a raising hook is caught, logged as
+exactly ONE WARNING, and the byte-identical ``Done(spoken=True)`` is still returned: the register
+is a pure side effect, never load-bearing for the stage's own result.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Degraded, Done, StageResult
@@ -74,9 +86,16 @@ class SpeakSink:
     name: str = "speak"
     transitions: tuple[str, ...] = ()
 
-    def __init__(self, *, voice_enabled: bool, adapter: TTSAdapter | None) -> None:
+    def __init__(
+        self,
+        *,
+        voice_enabled: bool,
+        adapter: TTSAdapter | None,
+        on_spoken: Callable[[str, str], None] | None = None,
+    ) -> None:
         self._voice_enabled = voice_enabled
         self._adapter = adapter
+        self._on_spoken = on_spoken
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("compose")
@@ -155,6 +174,15 @@ class SpeakSink:
                 ),
                 to=None,
             )
+
+        if self._on_spoken is not None:
+            # TK-288: a pure side effect — never changes the Done below. Fires ONLY here, after
+            # the adapter call returned without raising, so the register only ever sees text
+            # that was genuinely heard.
+            try:
+                self._on_spoken(item_id, speech_text)
+            except Exception:
+                logger.warning("speak: on_spoken hook raised; ignoring", exc_info=True)
 
         return Done(
             output=Artifact(

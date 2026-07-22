@@ -59,6 +59,23 @@ class _RaisingAdapter:
         raise self._exc
 
 
+class _RecordingHook:
+    """An ``on_spoken`` double that records every ``(item_id, text)`` call verbatim."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, item_id: str, text: str) -> None:
+        self.calls.append((item_id, text))
+
+
+class _RaisingHook:
+    """An ``on_spoken`` double that always raises."""
+
+    def __call__(self, item_id: str, text: str) -> None:
+        raise RuntimeError("on_spoken exploded")
+
+
 def _composed_output_artifact(
     *, degraded: bool = False, held_chat: bool = False, voice_turn: bool = False
 ) -> Artifact:
@@ -342,6 +359,126 @@ async def test_surfaced_voice_turn_speaks_exactly_once_no_double_speak() -> None
     _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
     assert spoken is True
     assert degraded is False
+
+
+# --- TK-288 (DEC-64 gap A): on_spoken fires exactly once, after the adapter, verbatim -----------
+
+
+async def test_ac1_on_spoken_fires_once_after_adapter_with_item_id_and_exact_text() -> None:
+    adapter = _RecordingAdapter()
+    hook = _RecordingHook()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter, on_spoken=hook)
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == [_TEXT]
+    assert hook.calls == [(_ITEM_ID, _TEXT)]
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, _degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is True
+
+
+# --- AC2: on_spoken NEVER fires on the silent no-op branches -------------------------------------
+
+
+async def test_ac2_on_spoken_never_fires_when_voice_disabled() -> None:
+    hook = _RecordingHook()
+    stage = SpeakSink(voice_enabled=False, adapter=_RecordingAdapter(), on_spoken=hook)
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert hook.calls == []
+    assert isinstance(result, Done)
+
+
+async def test_ac2_on_spoken_never_fires_when_no_adapter_wired() -> None:
+    hook = _RecordingHook()
+    stage = SpeakSink(voice_enabled=True, adapter=None, on_spoken=hook)
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert hook.calls == []
+    assert isinstance(result, Done)
+
+
+async def test_ac2_on_spoken_never_fires_on_held_chat_not_voice_turn() -> None:
+    hook = _RecordingHook()
+    stage = SpeakSink(voice_enabled=True, adapter=_RecordingAdapter(), on_spoken=hook)
+    ctx = _ctx(compose_output=_composed_output_artifact(held_chat=True))
+
+    result = await stage.run(ctx)
+
+    assert hook.calls == []
+    assert isinstance(result, Done)
+
+
+# --- AC2: on_spoken NEVER fires on either Degraded branch -----------------------------------------
+
+
+async def test_ac2_on_spoken_never_fires_when_speech_shape_produced_no_text() -> None:
+    hook = _RecordingHook()
+    stage = SpeakSink(voice_enabled=True, adapter=_RecordingAdapter(), on_spoken=hook)
+    ctx = _ctx(
+        compose_output=_composed_output_artifact(),
+        speech_output=_speech_output_artifact(text=None, degraded=True),
+    )
+
+    result = await stage.run(ctx)
+
+    assert hook.calls == []
+    assert isinstance(result, Degraded)
+
+
+async def test_ac2_on_spoken_never_fires_when_adapter_raises() -> None:
+    hook = _RecordingHook()
+    adapter = _RaisingAdapter(RuntimeError("engine wedged"))
+    stage = SpeakSink(voice_enabled=True, adapter=adapter, on_spoken=hook)
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert hook.calls == []
+    assert isinstance(result, Degraded)
+
+
+# --- AC3: a raising on_spoken hook is caught, logged once, Done(spoken=True) unchanged ----------
+
+
+async def test_ac3_raising_on_spoken_hook_is_caught_logs_one_warning_result_unchanged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter, on_spoken=_RaisingHook())
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    with caplog.at_level("WARNING"):
+        result = await stage.run(ctx)
+
+    assert adapter.calls == [_TEXT]
+    assert isinstance(result, Done)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is True
+    assert degraded is False
+    warnings = [rec for rec in caplog.records if rec.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "on_spoken" in warnings[0].message
+
+
+# --- AC6: on_spoken defaults to None (existing suite above proves the byte-identical behavior) --
+
+
+async def test_on_spoken_none_default_is_a_silent_no_op() -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == [_TEXT]
+    assert isinstance(result, Done)
 
 
 # --- wire round-trip: json.dumps + inverse must be lossless (Q-49 regression) -------------------

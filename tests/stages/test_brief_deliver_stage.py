@@ -161,6 +161,158 @@ async def test_speak_raises_logs_warning_text_delivery_stands(
     assert any("speak" in rec.message.lower() for rec in caplog.records)
 
 
+# --- AC5 (TK-288, DEC-64 gap A): on_spoken fires once, brief-scoped id + text, working case only -
+
+
+async def test_ac5_on_spoken_fires_once_with_brief_scoped_id_and_text_when_speak_works(
+    tmp_path: Path,
+) -> None:
+    sink = tmp_path / "brief.txt"
+    spoken: list[str] = []
+    hook_calls: list[tuple[str, str]] = []
+    ctx = _ctx(run_id="run-42", text="Here's your brief text.")
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=spoken.append,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert hook_calls == [("brief:run-42", "Here's your brief text.")]
+    _delivered_at, voice_spoken, _replay = brief_delivered_from_artifact_data(result.output.data)
+    assert voice_spoken is True
+
+
+async def test_ac5_on_spoken_never_fires_when_speak_raises(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink = tmp_path / "brief.txt"
+    hook_calls: list[tuple[str, str]] = []
+    ctx = _ctx(text="Should still be written.")
+
+    def _boom(_text: str) -> None:
+        raise RuntimeError("voice provider exploded")
+
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=_boom,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert hook_calls == []
+    assert "Should still be written." in sink.read_text(encoding="utf-8")
+
+
+async def test_ac5_on_spoken_never_fires_when_voice_disabled(tmp_path: Path) -> None:
+    sink = tmp_path / "brief.txt"
+    hook_calls: list[tuple[str, str]] = []
+    ctx = _ctx(text="Text only.")
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=False,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert hook_calls == []
+    assert "Text only." in sink.read_text(encoding="utf-8")
+
+
+async def test_ac5_on_spoken_never_fires_when_no_speak_sink_wired(tmp_path: Path) -> None:
+    sink = tmp_path / "brief.txt"
+    hook_calls: list[tuple[str, str]] = []
+    ctx = _ctx(text="Text only, no speak sink.")
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=None,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert hook_calls == []
+    assert "Text only, no speak sink." in sink.read_text(encoding="utf-8")
+
+
+async def test_ac5_on_spoken_never_fires_on_replay(tmp_path: Path) -> None:
+    sink = tmp_path / "brief.txt"
+    hook_calls: list[tuple[str, str]] = []
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=lambda _text: None,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+
+    await stage.run(_ctx(run_id="run-1"))
+    hook_calls.clear()
+    result = await stage.run(_ctx(run_id="run-1"))
+
+    assert isinstance(result, Done)
+    _delivered_at, _voice_spoken, replay = brief_delivered_from_artifact_data(result.output.data)
+    assert replay is True
+    assert hook_calls == []
+
+
+async def test_ac3_raising_on_spoken_hook_is_caught_logs_one_warning_delivery_unaffected(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    sink = tmp_path / "brief.txt"
+    ctx = _ctx(text="Text delivery stands.")
+
+    def _boom_hook(_item_id: str, _text: str) -> None:
+        raise RuntimeError("on_spoken exploded")
+
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=lambda _text: None,
+        on_spoken=_boom_hook,
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert "Text delivery stands." in sink.read_text(encoding="utf-8")
+    _delivered_at, voice_spoken, _replay = brief_delivered_from_artifact_data(result.output.data)
+    assert voice_spoken is True  # speak() itself worked; only the hook raised
+    warnings = [rec for rec in caplog.records if rec.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "on_spoken" in warnings[0].message
+
+
+# --- AC6: on_spoken defaults to None -------------------------------------------------------------
+
+
+async def test_on_spoken_none_default_is_a_silent_no_op(tmp_path: Path) -> None:
+    sink = tmp_path / "brief.txt"
+    ctx = _ctx()
+    stage = BriefDeliverStage(sink_path=sink, tz=_UTC_TZ, voice_enabled=True, speak=lambda _t: None)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+
+
 # --- AC4: run-id-keyed marker idempotency (the important one) -----------------------------------
 
 

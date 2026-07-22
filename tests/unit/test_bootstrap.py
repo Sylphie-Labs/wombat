@@ -41,6 +41,7 @@ from wombat.scratchpad import ScratchpadStore
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.substrate import cold_boot_bundle
+from wombat.voice.reply_context import LastSpokenRegister
 
 # The ten seams the Engine must carry after composition (4 required substrate + 6 optional).
 _ENGINE_SEAMS = (
@@ -474,6 +475,45 @@ def test_assemble_runtime_asr_turn_hook_is_none_when_chat_disabled(
 
 
 # --- TK-46 (Q-85): wombat.dream registers UNCONDITIONALLY, connection-free -----------------------
+
+
+# --- TK-288 (DEC-64 gap A, v2.151 ruling): ONE shared LastSpokenRegister threaded into BOTH the
+# drain-graph SpeakSink and the brief pathway's BriefDeliverStage ---------------------------------
+
+
+def test_assemble_runtime_wires_one_shared_last_spoken_register_into_both_speak_sites(
+    tmp_path: Path,
+) -> None:
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={"wombat_brief_path": str(tmp_path / "brief.txt")}
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+
+    assert bundle.brief_pathway_id is not None
+    speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
+    brief_deliver_stage = bundle.pathways.get(bundle.brief_pathway_id).get("brief_deliver")
+
+    speak_on_spoken = getattr(speak_stage, "_on_spoken")  # noqa: B009
+    brief_on_spoken = getattr(brief_deliver_stage, "_on_spoken")  # noqa: B009
+    assert speak_on_spoken is not None
+    assert brief_on_spoken is not None
+    # Both are the SAME register's note_spoken bound method -- one shared instance, not two.
+    assert isinstance(speak_on_spoken.__self__, LastSpokenRegister)
+    assert speak_on_spoken.__self__ is brief_on_spoken.__self__
+
+    register = speak_on_spoken.__self__
+    assert register.current() is None
+    speak_on_spoken("i-1", "spoken via drain")
+    assert register.current() == "spoken via drain"
+    brief_on_spoken("brief:run-1", "spoken via brief")
+    assert register.current() == "spoken via brief"
 
 
 # --- TK-245 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ExternalItemStore(dsn) ------

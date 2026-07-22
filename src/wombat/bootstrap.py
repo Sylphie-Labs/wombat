@@ -246,6 +246,7 @@ from .user_model.observation_writer import ObservationWriter
 from .user_model.outcome_inference import ItemDisposition
 from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
+from .voice.reply_context import LastSpokenRegister
 from .voice.select import build_tts_adapter
 
 logger = logging.getLogger(__name__)
@@ -463,6 +464,7 @@ def build_brief_deliver_stage(
     config: WombatConfig,
     tz: ZoneInfo,
     speak: Callable[[str], None] | None = None,
+    on_spoken: Callable[[str, str], None] | None = None,
 ) -> BriefDeliverStage:
     """Assemble the morning brief's terminal ``BriefDeliverStage`` (TK-101, Q-78).
 
@@ -470,7 +472,9 @@ def build_brief_deliver_stage(
     path fails LOUD at construction (``ConfigurationError`` naming it) rather than wiring a
     stage that would raise on its first delivery. ``config.wombat_voice_enabled`` gates voice;
     ``speak`` is the injected voice sink (EP-30 narrowed) — passed through untouched, ``None`` by
-    default so callers that never wire a voice provider get text-only delivery.
+    default so callers that never wire a voice provider get text-only delivery. ``on_spoken``
+    (TK-288, DEC-64 gap A) is passed through untouched too — ``None`` by default so standalone
+    callers stay byte-identical.
     """
     raw_path = config.wombat_brief_path
     if raw_path is None or not raw_path.strip():
@@ -484,6 +488,7 @@ def build_brief_deliver_stage(
         tz=tz,
         voice_enabled=config.wombat_voice_enabled,
         speak=speak,
+        on_spoken=on_spoken,
     )
 
 
@@ -1007,7 +1012,16 @@ def assemble_runtime(
     # does) so speech_shape_stage's adapter-presence gate reads the SAME adapter SpeakSink speaks
     # through, rather than constructing (and possibly loud-logging) a second one.
     tts_adapter = build_tts_adapter(config) if config.wombat_voice_enabled else None
-    speak_stage = SpeakSink(voice_enabled=config.wombat_voice_enabled, adapter=tts_adapter)
+    # TK-288 (DEC-64 gap A, v2.151 ruling): ONE shared LastSpokenRegister, threaded via its
+    # note_spoken bound method into BOTH speak sites below (this drain-graph SpeakSink AND the
+    # brief pathway's BriefDeliverStage further down) — never two registers, never build_speak_
+    # sink (zero src callers, stays byte-untouched).
+    last_spoken_register = LastSpokenRegister(clock=_epoch_now)
+    speak_stage = SpeakSink(
+        voice_enabled=config.wombat_voice_enabled,
+        adapter=tts_adapter,
+        on_spoken=last_spoken_register.note_spoken,
+    )
     speech_shape_stage = build_speech_shape_stage(
         config=config,
         dsn=dsn,
@@ -1243,7 +1257,11 @@ def assemble_runtime(
         # speak seam (TK-101) — discharges the "TK-164 binds real TTS into THIS seam" promise
         # (Q-78). None unless voice_enabled AND the adapter constructs; a voice-off/lib-less boot
         # stays byte-identical (seam None, text-only delivery).
-        brief_deliver_stage = build_brief_deliver_stage(config=config, tz=tz, speak=speak)
+        # TK-288 (DEC-64 gap A): the SAME shared last_spoken_register as the drain pathway's
+        # speak_stage above — one register, fed from both speak sites.
+        brief_deliver_stage = build_brief_deliver_stage(
+            config=config, tz=tz, speak=speak, on_spoken=last_spoken_register.note_spoken
+        )
         brief_graph = build_brief_pathway(
             brief_gather_stage, brief_force_flush_stage, brief_compose_stage, brief_deliver_stage
         )

@@ -22,6 +22,13 @@ failure only logs a warning — the text delivery already stands and ``run()`` n
 
 ``ctx`` surface is exactly ``ctx.run_id`` + ``ctx.clock`` (header timestamp, DEC-21 canonical tz,
 never bare UTC) + ``ctx.last_output("brief_compose")`` — this stage NEVER touches ``ctx.journal``.
+
+TK-288 (DEC-64 gap A): an optional ctor kwarg ``on_spoken`` (``(item_id, text) -> None``, default
+``None``) feeds ``voice.reply_context.LastSpokenRegister`` — fired with ``("brief:" + ctx.run_id,
+text)`` exactly when ``voice_spoken`` flips ``True`` below (the ``speak()`` try's ``else`` branch),
+never on replay, voice-off, missing-speak-seam, or a raising ``speak()``. A raising hook is caught,
+logged as exactly ONE WARNING, and delivery is otherwise unaffected — the register is a pure side
+effect, never load-bearing for this stage's own result (mirrors ``sinks/speak.py``'s own guard).
 """
 
 from __future__ import annotations
@@ -63,11 +70,13 @@ class BriefDeliverStage:
         tz: ZoneInfo,
         voice_enabled: bool,
         speak: Callable[[str], None] | None = None,
+        on_spoken: Callable[[str, str], None] | None = None,
     ) -> None:
         self._sink_path = sink_path
         self._tz = tz
         self._voice_enabled = voice_enabled
         self._speak = speak
+        self._on_spoken = on_spoken
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("brief_compose")
@@ -124,6 +133,16 @@ class BriefDeliverStage:
                     )
                 else:
                     voice_spoken = True
+                    if self._on_spoken is not None:
+                        # TK-288: a pure side effect — never changes the Done below. Fires ONLY
+                        # here, after speak() returned without raising, so the register only ever
+                        # sees text that was genuinely heard.
+                        try:
+                            self._on_spoken("brief:" + ctx.run_id, text)
+                        except Exception:
+                            logger.warning(
+                                "brief_deliver: on_spoken hook raised; ignoring", exc_info=True
+                            )
 
         return Done(
             output=Artifact(
