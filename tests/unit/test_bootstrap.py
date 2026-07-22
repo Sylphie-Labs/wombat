@@ -516,6 +516,52 @@ def test_assemble_runtime_wires_one_shared_last_spoken_register_into_both_speak_
     assert register.current() == "spoken via brief"
 
 
+# --- TK-289 (DEC-64 gap A, half 2): the ASR context_hook -> LastSpokenRegister wiring -------------
+
+
+async def test_assemble_runtime_wires_asr_context_hook_reading_the_shared_register(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-289: a fresh (within-TTL) register entry stamps replying_to onto a real drop-dir
+    transcript's payload -- proving the composition-root closure reads the SAME shared
+    last_spoken_register the drain/brief speak sites feed (TK-288)."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("yes, do that"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"context-hook-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={"wombat_asr_drop_dir": str(drop_dir)}
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    asr_source = bundle.source_registry._sources["asr"]
+
+    speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
+    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    assert isinstance(register, LastSpokenRegister)
+
+    # Before anything has been spoken, the register is empty -- no replying_to key.
+    events_before = await asr_source.poll()
+    assert "replying_to" not in events_before[0].payload
+
+    # Note something spoken, drop a second file -- the fresh text stamps this one.
+    register.note_spoken("i-spoken", "Should I send the reply now?")
+    (drop_dir / "note2.wav").write_bytes(b"context-hook-wiring-bytes-2")
+    events_after = await asr_source.poll()
+    assert events_after[0].payload["replying_to"] == "Should I send the reply now?"
+
+
 # --- TK-245 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ExternalItemStore(dsn) ------
 
 

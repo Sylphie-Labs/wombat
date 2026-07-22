@@ -1069,6 +1069,16 @@ def assemble_runtime(
             item_id = idempotency_key("asr", event_key)
             _voice_turn_broker.register_voice_turn(item_id, transcript, captured_at)
 
+    # TK-289 (DEC-64 gap A, half 2): the ASR context_hook seam — reads the SAME shared
+    # last_spoken_register above (unconditional; not gated on chat, unlike asr_turn_hook). Fresh
+    # (within-TTL) spoken text stamps {"replying_to": text}; stale/None yields {} (key ABSENT,
+    # never an empty string) — ASRSource itself enforces the reserved-key merge order.
+    def asr_context_hook() -> dict[str, str]:
+        text = last_spoken_register.current()
+        if text is None:
+            return {}
+        return {"replying_to": text}
+
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
         # TK-179/Q-94: DraftDispatchStage locates the parked draft_composer step BY STAGE IDENTITY
@@ -1297,6 +1307,7 @@ def assemble_runtime(
         persona_feedback_recorder=_record_persona_feedback,
         external_item_store=external_item_store,
         turn_hook=asr_turn_hook,
+        context_hook=asr_context_hook,
     )
     if chat_source is not None:
         # TK-222 (Q-110(d) ruling 1): registered exactly like every other source — the registry

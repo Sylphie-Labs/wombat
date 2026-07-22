@@ -75,6 +75,18 @@ check, and NEVER for a command-consumed utterance (same gate ``feedback_hook`` s
 with ``(event_key, transcript, captured_at)``. Like ``command_hook``/``feedback_hook``, the
 factory that builds it (``sources.bootstrap``, composition root) is documented to never raise;
 this module adds no try/except of its own around the call.
+
+TK-289 (DEC-64 gap A, half 2, EP-29): an optional ctor kwarg ``context_hook`` gives ``ASRSource``
+a way to stamp EXTRA str-to-str fields onto the outgoing payload — e.g. ``replying_to``, the fresh
+last-spoken text from the composition root's ``LastSpokenRegister`` (TK-288). Evaluated in
+``_process_one`` strictly AFTER the ``command_hook`` early-return (a command-consumed utterance
+never stamps) and at payload-build time: the hook's returned mapping is merged UNDER the four
+built-in fields (``item_kind``/``voice_turn``/``transcript``/``captured_at``) — those keys are
+NEVER overridable, no matter what the hook returns (built by merging the hook's dict first, then
+the built-ins on top). Unlike ``command_hook``/``feedback_hook``/``turn_hook``, THIS module DOES
+guard the call: a raising ``context_hook`` is caught, logged as ONE loud WARNING, and the turn
+proceeds with an unstamped payload — it must never kill the file or the poll (the file still
+moves to ``processed/`` exactly as if the hook had returned ``{}``).
 """
 
 from __future__ import annotations
@@ -84,7 +96,7 @@ import hashlib
 import logging
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -156,6 +168,7 @@ class ASRSource:
         command_hook: Callable[[str], bool] | None = None,
         feedback_hook: Callable[[str, str], None] | None = None,
         turn_hook: Callable[[str, str, str], None] | None = None,
+        context_hook: Callable[[], Mapping[str, str]] | None = None,
     ) -> None:
         self.poll_interval_seconds = poll_interval_seconds
         self._drop_dir = drop_dir
@@ -164,6 +177,7 @@ class ASRSource:
         self._command_hook = command_hook
         self._feedback_hook = feedback_hook
         self._turn_hook = turn_hook
+        self._context_hook = context_hook
 
     async def start(self) -> None:
         """No lifecycle setup needed — the injected transcriber is already constructed."""
@@ -222,8 +236,11 @@ class ASRSource:
         path ALSO moves the file to ``processed/`` (transcription succeeded; the utterance was
         just handled here instead of enqueued). When the utterance was NOT consumed,
         ``feedback_hook`` (TK-213) runs as a pure side effect before the ``SourceEvent`` is built
-        — it never changes what is returned. Never raises — a bad file must never kill this
-        poll or another file's processing (AC4).
+        — it never changes what is returned. ``context_hook`` (TK-289) runs at payload-build time,
+        stamping extra str-to-str fields under the four built-ins (never overriding them); a
+        raising ``context_hook`` is caught here, logged as ONE loud WARNING, and the payload is
+        built unstamped. Never raises — a bad file must never kill this poll or another file's
+        processing (AC4).
 
         TK-282 (DEC-60d): ONLY the pure ``transcriber.transcribe(path)`` call runs off the event
         loop, via ``asyncio.to_thread`` — this is what kills the proven ~11s event-loop freeze
@@ -267,7 +284,21 @@ class ASRSource:
             self._turn_hook(event_key, transcript, captured_at)
 
         self._safe_move(path, _PROCESSED_DIRNAME)
+        extra_fields: Mapping[str, str] = {}
+        if self._context_hook is not None:
+            # TK-289: unlike command_hook/feedback_hook/turn_hook above, this call IS guarded —
+            # context_hook is the one hook in this lineage documented to possibly raise, and a
+            # raise here must degrade to an unstamped payload, never kill the file or the poll.
+            try:
+                extra_fields = self._context_hook()
+            except Exception:
+                logger.warning(
+                    "asr source %r: context_hook raised — proceeding with an unstamped payload",
+                    self.id,
+                    exc_info=True,
+                )
         payload = {
+            **extra_fields,
             "item_kind": "chat",
             "voice_turn": True,
             "transcript": transcript,

@@ -97,7 +97,7 @@ payload never lands in this table. ``build_source_registry`` threads the sink in
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -525,6 +525,7 @@ def _maybe_register_asr(
     speak: Callable[[str], None] | None = None,
     persona_feedback_recorder: Callable[[FeedbackToken, str, datetime], None] | None = None,
     turn_hook: Callable[[str, str, str], None] | None = None,
+    context_hook: Callable[[], Mapping[str, str]] | None = None,
 ) -> None:
     """TK-162 (Q-97), rerouted by TK-193: register the ASR drop-directory source (``ASRSource``)
     iff ``config.wombat_asr_drop_dir`` is non-blank AND a ``Transcriber`` is constructible — the
@@ -546,7 +547,11 @@ def _maybe_register_asr(
 
     TK-280 (DEC-60c server half): ``turn_hook`` passes straight through to ``ASRSource`` — the
     composition root (``wombat.bootstrap.assemble_runtime``) builds it (or leaves it ``None``)
-    and this function does no branching of its own on it."""
+    and this function does no branching of its own on it.
+
+    TK-289 (DEC-64 gap A, half 2): ``context_hook`` passes straight through to ``ASRSource`` —
+    the SAME pass-through shape as ``turn_hook`` above; this function does no branching of its
+    own on it either."""
     raw_dir = (config.wombat_asr_drop_dir or "").strip()
     if not raw_dir:
         logger.warning(
@@ -573,6 +578,7 @@ def _maybe_register_asr(
             command_hook=command_hook,
             feedback_hook=feedback_hook,
             turn_hook=turn_hook,
+            context_hook=context_hook,
         )
     )
 
@@ -594,6 +600,7 @@ def build_source_registry(
     persona_feedback_recorder: Callable[[FeedbackToken, str, datetime], None] | None = None,
     external_item_store: ExternalItemStore | None = None,
     turn_hook: Callable[[str, str, str], None] | None = None,
+    context_hook: Callable[[], Mapping[str, str]] | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
     of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
@@ -623,6 +630,10 @@ def build_source_registry(
 
     ``turn_hook`` (TK-280, DEC-60c) threads into ``_maybe_register_asr`` ONLY, straight through
     to ``ASRSource``; defaults ``None``, which constructs today's ``ASRSource`` exactly.
+
+    ``context_hook`` (TK-289, DEC-64 gap A half 2) threads into ``_maybe_register_asr`` ONLY,
+    straight through to ``ASRSource``; defaults ``None``, which constructs today's ``ASRSource``
+    exactly.
     """
     # Built BEFORE the registry itself so the sink (which needs the SAME TriageRules instance,
     # loaded at most once) can be threaded into the SourceRegistry constructor (TK-245).
@@ -661,6 +672,7 @@ def build_source_registry(
         speak=speak,
         persona_feedback_recorder=persona_feedback_recorder,
         turn_hook=turn_hook,
+        context_hook=context_hook,
     )
     return registry
 

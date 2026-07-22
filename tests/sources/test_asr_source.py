@@ -738,3 +738,193 @@ async def test_command_consumed_utterance_never_fires_turn_hook(tmp_path: Path) 
     assert events == []
     assert turn_calls == []
     assert (drop_dir / "processed" / "note.wav").exists()
+
+
+# ----------------------------------------------------------------------------------- TK-289: AC1-5
+
+
+async def test_context_hook_stamps_replying_to_alongside_the_four_built_ins(
+    tmp_path: Path,
+) -> None:
+    """AC1: a context_hook returning {'replying_to': <text>} stamps that field onto the payload
+    alongside the four built-ins, unchanged."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"context-hook-bytes")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("yes, do that"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        context_hook=lambda: {"replying_to": "Should I send the reply now?"},
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "yes, do that",
+        "captured_at": _NOW.isoformat(),
+        "replying_to": "Should I send the reply now?",
+    }
+
+
+async def test_context_hook_returning_empty_mapping_yields_no_replying_to_key(
+    tmp_path: Path,
+) -> None:
+    """AC2 (the TTL-expired shape from the composition root's closure): a context_hook returning
+    {} leaves the payload with NO replying_to key (absent, not empty)."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"stale-context-bytes")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's next"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        context_hook=lambda: {},
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert "replying_to" not in events[0].payload
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "what's next",
+        "captured_at": _NOW.isoformat(),
+    }
+
+
+async def test_context_hook_none_leaves_the_payload_byte_identical(tmp_path: Path) -> None:
+    """AC3 (None case): context_hook defaulting to None builds a payload byte-identical to
+    pre-TK-289 behavior."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"no-context-hook-bytes")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's the weather"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "what's the weather",
+        "captured_at": _NOW.isoformat(),
+    }
+
+
+async def test_command_consumed_utterance_never_invokes_context_hook(tmp_path: Path) -> None:
+    """AC3 (command-consumed case): a matched persona command never invokes context_hook -- the
+    command_hook early-return happens strictly before the payload-build site."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"command-context-bytes")
+    live_persona = _live_persona()
+    speak = _RecordingSpeak()
+    command_hook = make_persona_command_hook(live_persona, speak)
+
+    context_calls: list[None] = []
+
+    def context_hook() -> dict[str, str]:
+        context_calls.append(None)
+        return {"replying_to": "should never be reached"}
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("be warmer"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        command_hook=command_hook,
+        context_hook=context_hook,
+    )
+
+    events = await source.poll()
+
+    assert events == []
+    assert context_calls == []
+    assert (drop_dir / "processed" / "note.wav").exists()
+
+
+async def test_raising_context_hook_logs_one_warning_moves_to_processed_unstamped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC4: a raising context_hook logs ONE WARNING, the file still moves to processed/, and the
+    SourceEvent carries the unstamped payload -- it must never kill the file or the poll."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"raising-context-bytes")
+
+    def boom() -> dict[str, str]:
+        raise RuntimeError("simulated context_hook failure")
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's on my calendar"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        context_hook=boom,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        events = await source.poll()  # must not raise
+
+    assert len(events) == 1
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "what's on my calendar",
+        "captured_at": _NOW.isoformat(),
+    }
+    assert (drop_dir / "processed" / "note.wav").exists()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "context_hook" in warnings[0].getMessage()
+
+
+async def test_hostile_context_hook_reserved_key_overrides_are_ignored(tmp_path: Path) -> None:
+    """AC5: a hostile context_hook returning overrides for the four reserved keys never wins --
+    all four keep their built-in values."""
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"hostile-context-bytes")
+
+    def hostile() -> dict[str, str]:
+        return {
+            "item_kind": "draft",
+            "voice_turn": "false",
+            "transcript": "hijacked",
+            "captured_at": "1970-01-01T00:00:00+00:00",
+            "replying_to": "still allowed through",
+        }
+
+    source = ASRSource(
+        drop_dir=drop_dir,
+        transcriber=_FakeTranscriber("what's on my calendar"),
+        poll_interval_seconds=99.0,
+        clock=_clock,
+        context_hook=hostile,
+    )
+
+    events = await source.poll()
+
+    assert len(events) == 1
+    assert events[0].payload == {
+        "item_kind": "chat",
+        "voice_turn": True,
+        "transcript": "what's on my calendar",
+        "captured_at": _NOW.isoformat(),
+        "replying_to": "still allowed through",
+    }
