@@ -423,6 +423,12 @@ async def serve() -> None:
     ``bundle.scratchpad_store.purge_stale(SCRATCHPAD_PURGE_DAYS)`` (TK-247, DEC-46, ruling v2.68
     r5) runs exactly ONCE here, guarded the SAME way — non-``None`` on every real boot, defensive
     against a hand-rolled store-less ``RuntimeBundle``.
+
+    ``bundle.chat_turn_store.purge_older_than(7)`` (TK-295, DEC-65e, ruling v2.159 r1) runs
+    exactly ONCE here, guarded the SAME way — non-``None`` on every real boot, defensive against a
+    hand-rolled store-less ``RuntimeBundle``. The 7-day window is the SAME pinned retention
+    ``chat_turns._RETENTION_DAYS`` documents; passed as a literal here per the ruling (no shared
+    importable constant, mirroring this ticket's own "no knob" pin).
     """
     config = load_config()
     check_config(config)
@@ -439,6 +445,8 @@ async def serve() -> None:
         bundle.external_item_store.prune_older_than(EXTERNAL_ITEMS_PRUNE_DAYS)
     if bundle.scratchpad_store is not None:
         bundle.scratchpad_store.purge_stale(SCRATCHPAD_PURGE_DAYS)
+    if bundle.chat_turn_store is not None:
+        bundle.chat_turn_store.purge_older_than(7)
     await _drive_and_serve(bundle, params=params)
 
 

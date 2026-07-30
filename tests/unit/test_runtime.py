@@ -60,6 +60,7 @@ from wombat import bootstrap, runtime
 from wombat.behavior.event_log import BehaviorEventLog
 from wombat.behavior.stages.reflection_compose import ReflectionComposeStage
 from wombat.bootstrap import RuntimeBundle
+from wombat.chat_turns import ChatTurnStore
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.domain.daily_ledger import DailyLedger
@@ -1764,6 +1765,96 @@ async def test_serve_boots_byte_unchanged_when_scratchpad_store_is_none(
     )
     bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
     assert bundle.scratchpad_store is None
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()  # must not raise
+
+
+# --- TK-295 (DEC-65e): serve() purges wombat_chat_turns exactly once at boot -------------------
+
+
+class _RecordingChatTurnStore(ChatTurnStore):
+    """A real ``ChatTurnStore`` subclass (never opens a connection — ``purge_older_than`` is
+    fully overridden) that records every call, mirroring ``_RecordingScratchpadStore`` above."""
+
+    def __init__(self) -> None:
+        super().__init__(_FAKE_DSN)
+        self.purge_calls: list[int] = []
+
+    def purge_older_than(self, days: int) -> int:
+        self.purge_calls.append(days)
+        return 0
+
+
+async def test_serve_calls_purge_older_than_exactly_once_at_boot(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    store = _RecordingChatTurnStore()
+    bundle = replace(bundle, chat_turn_store=store)
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()
+
+    assert store.purge_calls == [7]
+
+
+async def test_serve_boots_byte_unchanged_when_chat_turn_store_is_none(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    """A store-less directly-constructed bundle (``_serve_bundle`` never sets ``chat_turn_store``,
+    so it defaults ``None``) boots without error — the field-guard in ``serve()`` is a true
+    no-op, never raising on the absent seam."""
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    assert bundle.chat_turn_store is None
 
     monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
     monkeypatch.setattr(runtime, "check_config", lambda config: None)

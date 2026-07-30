@@ -34,6 +34,7 @@ from wombat.bootstrap import (
     build_engine,
     reset_engine,
 )
+from wombat.chat_turns import ChatTurnStore
 from wombat.config import ConfigurationError, WombatConfig, load_config
 from wombat.domain.item_identity import idempotency_key as derive_key
 from wombat.external_store import (
@@ -48,6 +49,7 @@ from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
 from wombat.persona.builder import Mouth
 from wombat.scratchpad import ScratchpadStore
+from wombat.sources.base import SourceEvent
 from wombat.sources.chat_source import ChatSource
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.stages.brief_timer_stage import BriefTimerStage
@@ -775,6 +777,61 @@ def test_assemble_runtime_exposes_a_real_scratchpad_store() -> None:
         tz=ZoneInfo("UTC"),
     )
     assert isinstance(bundle.scratchpad_store, ScratchpadStore)
+
+
+# --- TK-295 (DEC-65e): assemble_runtime ALWAYS constructs ChatTurnStore(dsn) ------------------
+
+
+def test_assemble_runtime_exposes_a_real_chat_turn_store() -> None:
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert isinstance(bundle.chat_turn_store, ChatTurnStore)
+
+
+def test_assemble_runtime_threads_the_same_chat_turn_store_into_source_registry() -> None:
+    """The SAME ``chat_turn_store`` instance the bundle exposes is the one composed into the
+    ``SourceRegistry`` sink — never a second, independently-constructed store. Proven by
+    monkeypatching ``record_turn`` on the bundle's own instance and driving one chat event
+    through the registry's live sink closure."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.chat_turn_store is not None
+    recorded: list[tuple[str, bool]] = []
+
+    def _fake_record_turn(text: str, voice: bool, captured_at: datetime) -> None:
+        recorded.append((text, voice))
+
+    bundle.chat_turn_store.record_turn = _fake_record_turn  # type: ignore[method-assign]
+
+    sink = bundle.source_registry._sink
+    assert sink is not None
+    sink(
+        "chat",
+        [
+            SourceEvent(
+                event_key="c1",
+                payload={
+                    "item_kind": "chat",
+                    "text": "hi",
+                    "received_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        ],
+    )
+
+    assert recorded == [("hi", False)]
 
 
 # --- TK-286 (DEC-63a): the DedupingEnqueuer/SeenLedger seam wires into build_source_registry

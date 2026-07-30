@@ -105,6 +105,7 @@ from typing import NoReturn
 from zoneinfo import ZoneInfo
 
 from wombat.calendar.models import CalendarEvent
+from wombat.chat_turns import ChatTurnStore
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.external_store import ExternalItem, ExternalItemStore
 from wombat.integrations.gcal.poller import CalendarPoller
@@ -124,7 +125,7 @@ from wombat.persona.feedback import FeedbackToken, detect_feedback_token
 from wombat.persona.live import LivePersona
 from wombat.sources.asr import ASRSource
 from wombat.sources.base import InputSource, SourceEvent
-from wombat.sources.registry import Enqueuer, SourceRegistry
+from wombat.sources.registry import Enqueuer, Sink, SourceRegistry
 from wombat.user_model.feedback_source import FeedbackInputSource
 from wombat.voice.select import build_transcriber
 
@@ -391,6 +392,78 @@ def build_external_item_sink(
     return sink
 
 
+def build_chat_turn_sink(
+    store: ChatTurnStore,
+    *,
+    clock: Callable[[], datetime] = _utc_now,
+) -> Sink:
+    """TK-295 (DEC-65e, ruling v2.159 r2): the ``SourceRegistry`` sink tap that writes the user's
+    OWN chat/voice utterances into ``wombat_chat_turns`` — the dream extractor's ONLY input
+    (never rendered into any prompt, never a conversation-history window, DEC-64's rejection
+    stands). Covers BOTH the typed ``ChatSource`` and voice ``ASRSource`` payload shapes with one
+    tap: any event whose payload carries ``item_kind == 'chat'`` is recorded; every other source
+    id/payload shape is silently ignored (the SAME explicit-whitelist posture as
+    ``build_external_item_sink``).
+
+    Field projection, per payload shape (``sources.chat_source``/``chat.surface`` for typed chat,
+    ``sources.asr`` for voice):
+      - ``text``: ``payload['text']`` (typed chat) or ``payload['transcript']`` (voice) —
+        whichever key is present.
+      - ``voice``: ``True`` iff the payload carries a ``voice_turn`` key at all (voice ASR turns
+        stamp it; typed chat never does).
+      - ``captured_at``: ``payload['received_at']`` (typed chat) or ``payload['captured_at']``
+        (voice) — whichever key is present, parsed via ``datetime.fromisoformat``; ``clock()`` if
+        somehow neither key is present (defensive — never reached by either real payload shape).
+
+    A ``store.record_turn`` raise is caught PER EVENT and logged as ONE WARNING naming the source
+    id — the ledger can never block a turn (CON-3-adjacent additive posture): the event still
+    enqueues via the registry's own separate enqueue arm, byte-unaffected by this tap.
+    """
+
+    def sink(source_id: str, events: list[SourceEvent]) -> None:
+        for event in events:
+            payload = event.payload
+            if payload.get("item_kind") != "chat":
+                continue
+            text = payload.get("text") or payload.get("transcript")
+            if not text:
+                continue
+            voice = "voice_turn" in payload
+            captured_raw = payload.get("received_at") or payload.get("captured_at")
+            captured_at = (
+                datetime.fromisoformat(captured_raw) if captured_raw else clock()
+            )
+            try:
+                store.record_turn(str(text), voice, captured_at)
+            except Exception:
+                logger.warning(
+                    "source %s: ChatTurnStore.record_turn raised — this turn is dropped from "
+                    "the ledger, the event still enqueues unaffected",
+                    source_id,
+                    exc_info=True,
+                )
+
+    return sink
+
+
+def _compose_sinks(external_sink: Sink | None, chat_sink: Sink | None) -> Sink | None:
+    """TK-295 (ruling v2.159 r2): ``SourceRegistry`` takes exactly ONE sink callable — this
+    composes the (optional) TK-245 external-item sink WITH the (optional) TK-295 chat-turn sink
+    into ONE callable, both run per poll batch. Either half absent degrades to the OTHER half
+    exactly (byte-identical — the same function object, not a wrapper); both absent is ``None``
+    (today's no-sink behavior exactly)."""
+    if external_sink is None:
+        return chat_sink
+    if chat_sink is None:
+        return external_sink
+
+    def composed(source_id: str, events: list[SourceEvent]) -> None:
+        external_sink(source_id, events)
+        chat_sink(source_id, events)
+
+    return composed
+
+
 def _maybe_register_feedback(
     registry: SourceRegistry,
     config: WombatConfig,
@@ -599,6 +672,7 @@ def build_source_registry(
     speak: Callable[[str], None] | None = None,
     persona_feedback_recorder: Callable[[FeedbackToken, str, datetime], None] | None = None,
     external_item_store: ExternalItemStore | None = None,
+    chat_turn_store: ChatTurnStore | None = None,
     turn_hook: Callable[[str, str, str], None] | None = None,
     context_hook: Callable[[], Mapping[str, str]] | None = None,
 ) -> SourceRegistry:
@@ -628,6 +702,12 @@ def build_source_registry(
     (``build_external_item_sink``) ONLY when supplied; defaults ``None``, which constructs the
     ``SourceRegistry`` with no sink — today's poll behavior exactly (AC3).
 
+    ``chat_turn_store`` (TK-295, DEC-65e) builds the registry's optional chat-turn ledger tap
+    (``build_chat_turn_sink``) ONLY when supplied, COMPOSED with the ``external_item_store``
+    sink above (``_compose_sinks``) into the ONE callable ``SourceRegistry`` accepts; defaults
+    ``None``, which leaves ``external_item_store``'s sink (or the no-sink default) byte-
+    unchanged.
+
     ``turn_hook`` (TK-280, DEC-60c) threads into ``_maybe_register_asr`` ONLY, straight through
     to ``ASRSource``; defaults ``None``, which constructs today's ``ASRSource`` exactly.
 
@@ -643,11 +723,17 @@ def build_source_registry(
         poll_interval_seconds=gmail_poll_interval_seconds,
         token_store=gmail_token_store,
     )
-    sink = (
+    external_sink = (
         build_external_item_sink(external_item_store, gmail_rules=gmail_rules, clock=clock)
         if external_item_store is not None
         else None
     )
+    chat_sink = (
+        build_chat_turn_sink(chat_turn_store, clock=clock)
+        if chat_turn_store is not None
+        else None
+    )
+    sink = _compose_sinks(external_sink, chat_sink)
     registry = SourceRegistry(queue, sink=sink)
     _maybe_register_gcal(
         registry,

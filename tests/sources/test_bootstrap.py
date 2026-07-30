@@ -44,6 +44,8 @@ import wombat.integrations.gcal.session as gcal_session_module
 import wombat.integrations.gmail.session as gmail_session_module
 import wombat.sources.bootstrap as sources_bootstrap_module
 from wombat.calendar.models import CalendarEvent
+from wombat.chat_turns import ChatTurnStore
+from wombat.chat_turns import ensure_schema as ensure_chat_turns_schema
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.external_store import ExternalItemStore
 from wombat.external_store import ensure_schema as ensure_external_items_schema
@@ -59,6 +61,7 @@ from wombat.sources.bootstrap import (
     DEFAULT_GCAL_POLL_INTERVAL_SECONDS,
     DEFAULT_GMAIL_POLL_INTERVAL_SECONDS,
     build_brief_fetches,
+    build_chat_turn_sink,
     build_external_item_sink,
     build_source_registry,
 )
@@ -1052,3 +1055,180 @@ def test_tk245_ac1_sink_persists_whitelisted_projections_and_skips_reply_events(
         assert not any(secret_marker in text for text in texts)
     finally:
         store.close()
+
+
+# --------------------------------------------------------------- TK-295: the chat-turn sink -----
+
+
+class _RaisingChatTurnStore(ChatTurnStore):
+    """A real ``ChatTurnStore`` subclass (never opens a connection — ``record_turn`` is fully
+    overridden to raise) mirroring the ``_RecordingScratchpadStore``/``_RecordingExternalItemStore``
+    precedent in ``tests/unit/test_runtime.py``."""
+
+    def __init__(self) -> None:
+        super().__init__("postgresql://fake-host/fake-db")
+
+    def record_turn(self, text: str, voice: bool, captured_at: datetime) -> None:
+        raise RuntimeError("boom")
+
+
+@dataclass
+class _OneShotChatSource:
+    """A minimal ``InputSource`` that yields ONE chat ``SourceEvent`` on its first ``poll()``,
+    then empty forever after — enough to drive one registry poll iteration end-to-end."""
+
+    id: str = "chat"
+    poll_interval_seconds: float = 0.01
+
+    def __post_init__(self) -> None:
+        self._fired = False
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def poll(self) -> list[SourceEvent]:
+        if self._fired:
+            return []
+        self._fired = True
+        return [
+            SourceEvent(
+                event_key="chat1",
+                payload={"item_kind": "chat", "text": "hello", "received_at": _NOW.isoformat()},
+            )
+        ]
+
+
+def test_build_source_registry_sink_is_external_only_without_a_chat_turn_store() -> None:
+    """No ``chat_turn_store`` given -> the composed sink is EXACTLY the external-item sink (the
+    SAME ``build_external_item_sink`` closure, never wrapped by ``_compose_sinks``'s ``composed``
+    wrapper) — byte-identical to today's behavior. ``build_external_item_sink``'s inner closure
+    is named ``sink``; ``_compose_sinks``'s wrapper is named ``composed`` — a distinct name here
+    would mean an (unwanted) wrapper is in play."""
+    config = _make_config()
+    store = ExternalItemStore("postgresql://fake-host/fake-db")  # lazy — never connects here
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        external_item_store=store,
+    )
+    assert registry._sink is not None
+    assert registry._sink.__name__ == "sink"
+
+
+def test_build_source_registry_threads_a_chat_turn_sink_when_a_chat_turn_store_is_given() -> None:
+    """A ``chat_turn_store`` given (no ``external_item_store``) -> the registry carries a sink —
+    mirrors the TK-245 external-item-only threading test."""
+    config = _make_config()
+    chat_store = ChatTurnStore("postgresql://fake-host/fake-db")  # lazy — never connects here
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        chat_turn_store=chat_store,
+    )
+    assert registry._sink is not None
+
+
+@_requires_pg
+def test_ac2_composed_sink_records_exactly_the_two_chat_turns_and_skips_gmail_gcal() -> None:
+    """AC2: a registry built with BOTH the external-item sink AND the chat-turn sink composed --
+    a typed chat event, a voice-turn event, and a gcal event polled through the SAME composed
+    callable -- records EXACTLY the two chat turns with the right text/voice/captured_at; the
+    gcal event records nothing into wombat_chat_turns; the external-item sink's own write is
+    byte-identical (still lands the gcal row)."""
+    assert _DSN is not None
+    with psycopg.connect(_DSN) as conn:
+        ensure_chat_turns_schema(conn)
+        ensure_external_items_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE wombat_chat_turns")
+            cur.execute("TRUNCATE TABLE wombat_external_items")
+        conn.commit()
+
+    chat_store = ChatTurnStore(_DSN)
+    external_store = ExternalItemStore(_DSN)
+    try:
+        external_sink = build_external_item_sink(external_store, gmail_rules=None, clock=_utc_now)
+        chat_sink = build_chat_turn_sink(chat_store, clock=_utc_now)
+
+        def composed(source_id: str, events: list[SourceEvent]) -> None:
+            external_sink(source_id, events)
+            chat_sink(source_id, events)
+
+        typed_chat_event = SourceEvent(
+            event_key="chat1",
+            payload={
+                "item_kind": "chat",
+                "text": "typed hello",
+                "received_at": "2026-07-29T12:00:00+00:00",
+            },
+        )
+        voice_chat_event = SourceEvent(
+            event_key="chat2",
+            payload={
+                "item_kind": "chat",
+                "voice_turn": True,
+                "transcript": "spoken hello",
+                "captured_at": "2026-07-29T13:00:00+00:00",
+            },
+        )
+        gcal_event = SourceEvent(
+            event_key="evt1",
+            payload=CalendarEvent(
+                event_id="evt1",
+                title="Standup",
+                start=datetime(2026, 7, 2, 9, 0, tzinfo=UTC),
+                end=datetime(2026, 7, 2, 9, 30, tzinfo=UTC),
+                all_day=False,
+            ).to_payload(),
+        )
+
+        composed("chat", [typed_chat_event, voice_chat_event])
+        composed("gcal", [gcal_event])
+
+        rows = chat_store.turns_since(datetime(2026, 7, 1, tzinfo=UTC))
+        assert [row["text"] for row in rows] == ["typed hello", "spoken hello"]
+        assert [row["voice"] for row in rows] == [False, True]
+
+        gcal_rows = external_store.get_recent("gcal", limit=10)
+        assert [row["item_key"] for row in gcal_rows] == ["evt1"]
+    finally:
+        chat_store.close()
+        external_store.close()
+
+
+async def test_ac3_raising_chat_turn_store_logs_one_warning_and_event_still_enqueues(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC3: a ``ChatTurnStore`` whose ``record_turn`` raises -> ONE WARNING, the event still
+    enqueues -- the ledger can never block a turn."""
+    raising_store = _RaisingChatTurnStore()
+    sink = build_chat_turn_sink(raising_store, clock=_utc_now)
+    enqueuer = _FakeEnqueuer()
+    registry = SourceRegistry(enqueuer, sink=sink)
+    registry.register(_OneShotChatSource())
+
+    caplog.set_level(logging.WARNING, logger="wombat.sources.bootstrap")
+    await registry.start()
+    try:
+        await _wait_until(lambda: len(enqueuer.items) >= 1)
+    finally:
+        await registry.stop()
+
+    assert len(enqueuer.items) == 1
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "ChatTurnStore.record_turn raised" in r.message
+    ]
+    assert len(warnings) == 1

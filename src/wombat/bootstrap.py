@@ -153,6 +153,7 @@ from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.reflection_compose import ReflectionComposeStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from .chat.surface import ChatReplyBroker, ChatSurface
+from .chat_turns import ChatTurnStore
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
@@ -710,6 +711,12 @@ class RuntimeBundle:
     # field-declaration precedent above so hand-rolled RuntimeBundle constructions elsewhere
     # (tests) don't need to pass it.
     scratchpad_store: ScratchpadStore | None = None
+    # TK-295 (DEC-65e): the 7-day rolling chat/voice-turn ledger — ALWAYS constructed by
+    # assemble_runtime (dsn is a required str, ChatTurnStore is fully lazy — no connection at
+    # construction), typed Optional with default None ONLY to mirror the scratchpad_store
+    # field-declaration precedent above so hand-rolled RuntimeBundle constructions elsewhere
+    # (tests) don't need to pass it.
+    chat_turn_store: ChatTurnStore | None = None
 
 
 def assemble_runtime(
@@ -1302,6 +1309,11 @@ def assemble_runtime(
     # fully lazy — no connection at construction), mirroring external_item_store above (TK-245,
     # now constructed earlier — TK-290 needs it in scope for asr_context_hook's closure).
     scratchpad_store = ScratchpadStore(dsn)
+    # TK-295 (DEC-65e): the 7-day rolling chat/voice-turn ledger — ALWAYS constructed (dsn is a
+    # required str here; fully lazy, mirrors scratchpad_store above). Threaded into
+    # build_source_registry below so the SourceRegistry sink tap records the user's own
+    # utterances; purged once at boot by runtime.serve() (the scratchpad_store precedent).
+    chat_turn_store = ChatTurnStore(dsn)
     # TK-286 (DEC-63a): the persisted exactly-once seam every source's enqueue shares — wraps the
     # SAME shared queue instance so a source item, once successfully enqueued, never re-enters the
     # queue on a later poll with an unchanged payload (closes the live repeat-flush defect:
@@ -1320,6 +1332,7 @@ def assemble_runtime(
         speak=speak,
         persona_feedback_recorder=_record_persona_feedback,
         external_item_store=external_item_store,
+        chat_turn_store=chat_turn_store,
         turn_hook=asr_turn_hook,
         context_hook=asr_context_hook,
     )
@@ -1411,4 +1424,5 @@ def assemble_runtime(
         chat_source=chat_source,
         external_item_store=external_item_store,
         scratchpad_store=scratchpad_store,
+        chat_turn_store=chat_turn_store,
     )
