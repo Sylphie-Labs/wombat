@@ -21,9 +21,9 @@ read/decide/apply/journal-line logic).
       window but no longer once the pin is 8+ days old; a dream nudge (``explicit=False``) never
       creates a pin, so a second consecutive night's fresh signal steps again.
   AC4 (never-block): a raising collaborator (event log read, or a raising ``live_persona.set``) is
-      caught, logged ERROR, and ``run()`` STILL ``Transition``s to ``dream_behavior_log`` — proven
-      both as a direct unit call AND end-to-end through a real ``Engine`` drive reaching
-      ``dream_run``.
+      caught, logged ERROR, and ``run()`` STILL ``Transition``s to ``dream_facts`` (TK-297's
+      stage, this stage's downstream neighbor post-splice) — proven both as a direct unit call AND
+      end-to-end through a real ``Engine`` drive reaching ``dream_run``.
 """
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ async def test_ac1_two_same_direction_tokens_step_the_axis_once_persisted_and_jo
         result = await stage.run(ctx)
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_facts"
     assert result.output.data == {
         "stepped": [{"axis": "brevity", "direction": "up", "up_count": 2, "down_count": 0}]
     }
@@ -408,7 +408,7 @@ async def test_ac4_raising_event_log_is_caught_logged_and_still_transitions(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_facts"
     assert result.output.data == {"stepped": []}
     assert live_persona.matrix == DEFAULT_MATRIX
     assert any(
@@ -433,7 +433,7 @@ async def test_ac4_raising_live_persona_set_is_caught_logged_and_still_transitio
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_facts"
     assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
@@ -479,6 +479,7 @@ async def test_ac4_engine_drive_completes_even_when_the_event_log_raises(
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
         _PassthroughStage(name="dream_tune", to="dream_persona"),
         persona_stage,
+        _PassthroughStage(name="dream_facts", to="dream_behavior_log"),
         _PassthroughStage(name="dream_behavior_log", to="dream_window"),
         _PassthroughStage(name="dream_window", to="dream_pattern"),
         _PassthroughStage(name="dream_pattern", to="dream_run"),
@@ -509,8 +510,9 @@ async def test_ac4_engine_drive_completes_even_when_the_event_log_raises(
 
     assert final.status is RunStatus.COMPLETED
     stage_names = [step.stage_name for step in final.steps]
-    assert stage_names[-5:] == [
+    assert stage_names[-6:] == [
         "dream_persona",
+        "dream_facts",
         "dream_behavior_log",
         "dream_window",
         "dream_pattern",

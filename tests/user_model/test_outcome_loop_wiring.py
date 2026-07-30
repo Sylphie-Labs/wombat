@@ -126,16 +126,38 @@ class _PassthroughPersonaStage:
     module docstring)."""
 
     name: str = "dream_persona"
+    transitions: tuple[str, ...] = ("dream_facts",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_facts",
+            output=Artifact(
+                kind="wombat.dream_persona_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={"stepped": []},
+            ),
+        )
+
+
+class _PassthroughFactsStage:
+    """TK-297 mechanical reshape (flagged per the ticket's own sanction, EP-13): a trivial
+    always-transitions-onward double standing in for ``DreamFactsStage`` — this module's ACs are
+    about the outcome pass, never touching a chat/user-facts store here (a real ``DreamFactsStage``
+    needs a ``ChatTurnStore``/``UserFactsStore`` this module has no DSN for; see the module
+    docstring)."""
+
+    name: str = "dream_facts"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_behavior_log",
             output=Artifact(
-                kind="wombat.dream_persona_report",
+                kind="wombat.dream_facts_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
-                data={"stepped": []},
+                data={"new_facts": 0},
             ),
         )
 
@@ -244,6 +266,7 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
         dream_outcome_stage,
         _PassthroughTuneStage(),
         _PassthroughPersonaStage(),
+        _PassthroughFactsStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),

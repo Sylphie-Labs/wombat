@@ -112,10 +112,21 @@ distinct recordings of the same phrase stay distinct rows.
 
 TK-214 (EP-35, DEC-36/DEC-37(h), Q-112 pre-ruled — CLOSES EP-35): the dream graph's new
 ``dream_persona`` stage — ``DreamPersonaStage`` (``build_dream_pathway``'s new ``persona`` arg),
-inserted between ``dream_tune`` and ``dream_behavior_log`` (TK-111's stage, its new downstream
-neighbor) — composes over the SAME shared ``behavior_event_log``/``live_persona`` instances built
-above (never a second ``BehaviorEventLog``/``LivePersona``). No new ``RuntimeBundle`` field: like
-``dream_window_stage`` this stage owns no closeable resource of its own.
+inserted between ``dream_tune`` and ``dream_facts`` (TK-297's stage, its new downstream neighbor,
+superseding ``dream_behavior_log`` as the immediate next stage) — composes over the SAME shared
+``behavior_event_log``/``live_persona`` instances built above (never a second
+``BehaviorEventLog``/``LivePersona``). No new ``RuntimeBundle`` field: like ``dream_window_stage``
+this stage owns no closeable resource of its own.
+
+TK-297 (EP-13, DEC-65g): the dream graph's new ``dream_facts`` stage — ``DreamFactsStage``
+(``build_dream_pathway``'s new ``facts`` arg), inserted between ``dream_persona`` and
+``dream_behavior_log`` — composes over the SAME budget-guarded ``dream_substrate.model`` every
+other dream-consolidation call site uses (DEC-23, never a second model/guard) and the
+``user_facts_store``/``chat_turn_store`` instances (TK-294/TK-295), HOISTED above the dream-stage
+block for this reason — both are Q-46 fully-lazy, zero I/O at construction, so the hoist is
+behavior-neutral. No new ``RuntimeBundle`` field: like ``dream_window_stage`` this stage owns no
+closeable resource of its own (``user_facts_store``/``chat_turn_store`` are exposed separately,
+unchanged).
 """
 
 from __future__ import annotations
@@ -149,6 +160,7 @@ from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .behavior.event_log import BehaviorEventLog
+from .behavior.stages.dream_facts import DreamFactsStage
 from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.reflection_compose import ReflectionComposeStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
@@ -1100,10 +1112,11 @@ def assemble_runtime(
     # {} plus its own single warning (CON-3); this hook still returns whatever replying_to gave.
     #
     # TK-296 (DEC-65f): ALSO merged into this SAME closure — build_user_facts_context reads
-    # user_facts_store, constructed further below (beside scratchpad_store). Safe despite the
-    # source-order forward reference: Python closures resolve free variables at CALL time, and
-    # this closure is only ever called (by ASRSource.poll()/ChatSurface._accept_message, both
-    # well after assemble_runtime returns) once user_facts_store has been assigned.
+    # user_facts_store, constructed further below (TK-297 ruling r2 hoisted it above the
+    # dream-stage block, still below this closure's own definition). Safe despite the source-order
+    # forward reference: Python closures resolve free variables at CALL time, and this closure is
+    # only ever called (by ASRSource.poll()/ChatSurface._accept_message, both well after
+    # assemble_runtime returns) once user_facts_store has been assigned.
     def asr_context_hook() -> dict[str, str]:
         text = last_spoken_register.current()
         extra: dict[str, str] = {} if text is None else {"replying_to": text}
@@ -1161,6 +1174,22 @@ def assemble_runtime(
         )
     substrate.pathways.register(DRAIN_PATHWAY_ID, graph)
 
+    # TK-296 (DEC-65f): the durable what-wombat-knows-about-the-user store — ALWAYS constructed
+    # (dsn is a required str here; UserFactsStore is fully lazy — no connection at construction).
+    # HOISTED here (TK-297 ruling r2) — above the dream-stage block, since DreamFactsStage
+    # (constructed below, beside dream_persona_stage) needs it in scope too. Also read by
+    # asr_context_hook's closure (already defined above it in this function's source — see that
+    # closure's own comment for why the forward reference is safe); the move is behavior-neutral
+    # (Q-46 fully-lazy, zero I/O at construction).
+    user_facts_store = UserFactsStore(dsn)
+    # TK-295 (DEC-65e): the 7-day rolling chat/voice-turn ledger — ALWAYS constructed (dsn is a
+    # required str here; fully lazy, mirrors user_facts_store immediately above). HOISTED here
+    # (TK-297 ruling r2) for the SAME reason — DreamFactsStage needs it in scope beside
+    # dream_persona_stage. Also threaded into build_source_registry below so the SourceRegistry
+    # sink tap records the user's own utterances; purged once at boot by runtime.serve() (the
+    # scratchpad_store precedent).
+    chat_turn_store = ChatTurnStore(dsn)
+
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both
     # DreamOutcomeStage's entity-KG reads and DreamConsolidationStage's sweepers are as harmless
     # on a Google-less/sink-less boot as the terminal scaffold was (no external deps beyond the
@@ -1207,6 +1236,16 @@ def assemble_runtime(
     # call site reads. UNCONDITIONAL (mirrors dream_behavior_log_stage's own posture) — no
     # external deps beyond what this composition already builds.
     dream_persona_stage = DreamPersonaStage(event_log=behavior_event_log, live_persona=live_persona)
+    # TK-297 (EP-13, DEC-65g): DreamFactsStage over the SAME budget-guarded dream_substrate.model
+    # every other dream-consolidation call site uses (never a second model/guard) and the
+    # user_facts_store/chat_turn_store hoisted above (never a second connection to either table).
+    # UNCONDITIONAL (mirrors dream_persona_stage's own posture) — no external deps beyond what
+    # this composition already builds.
+    dream_facts_stage = DreamFactsStage(
+        model=dream_substrate.model,
+        chat_turns=chat_turn_store,
+        user_facts=user_facts_store,
+    )
 
     def _record_persona_feedback(
         token: FeedbackToken, event_key: str, timestamp: datetime
@@ -1259,6 +1298,7 @@ def assemble_runtime(
         dream_outcome_stage,
         dream_tune_stage,
         dream_persona_stage,
+        dream_facts_stage,
         dream_behavior_log_stage,
         dream_window_stage,
         dream_pattern_stage,
@@ -1326,17 +1366,6 @@ def assemble_runtime(
     # fully lazy — no connection at construction), mirroring external_item_store above (TK-245,
     # now constructed earlier — TK-290 needs it in scope for asr_context_hook's closure).
     scratchpad_store = ScratchpadStore(dsn)
-    # TK-296 (DEC-65f): the durable what-wombat-knows-about-the-user store — ALWAYS constructed
-    # (dsn is a required str here; UserFactsStore is fully lazy — no connection at construction),
-    # mirroring scratchpad_store immediately above. Read by asr_context_hook's closure (already
-    # defined above it in this function's source — see that closure's own comment for why the
-    # forward reference is safe).
-    user_facts_store = UserFactsStore(dsn)
-    # TK-295 (DEC-65e): the 7-day rolling chat/voice-turn ledger — ALWAYS constructed (dsn is a
-    # required str here; fully lazy, mirrors scratchpad_store above). Threaded into
-    # build_source_registry below so the SourceRegistry sink tap records the user's own
-    # utterances; purged once at boot by runtime.serve() (the scratchpad_store precedent).
-    chat_turn_store = ChatTurnStore(dsn)
     # TK-286 (DEC-63a): the persisted exactly-once seam every source's enqueue shares — wraps the
     # SAME shared queue instance so a source item, once successfully enqueued, never re-enters the
     # queue on a later poll with an unchanged payload (closes the live repeat-flush defect:

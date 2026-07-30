@@ -42,8 +42,10 @@ from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
 from wombat.behavior.event_log import BehaviorEventLog
 from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
+from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.pattern_detector import PatternDetectorStage
 from wombat.behavior.stages.write_window_summaries import WriteWindowSummariesStage
+from wombat.chat_turns import ChatTurnStore
 from wombat.compose.templates import TemplateComposer
 from wombat.config import WombatConfig
 from wombat.domain.daily_ledger import ensure_schema as ensure_daily_ledger_schema
@@ -75,6 +77,7 @@ from wombat.stages.gate_stage import GateStage, make_stub_evaluator
 from wombat.stages.review_or_speak import ReviewOrSpeakStage
 from wombat.stages.speech_shape import SpeechShapeStage
 from wombat.substrate import cold_boot_bundle
+from wombat.user_facts import UserFactsStore
 from wombat.user_model.observation_writer import ObservationWriter
 from wombat.user_model.outcome_labeler import OutcomeLabeler
 
@@ -156,12 +159,13 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
-        # TK-214: the graph AC — the run walked all eight stages, in order, COMPLETED.
+        # TK-297: the graph AC — the run walked all nine stages, in order, COMPLETED.
         assert [step.stage_name for step in dream_state.steps] == [
             "dream_consolidate",
             "dream_outcome",
             "dream_tune",
             "dream_persona",
+            "dream_facts",
             "dream_behavior_log",
             "dream_window",
             "dream_pattern",
@@ -269,9 +273,9 @@ def _build_stack_with_raising_dream(
         speak_stage,
     )
 
-    # Never reached (the entry always raises first) — throwaway stub outcome/tune/persona/
+    # Never reached (the entry always raises first) — throwaway stub outcome/tune/persona/facts/
     # behavior_log/window/pattern stages merely satisfy build_dream_pathway's now-required args
-    # (TK-47/TK-49/TK-214/TK-111/TK-112/TK-113 reshape).
+    # (TK-47/TK-49/TK-214/TK-297/TK-111/TK-112/TK-113 reshape).
     stub_entity_kg = InMemoryEntityKG()
     stub_writer = ObservationWriter(
         entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
@@ -294,6 +298,11 @@ def _build_stack_with_raising_dream(
         event_log=BehaviorEventLog(_DSN),
         live_persona=LivePersona(DEFAULT_MATRIX, "test"),  # store-less (TK-243), fully in-memory
     )
+    stub_facts_stage = DreamFactsStage(
+        model=FakeModel(raises=AssertionError("never reached — the entry always raises first")),
+        chat_turns=ChatTurnStore(_DSN),
+        user_facts=UserFactsStore(_DSN),
+    )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
@@ -312,6 +321,7 @@ def _build_stack_with_raising_dream(
         stub_outcome_stage,
         stub_tune_stage,
         stub_persona_stage,
+        stub_facts_stage,
         stub_behavior_log_stage,
         stub_window_stage,
         stub_pattern_stage,
