@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wombat — settings v2 mock (Phase 1, neutral grays, tokens only)</title>
+<style>
+  /* ============================================================
+     TOKENS — named exactly like app/src/theme.css. Every color in
+     this mock routes through these; NO rule below uses a literal
+     color. Values are NEUTRAL GRAY placeholders — Jim owns the
+     palette and re-themes by editing this block / theme.css only.
+     ============================================================ */
+  :root {
+    --color-surface-canvas: #ececee;
+    --color-surface-panel: #ffffff;
+    --color-surface-elevated: #f6f6f7;
+    --color-ink-primary: #26262a;
+    --color-ink-muted: #77777e;
+    --color-border-default: #e2e2e5;
+    --color-border-strong: #b9b9bf;
+    --color-brand: #4a4a52;
+    --color-brand-hover: #3a3a41;
+    --color-brand-ink: #fafafa;
+    --color-accent: #8a8a92;
+    --color-danger: #55555c;
+    --color-danger-ink: #fafafa;
+    --color-positive: #6f6f76;
+    --color-focus: var(--color-accent);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-full: 9999px;
+    --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 24px; font-family: var(--font-sans);
+    background: var(--color-surface-canvas); color: var(--color-ink-primary);
+  }
+  .board { max-width: 1180px; margin: 0 auto 56px; }
+  .board-title { font-size: 13px; font-weight: 600; color: var(--color-ink-muted); margin: 0 0 8px 4px; text-transform: uppercase; letter-spacing: .06em; }
+  .caption { font-size: 12px; color: var(--color-ink-muted); margin: 10px 4px 0; line-height: 1.55; max-width: 900px; }
+
+  /* ---------- shell ---------- */
+  .shell { background: var(--color-surface-canvas); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); overflow: hidden; }
+  .hdr { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--color-surface-panel); border-bottom: 1px solid var(--color-border-default); }
+  .mark { width: 20px; height: 20px; border-radius: var(--radius-full); background: var(--color-brand); position: relative; flex: none; }
+  .mark::after { content: ""; position: absolute; left: 5px; right: 5px; bottom: 6px; height: 7px; border-radius: 7px 7px 0 0; background: var(--color-brand-ink); }
+  .wordmark { font-size: 14px; font-weight: 600; }
+  .hdr-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-ink-muted); }
+  .dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--color-positive); display: inline-block; }
+  .dot.off { background: transparent; border: 1.5px solid var(--color-border-strong); }
+  .body { display: flex; min-height: 560px; }
+
+  .rail { width: 176px; flex: none; background: var(--color-surface-panel); border-right: 1px solid var(--color-border-default); padding: 12px 8px; }
+  .rail a { display: block; padding: 6px 10px; border-radius: var(--radius-sm); font-size: 13px; color: var(--color-ink-primary); text-decoration: none; margin-bottom: 2px; }
+  .rail a.active { background: var(--color-brand); color: var(--color-brand-ink); }
+  .rail .grp { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-ink-muted); margin: 14px 10px 6px; }
+
+  main { flex: 1; min-width: 0; padding: 24px 32px; overflow: hidden; }
+  .content { max-width: 640px; display: flex; flex-direction: column; gap: 24px; }
+  h1.pagetitle { font-size: 16px; margin: 0; }
+
+  .chat { width: 300px; flex: none; background: var(--color-surface-panel); border-left: 1px solid var(--color-border-default); display: flex; flex-direction: column; }
+  .chat-hd { padding: 10px 14px; border-bottom: 1px solid var(--color-border-default); font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+  .chat-body { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+  .bub { max-width: 82%; padding: 7px 10px; border-radius: var(--radius-md); line-height: 1.45; }
+  .bub.user { align-self: flex-end; background: var(--color-brand); color: var(--color-brand-ink); }
+  .bub.bot { align-self: flex-start; background: var(--color-surface-elevated); border: 1px solid var(--color-border-default); }
+  .composer { margin: 10px; padding: 7px 10px; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--color-ink-muted); }
+  .chat-tab { width: 26px; flex: none; background: var(--color-surface-panel); border-left: 1px solid var(--color-border-default); display: flex; align-items: center; justify-content: center; }
+  .chat-tab span { writing-mode: vertical-rl; font-size: 11px; color: var(--color-ink-muted); letter-spacing: .08em; }
+
+  /* ---------- panels & rows ---------- */
+  .panel { background: var(--color-surface-panel); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+  .lead { font-size: 13px; color: var(--color-ink-muted); border-bottom: 1px dashed var(--color-border-default); padding-bottom: 12px; }
+  .lead b { color: var(--color-ink-primary); font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 12px; min-height: 26px; flex-wrap: wrap; }
+  .row .lbl { font-size: 13px; width: 170px; flex: none; }
+  .hint { font-size: 11.5px; color: var(--color-ink-muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; }
+  .axis .lbl { display: block; font-size: 12px; margin-bottom: 5px; width: auto; }
+
+  .tag { font-size: 10.5px; color: var(--color-ink-muted); border: 1px solid var(--color-border-default); border-radius: var(--radius-full); padding: 1px 7px; }
+  .reset { font-size: 11px; color: var(--color-ink-muted); text-decoration: underline dotted; cursor: pointer; }
+  .saved { font-size: 11px; color: var(--color-ink-muted); }
+
+  /* ---------- controls (26px slim) ---------- */
+  .seg { display: inline-flex; gap: 4px; }
+  .seg span { height: 26px; display: inline-flex; align-items: center; padding: 0 11px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: 12.5px; color: var(--color-ink-primary); background: var(--color-surface-panel); }
+  .seg span.on { background: var(--color-brand); border-color: var(--color-brand); color: var(--color-brand-ink); }
+  .seg.ro span { border-style: dashed; color: var(--color-ink-muted); }
+  .seg.ro span.on { background: var(--color-surface-elevated); border: 1px solid var(--color-border-strong); color: var(--color-ink-primary); font-weight: 600; }
+
+  .in { height: 26px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); padding: 0 9px; font-size: 12.5px; display: inline-flex; align-items: center; background: var(--color-surface-panel); color: var(--color-ink-primary); }
+  .in.w-sm { width: 88px; } .in.w-md { width: 180px; } .in.w-lg { width: 260px; }
+  .in.muted { color: var(--color-ink-muted); }
+  .area { border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12.5px; min-height: 48px; color: var(--color-ink-primary); background: var(--color-surface-panel); max-width: 420px; }
+  .sel { height: 26px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); padding: 0 9px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 10px; background: var(--color-surface-panel); }
+  .sel::after { content: "▾"; font-size: 10px; color: var(--color-ink-muted); }
+
+  .btn { height: 26px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: var(--radius-sm); font-size: 12.5px; background: var(--color-brand); color: var(--color-brand-ink); border: 1px solid var(--color-brand); }
+  .btn.sec { background: var(--color-surface-panel); color: var(--color-ink-primary); border-color: var(--color-border-strong); }
+  .btn.dis { opacity: .5; }
+
+  .toggle { width: 34px; height: 20px; border-radius: var(--radius-full); background: var(--color-brand); position: relative; flex: none; }
+  .toggle::after { content: ""; position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: var(--radius-full); background: var(--color-brand-ink); }
+  .toggle.off { background: var(--color-border-strong); }
+  .toggle.off::after { right: auto; left: 2px; }
+
+  .step { display: inline-flex; align-items: center; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); height: 26px; overflow: hidden; background: var(--color-surface-panel); }
+  .step b { padding: 0 10px; font-size: 12.5px; font-weight: 600; }
+  .step i { width: 22px; text-align: center; font-style: normal; color: var(--color-ink-muted); border-left: 1px solid var(--color-border-default); font-size: 13px; line-height: 24px; }
+  .step i:first-child { border-left: none; border-right: 1px solid var(--color-border-default); }
+  .unit { font-size: 11.5px; color: var(--color-ink-muted); }
+
+  .chk { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: 12.5px; }
+  .chk.on { background: var(--color-surface-elevated); border-color: var(--color-brand); }
+  .chk .bx { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid var(--color-border-strong); }
+  .chk.on .bx { background: var(--color-brand); border-color: var(--color-brand); }
+
+  details.adv { border-top: 1px dashed var(--color-border-default); padding-top: 12px; }
+  details.adv summary { font-size: 12px; color: var(--color-ink-muted); cursor: pointer; list-style: none; }
+  details.adv summary::before { content: "▸ "; }
+  details.adv[open] summary::before { content: "▾ "; }
+  details.adv .rows { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+
+  /* ---------- banners / strips ---------- */
+  .banner { border: 1px solid var(--color-danger); background: var(--color-surface-panel); border-left-width: 4px; border-radius: var(--radius-sm); padding: 10px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+  .banner b { font-weight: 600; }
+  .strip { border: 1px solid var(--color-border-strong); background: var(--color-surface-elevated); border-radius: var(--radius-sm); padding: 8px 14px; font-size: 12.5px; display: flex; align-items: center; gap: 12px; }
+  .err { font-size: 11.5px; color: var(--color-danger); font-weight: 600; }
+
+  .keydot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-ink-muted); }
+
+  /* states board small frames */
+  .frames { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .frame { background: var(--color-surface-canvas); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); padding: 16px; }
+  .frame h3 { font-size: 12px; margin: 0 0 10px; color: var(--color-ink-muted); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ================= BOARD 1 — PERSONA & CONVERSATION ================= -->
+<section class="board">
+  <p class="board-title">Board 1 — Settings · Persona &amp; Conversation (chat pane open)</p>
+  <div class="shell">
+    <div class="hdr"><span class="mark"></span><span class="wordmark">wombat</span>
+      <div class="hdr-right"><span class="dot"></span> running <span class="btn sec">Restart</span></div>
+    </div>
+    <div class="body">
+      <nav class="rail">
+        <a>Today</a>
+        <div class="grp">Settings</div>
+        <a class="active">Persona &amp; Conversation</a>
+        <a>Voice &amp; Audio</a>
+        <a>Briefs &amp; Digests</a>
+        <a>Accounts &amp; Keys</a>
+        <a>System</a>
+      </nav>
+      <main><div class="content">
+        <h1 class="pagetitle">Persona &amp; Conversation</h1>
+
+        <div class="panel">
+          <div class="lead"><b>John</b> is terse, reserved, and plain — no humor, balanced proactivity. Balanced register.</div>
+          <div class="row"><span class="lbl">Preset</span>
+            <span class="seg"><span class="on">The Steward</span><span>Professional</span><span>Friendly</span><span>Candid</span><span>Custom</span></span>
+          </div>
+          <div class="grid2">
+            <div class="axis"><span class="lbl">Brevity</span>
+              <span class="seg"><span class="on">Terse</span><span>Balanced</span><span>Expansive</span></span></div>
+            <div class="axis"><span class="lbl">Warmth <span class="tag">default</span></span>
+              <span class="seg"><span class="on">Reserved</span><span>Neutral</span><span>Warm</span></span></div>
+            <div class="axis"><span class="lbl">Directness <span class="tag">default</span></span>
+              <span class="seg"><span>Gentle</span><span class="on">Plain</span><span>Blunt</span></span></div>
+            <div class="axis"><span class="lbl">Humor <span class="tag">default</span></span>
+              <span class="seg"><span class="on">None</span><span>Dry</span></span></div>
+            <div class="axis"><span class="lbl">Proactivity <span class="tag">default</span></span>
+              <span class="seg"><span>Minimal</span><span class="on">Balanced</span><span>Forward</span></span></div>
+          </div>
+          <div class="row"><span class="saved">Saved — applies on the next turn.</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="row"><span class="lbl">Conversational register</span>
+            <span class="seg"><span>Buttoned-up</span><span class="on">Balanced</span><span>Casual</span></span>
+          </div>
+          <div class="row"><span class="hint" style="margin-left:182px">How loose chat and voice replies are allowed to get. Capability honesty is never relaxed.</span></div>
+          <div class="row"><span class="lbl">Your name</span><span class="in w-md">Jim</span><span class="hint">used when speaking to you</span></div>
+          <div class="row" style="align-items:flex-start"><span class="lbl" style="padding-top:5px">About you</span>
+            <span class="area">Prefers short answers in the morning. Works from the home office most days.</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="row"><span class="lbl">Assistant name</span><span class="in w-md">John</span><span class="tag">restart</span></div>
+        </div>
+      </div></main>
+      <aside class="chat">
+        <div class="chat-hd"><span class="mark"></span>John</div>
+        <div class="chat-body">
+          <div class="bub user">be a little less formal with me</div>
+          <div class="bub bot">Done — I set my register to Balanced. You can tune it in Persona &amp; Conversation.</div>
+        </div>
+        <div class="composer">Message John…</div>
+      </aside>
+    </div>
+  </div>
+  <p class="caption">Caption — live today: five axes (segmented, hot-apply, "default" tags on unedited axes), assistant name. Awaiting backend (personability arc / new fields): Preset row, Conversational register, Your name, About you. Register change is echoed in chat to show the hot-apply loop.</p>
+</section>
+
+<!-- ================= BOARD 2 — VOICE & AUDIO ================= -->
+<section class="board">
+  <p class="board-title">Board 2 — Settings · Voice &amp; Audio (Advanced open; chat collapsed)</p>
+  <div class="shell">
+    <div class="hdr"><span class="mark"></span><span class="wordmark">wombat</span>
+      <div class="hdr-right"><span class="dot"></span> running <span class="btn sec">Restart</span></div>
+    </div>
+    <div class="body">
+      <nav class="rail">
+        <a>Today</a>
+        <div class="grp">Settings</div>
+        <a>Persona &amp; Conversation</a>
+        <a class="active">Voice &amp; Audio</a>
+        <a>Briefs &amp; Digests</a>
+        <a>Accounts &amp; Keys</a>
+        <a>System</a>
+      </nav>
+      <main><div class="content">
+        <h1 class="pagetitle">Voice &amp; Audio</h1>
+
+        <div class="panel">
+          <div class="lead">F13 &nbsp;→&nbsp; Yeti X &nbsp;→&nbsp; local Whisper (base) &nbsp;→&nbsp; gate &nbsp;→&nbsp; <b>John's voice</b> (ElevenLabs · Rachel)</div>
+          <div class="row"><span class="lbl">Voice replies</span><span class="toggle"></span><span class="saved">Saved.</span></div>
+          <div class="row"><span class="lbl">Push-to-talk</span><span class="in w-sm muted">F13</span><span class="btn sec">Change</span><span class="hint">hold to talk, release to send</span></div>
+          <div class="row"><span class="lbl">Input device</span><span class="sel">Blue Yeti X</span></div>
+          <div class="row"><span class="lbl">Test your mic</span><span class="btn">Record</span><span class="btn sec">Mute</span><span class="hint">records into the drop-dir — a real end-to-end test</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="row"><span class="lbl">Speech-to-text</span>
+            <span class="seg"><span class="on">Local</span><span>Deepgram</span><span>ElevenLabs</span><span>Fish</span></span><span class="tag">restart</span></div>
+          <div class="row"><span class="lbl">Text-to-speech</span>
+            <span class="seg"><span>Local</span><span>Deepgram</span><span class="on">ElevenLabs</span><span>Fish</span></span><span class="tag">restart</span></div>
+          <div class="row"><span class="lbl">ElevenLabs voice ID</span><span class="in w-lg">EXAVITQu4vr4xnSDxMaL</span><span class="hint">shown because TTS ≠ Local</span></div>
+
+          <details class="adv" open>
+            <summary>Advanced</summary>
+            <div class="rows">
+              <div class="row"><span class="lbl">Local transcription model</span><span class="sel">base</span><span class="tag">default</span><span class="hint">tiny · base · small · medium</span></div>
+              <div class="row"><span class="lbl">Cloud STT model</span><span class="in w-md muted">nova-2</span><span class="hint">used only when speech-to-text is a cloud provider</span></div>
+              <div class="row"><span class="lbl">Reply window</span><span class="step"><i>−</i><b>120</b><i>+</i></span><span class="unit">seconds</span><span class="tag">default</span><span class="hint">how long a spoken reply stays open for "reply to that"</span></div>
+              <div class="row"><span class="lbl">Spoken reply length</span><span class="step"><i>−</i><b>400</b><i>+</i></span><span class="unit">chars</span><span class="tag">default</span></div>
+            </div>
+          </details>
+        </div>
+      </div></main>
+      <div class="chat-tab"><span>CHAT</span></div>
+    </div>
+  </div>
+  <p class="caption">Caption — live today: voice toggle, PTT capture, input device, mic test, STT/TTS providers, voice ID. Cloud STT model is API-admitted but unrendered today (turn it on). Awaiting backend: local transcription model (needs field admission), reply window, spoken reply length. Voice ID row appears only when TTS ≠ Local; a cloud provider without its key shows the inline warning (Board 6 idiom) with a jump-link to Accounts &amp; Keys.</p>
+</section>
+
+<!-- ================= BOARD 3 — BRIEFS & DIGESTS ================= -->
+<section class="board">
+  <p class="board-title">Board 3 — Settings · Briefs &amp; Digests (new category)</p>
+  <div class="shell">
+    <div class="hdr"><span class="mark"></span><span class="wordmark">wombat</span>
+      <div class="hdr-right"><span class="dot"></span> running <span class="btn sec">Restart</span></div>
+    </div>
+    <div class="body">
+      <nav class="rail">
+        <a>Today</a>
+        <div class="grp">Settings</div>
+        <a>Persona &amp; Conversation</a>
+        <a>Voice &amp; Audio</a>
+        <a class="active">Briefs &amp; Digests</a>
+        <a>Accounts &amp; Keys</a>
+        <a>System</a>
+      </nav>
+      <main><div class="content">
+        <h1 class="pagetitle">Briefs &amp; Digests</h1>
+
+        <div class="panel">
+          <div class="lead">Next brief <b>tomorrow 07:00</b> · 2 interruptions so far today (cap 3 per sender)</div>
+          <div class="row"><span class="lbl">Morning brief at</span><span class="in w-sm">07:00</span><span class="tag">default</span></div>
+          <div class="row"><span class="lbl">Brief includes</span>
+            <span class="chk on"><span class="bx"></span>Calendar</span>
+            <span class="chk on"><span class="bx"></span>Inbox highlights</span>
+            <span class="chk on"><span class="bx"></span>Notepad</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="row"><span class="lbl">Interruptions</span>
+            <span class="seg"><span>Quiet</span><span class="on">Balanced</span><span>Chatty</span></span></div>
+          <div class="row"><span class="hint" style="margin-left:182px">Quiet: only truly urgent items speak up. Chatty: John volunteers more. Held items land in the next brief either way.</span></div>
+          <div class="row"><span class="lbl">Per-sender daily cap</span><span class="step"><i>−</i><b>3</b><i>+</i></span><span class="unit">per day</span><span class="tag">default</span></div>
+          <div class="row"><span class="lbl">Quiet hours</span><span class="toggle"></span><span class="in w-sm">22:00</span><span class="unit">to</span><span class="in w-sm">07:00</span></div>
+
+          <details class="adv">
+            <summary>Advanced</summary>
+            <div class="rows">
+              <div class="row"><span class="lbl">Urgency threshold</span><span class="step"><i>−</i><b>0.75</b><i>+</i></span><span class="tag">default</span><span class="hint">editing this flips Interruptions to Custom</span></div>
+              <div class="row"><span class="lbl">Held items expire after</span><span class="step"><i>−</i><b>24</b><i>+</i></span><span class="unit">hours</span><span class="tag">default</span></div>
+              <div class="row"><span class="lbl">Nightly reflection at</span><span class="in w-sm muted">02:00</span><span class="tag">default</span></div>
+            </div>
+          </details>
+        </div>
+      </div></main>
+      <div class="chat-tab"><span>CHAT</span></div>
+    </div>
+  </div>
+  <p class="caption">Caption — this whole category awaits backend: brief/reflection times and gate values live in wombat_params.yaml today (TK-97/TK-52 pin them file-edit-only — exposing them needs a superseding decision + a params bridge); aggressiveness preset, quiet hours, and brief-content toggles are new fields. Nothing here ships as a dead control — the category renders only what the architect mints. The rating_tuner block stays deliberately absent (LOCKED band).</p>
+</section>
+
+<!-- ================= BOARD 4 — ACCOUNTS & KEYS ================= -->
+<section class="board">
+  <p class="board-title">Board 4 — Settings · Accounts &amp; Keys</p>
+  <div class="shell">
+    <div class="hdr"><span class="mark"></span><span class="wordmark">wombat</span>
+      <div class="hdr-right"><span class="dot"></span> running <span class="btn sec">Restart</span></div>
+    </div>
+    <div class="body">
+      <nav class="rail">
+        <a>Today</a>
+        <div class="grp">Settings</div>
+        <a>Persona &amp; Conversation</a>
+        <a>Voice &amp; Audio</a>
+        <a>Briefs &amp; Digests</a>
+        <a class="active">Accounts &amp; Keys</a>
+        <a>System</a>
+      </nav>
+      <main><div class="content">
+        <h1 class="pagetitle">Accounts &amp; Keys</h1>
+
+        <div class="panel">
+          <div class="lead">Google <b>connected</b> · voice keys: <span class="keydot"><span class="dot"></span> ElevenLabs</span> <span class="keydot"><span class="dot off"></span> Deepgram</span> <span class="keydot"><span class="dot off"></span> Fish</span></div>
+          <div class="row"><span class="lbl">Gmail</span><span class="keydot"><span class="dot"></span> jctisdale1988@gmail.com</span><span class="btn sec">Reconnect</span></div>
+          <div class="row"><span class="lbl">Google Calendar</span><span class="keydot"><span class="dot"></span> jctisdale1988@gmail.com</span><span class="btn sec">Reconnect</span></div>
+          <div class="row"><span class="hint" style="margin-left:182px">Read-only scopes. Wombat never sends mail or edits events.</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="row"><span class="lbl">ElevenLabs key</span><span class="in w-lg muted">Enter new key</span><span class="btn sec">Save key</span><span class="keydot"><span class="dot"></span> configured</span></div>
+          <div class="row"><span class="lbl">Deepgram key</span><span class="in w-lg muted">Enter new key</span><span class="btn sec">Save key</span><span class="keydot"><span class="dot off"></span> not configured</span></div>
+          <div class="row"><span class="lbl">Fish key</span><span class="in w-lg muted">Enter new key</span><span class="btn sec">Save key</span><span class="keydot"><span class="dot off"></span> not configured</span></div>
+          <div class="row"><span class="hint">Keys are write-only and stored in the system keyring — never shown back, and unaffected by settings-storage outages.</span></div>
+        </div>
+      </div></main>
+      <div class="chat-tab"><span>CHAT</span></div>
+    </div>
+  </div>
+  <p class="caption">Caption — everything on this board is live today (Google connect flow, write-only keyring key rows with configured dots). Key saves are restart-tier and feed the persistent restart strip. DeepSeek / OAuth-client / DSN credentials stay operator-.env by standing decision and are deliberately absent.</p>
+</section>
+
+<!-- ================= BOARD 5 — SYSTEM ================= -->
+<section class="board">
+  <p class="board-title">Board 5 — Settings · System (restart strip active; Advanced open)</p>
+  <div class="shell">
+    <div class="hdr"><span class="mark"></span><span class="wordmark">wombat</span>
+      <div class="hdr-right"><span class="dot"></span> running <span class="btn sec">Restart</span></div>
+    </div>
+    <div class="body">
+      <nav class="rail">
+        <a>Today</a>
+        <div class="grp">Settings</div>
+        <a>Persona &amp; Conversation</a>
+        <a>Voice &amp; Audio</a>
+        <a>Briefs &amp; Digests</a>
+        <a>Accounts &amp; Keys</a>
+        <a class="active">System</a>
+      </nav>
+      <main><div class="content">
+        <h1 class="pagetitle">System</h1>
+
+        <div class="strip">Changes pending restart (TTS provider, ElevenLabs key). <span class="btn">Restart wombat</span></div>
+
+        <div class="panel">
+          <div class="lead">Runtime <b>running</b> · up 6 h 12 m · settings storage OK · calendar/inbox synced 09:42</div>
+          <div class="row"><span class="lbl">Timezone</span><span class="in w-md muted">America/New_York (system)</span><span class="hint">set WOMBAT_TIMEZONE in .env to override</span></div>
+        </div>
+
+        <div class="panel">
+          <details class="adv" open>
+            <summary>Advanced</summary>
+            <div class="rows">
+              <div class="row"><span class="lbl">Daily token ceiling</span><span class="in w-sm">100,000</span><span class="tag">default</span></div>
+              <div class="row"><span class="lbl">Per-conversation spend cap</span><span class="in w-sm">$0.50</span><span class="tag">default</span></div>
+              <div class="row"><span class="lbl">Model response wait</span><span class="step"><i>−</i><b>10</b><i>+</i></span><span class="unit">seconds</span><span class="tag">default</span><span class="hint">past this, John answers from the template instead of waiting</span></div>
+              <div class="row"><span class="lbl">Keep calendar &amp; email items</span><span class="step"><i>−</i><b>30</b><i>+</i></span><span class="unit">days</span><span class="tag">default</span></div>
+              <div class="row"><span class="lbl">Keep notepad entries</span><span class="step"><i>−</i><b>14</b><i>+</i></span><span class="unit">days</span><span class="tag">default</span></div>
+            </div>
+          </details>
+        </div>
+      </div></main>
+      <div class="chat-tab"><span>CHAT</span></div>
+    </div>
+  </div>
+  <p class="caption">Caption — live today: restart + outcome postures, status line (derivable from existing GETs). Timezone is read-only display and needs one additive API field. The whole Advanced block awaits the params bridge (budgets, model wait) or new fields (retention). An edited advanced value swaps its "default" tag for a small "reset" affordance.</p>
+</section>
+
+<!-- ================= BOARD 6 — STATES ================= -->
+<section class="board">
+  <p class="board-title">Board 6 — States (degraded / failed save / loading / unreachable)</p>
+  <div class="frames">
+
+    <div class="frame">
+      <h3>Settings storage unavailable — read-only, keys still writable</h3>
+      <div class="content" style="max-width:none">
+        <div class="banner">
+          <b>Settings storage is unreachable — showing defaults, not your saved values.</b>
+          <span>Settings are read-only until it's back. API keys and Google connections are stored separately and still work. <span class="btn sec" style="margin-left:8px">Retry</span></span>
+        </div>
+        <div class="panel">
+          <div class="row"><span class="lbl">Brevity</span>
+            <span class="seg ro"><span class="on">Terse</span><span>Balanced</span><span>Expansive</span></span><span class="tag">default</span></div>
+          <div class="row"><span class="lbl">Assistant name</span><span class="in w-md muted">Steward</span><span class="tag">default</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <h3>PUT failed (storage died between load and save)</h3>
+      <div class="content" style="max-width:none">
+        <div class="panel">
+          <div class="row"><span class="lbl">Warmth</span>
+            <span class="seg"><span class="on">Reserved</span><span>Neutral</span><span>Warm</span></span></div>
+          <div class="row"><span class="err" style="margin-left:182px">Couldn't save — settings storage unavailable. Your change was not kept.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <h3>Loading</h3>
+      <div class="content" style="max-width:none">
+        <div class="panel"><span class="hint">Loading settings…</span></div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <h3>Settings service unreachable (GET rejects) + missing-key warning</h3>
+      <div class="content" style="max-width:none">
+        <div class="panel">
+          <b style="font-size:13px">Can't reach wombat's settings service.</b>
+          <span class="hint">The settings app isn't running or the handshake failed.</span>
+          <span><span class="btn sec">Retry</span></span>
+        </div>
+        <div class="panel">
+          <div class="row"><span class="lbl">Text-to-speech</span>
+            <span class="seg"><span>Local</span><span class="on">Deepgram</span><span>ElevenLabs</span><span>Fish</span></span></div>
+          <div class="row"><span class="err" style="margin-left:182px">Deepgram has no API key — voice will stay silent. <u>Add key</u></span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <p class="caption">Caption — degraded values stay legible (read-only, not grayed-to-oblivion); the banner outranks everything; keys/Google/Restart stay live during a pg outage. A category whose backend fields aren't built yet simply doesn't render those rows — never a disabled placebo.</p>
+</section>
+
+</body>
+</html>

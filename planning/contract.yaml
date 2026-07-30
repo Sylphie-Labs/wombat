@@ -7575,7 +7575,7 @@ nodes:
     estimate: S
     engineering_level: mvp
     intent: "DEC-65(h). (1) persona/capabilities.py - ONE sentence inserted before the 'You cannot' sentence: 'You remember personal details the user has shared in earlier conversations when they appear in what you are given.' - conditionally phrased so it is TRUE regardless of store contents; every existing sentence, including every cannot/never clause, is byte-retained (DEC-62 amended for ACCURACY, never weakened - the charter's job is truth in both directions, and post-TK-296 the old text would deny a real capability); every charter-pinning test updates to the new constant ONCE (they pin the imported constant, not scattered copies). (2) NEW tests/integration/test_companion_chat_e2e.py (pg-gated, throwaway DSN) driving the real seams with fakes at the edges (the TK-291 module shape): real ChatSource/ASRSource -> registry (chat-turn sink recording) -> queue -> real Gate -> real ComposeStage with FakeModel spy under a LivePersona(user_name='Jim') - asserting (a) a typed chat turn composes under the Mouth.CHAT companion instruction (companion base role substring, 'Jim' present, charter terminating) with known_user_context facts in the user message; (b) a voice turn gets the same plus replying_to inside TTL; (c) a gmail-kind surfaced item composes under the UNCHANGED Mouth.COMPOSE instruction with zero DEC-65 payload keys; (d) the dropped turns landed in wombat_chat_turns; (e) a DreamFactsStage run over those turns with a fake model writes capped deduped facts that the NEXT chat turn's prompt then carries - the full getting-to-know loop closed in one module. (3) The DEC-57/DEC-60/DEC-63/DEC-64 pinned suites and the brief/draft/reflection instruction pins all pass unmodified in the same run."
-    complexity_budget: "One sentence in one constant + its pin updates, one integration test module. NO other src changes - everything else must already work; a needed fix belongs to the owning ticket, not here."
+    complexity_budget: "One sentence in one constant + its pin updates, one integration test module, plus two TEST-ONLY ISS-30 fold-ins (the _ALL_MOUTHS five-mouth extension and the _GROUNDING_ONLY_KEYS drift pin). NO other src changes - everything else must already work; a needed fix belongs to the owning ticket, not here."
     acceptance_criteria:
       - given: "the amended CAPABILITY_CHARTER"
         when: "diffed against the previous text"
@@ -7586,6 +7586,9 @@ nodes:
       - given: "the DEC-57/DEC-60/DEC-63/DEC-64 suites and the brief/draft/reflection instruction pins"
         when: "the full suite runs on the landed arc"
         then: "green unmodified - the only pin edits in this ticket are the charter-constant pins named in scope."
+      - given: "the ISS-30 batch-review fold-ins (findings 2 and 4, both test-only)"
+        when: "the persona property suite and the compose drift pin run"
+        then: "tests/persona/test_builder.py's _ALL_MOUTHS covers all FIVE mouths so Mouth.CHAT joins every generic property test (the four original mouths' DEFAULT oracles untouched), and a new test pins stages/compose._GROUNDING_ONLY_KEYS equal to the EXACT set of payload keys the assemble_runtime context-hook closure can stamp (replying_to, known_user_context, context_calendar_today, context_recent_email) - a future fifth grounding key cannot silently reopen the v2.165 degrade leak."
     non_goals:
       - "No live model calls - the live personability ear-check is the operator's."
       - "No charter weakening - zero cannot/never clauses touched, structurally asserted."
@@ -7599,6 +7602,7 @@ nodes:
       - tests/unit/test_compose_stage.py
       - tests/capabilities/test_capability_charter.py
       - tests/integration/test_companion_chat_e2e.py
+      - tests/persona/test_builder.py
   - id: TK-299
     kind: ticket
     parent: EP-37
@@ -7639,6 +7643,349 @@ nodes:
       - src/wombat/bootstrap.py
       - tests/behavior/test_dream_derive.py
       - tests/pathways/test_dream_pathway.py
+  - id: TK-300
+    kind: ticket
+    parent: EP-33
+    title: "Humor widens to none|dry|playful|comedian; brevity/warmth gain top levels exhaustive/affectionate - matrix enums + policy clauses (persona_policy version 2->3) + config Literals + API mirror + app options, every DEFAULT byte-identical (DEC-67b/c)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-67(b)+(c) prompt-axis half. persona/matrix.py - Humor gains PLAYFUL('playful') + COMEDIAN('comedian'); Brevity gains EXHAUSTIVE('exhaustive'); Warmth gains AFFECTIONATE('affectionate'); docstrings cite DEC-67's supersession-in-part of DEC-37(c) (the closed-set discipline is UNCHANGED - the sets are wider, still closed) and carry the humor x DEC-65 chat-register composition note: the chat base role is PERMISSIVE (rolls with user-initiated banter at every humor level), the humor axis adds INITIATIVE on top - none never initiates, dry one understated aside, playful when natural, comedian always. persona_policy.yaml - the four new clause texts EXACTLY as pinned in DEC-67(b)/(c); yaml version 2 -> 3 in lock-step with PERSONA_POLICY_VERSION in policy.py (both verified at 2 at record time, post-TK-292); every default-level empty string untouched (the DEC-38(5) loader invariant must still pass); per-mouth placement stands - humor renders for compose/brief/chat ONLY, draft (user's outbound voice) and reflection (NG-2 adjacency) keep humor withheld. builder.py/expression.py - ZERO logic changes expected (clauses are policy data; verify no level-name switches exist in code) EXCEPT the TK-216 degrade variant seam: the deterministic template variants fold exhaustive -> expansive and affectionate -> warm; humor stays model-path-only on degrade (DEC-37e honest asymmetry). config.py - the three persona Literals widen. settings_app/api.py - SettingsUpdate Literals widen (the lock-step mirror tests are the designed loud path). app/src/App.tsx - the existing HUMOR/BREVITY/WARMTH option arrays gain the new levels with labels 'Playful', 'Comedian (jokes all the time)', 'Exhaustive', 'Affectionate' - hot-apply like every persona axis today."
+    complexity_budget: "Enum members + policy data + Literal widenings + option arrays + the degrade fold. NO new clause seams, NO builder/expression logic changes beyond the degrade fold, NO new mouths, NO proactivity (TK-301), NO base-role text changes, NO preset rows."
+    acceptance_criteria:
+      - given: "the widened enums and version-3 policy"
+        when: "instruction_for renders every mouth at DEFAULT_MATRIX (user_name set and unset)"
+        then: "every output is byte-identical to pre-arc - the five-mouth DEFAULT oracles all pass unmodified."
+      - given: "humor=comedian on compose/brief/chat"
+        when: "rendered"
+        then: "the comedian clause appears verbatim; draft/reflection renders carry NO humor clause at any humor level (policy withholding stands)."
+      - given: "brevity=exhaustive and warmth=affectionate"
+        when: "rendered on any granted mouth"
+        then: "the pinned clause texts appear verbatim; policy load still rejects proactivity anywhere and passes the version-3 lock-step check (a version-2 file now fails loud)."
+      - given: "the degrade/template path"
+        when: "a matrix holds exhaustive/affectionate/comedian"
+        then: "the deterministic variants fold exhaustive->expansive and affectionate->warm, and humor adds nothing (DEC-37e asymmetry re-pinned)."
+      - given: "PUT /settings with each new level"
+        when: "round-tripped"
+        then: "200 + persisted; an out-of-vocab level still 422s; the two mirror lock-step tests pass."
+      - given: "the app persona view"
+        when: "rendered (component test)"
+        then: "the three widened selects offer exactly the new closed sets and save via the existing patch path under the hot-apply posture (not restart)."
+    non_goals:
+      - "No proactivity change (TK-301)."
+      - "No preset rows, ever (orchestrator ruling recorded in DEC-67)."
+      - "No new eval-harness obligations beyond existing env-gated fixtures gaining the new levels' rows."
+    depends_on:
+      - TK-292
+      - TK-221
+      - TK-220
+    files_in_scope:
+      - src/wombat/persona/matrix.py
+      - src/wombat/persona/persona_policy.yaml
+      - src/wombat/persona/policy.py
+      - src/wombat/persona/builder.py
+      - src/wombat/config.py
+      - src/wombat/settings_app/api.py
+      - app/src/App.tsx
+      - tests/persona/test_matrix.py
+      - tests/persona/test_policy.py
+      - tests/persona/test_builder.py
+      - tests/persona/test_degrade_variants.py
+      - tests/unit/test_config.py
+      - tests/settings_app/test_api.py
+      - app/src/App.test.tsx
+  - id: TK-301
+    kind: ticket
+    parent: EP-33
+    title: "Proactivity gains EAGER - personality_band entry eager: -0.20 (wombat_params.yaml version 8->9, OPERATING_PARAMS_VERSION 7->8), PersonalityBand model + trigger mapping + config/API/app option, floor/cap clamp byte-unchanged (DEC-67c)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-67(c) gate-side half. persona/matrix.py Proactivity gains EAGER('eager'). wombat_params.yaml personality_band gains eager: -0.20 with yaml version 8 -> 9 (its bump-on-value-change rule) and OPERATING_PARAMS_VERSION 7 -> 8 in params.py (its bump-on-field-change rule; both verified at record time); PersonalityBand model gains the required eager field (no silent default - the file is the source). gate/trigger.py effective_urgency_threshold's offset mapping gains Proactivity.EAGER -> band.eager; the floor/cap clamp logic is untouched (eager at base 0.75 -> 0.55 -> clamps to floor 0.60: the band floor/cap REMAIN the safety bound, restated in the yaml comment). config Literal + SettingsUpdate + app PROACTIVITY_OPTIONS gain 'eager' ('Eager (very forward)'). The existing three levels' offsets byte-unchanged."
+    complexity_budget: "One enum member, one required band field, one mapping entry, one option. NO clamp change, NO rating_tuner contact, NO new gate arm."
+    acceptance_criteria:
+      - given: "base 0.75 and each of the four levels"
+        when: "effective_urgency_threshold runs"
+        then: "minimal 0.85, balanced 0.75, forward 0.65, eager 0.60 (clamped at floor) - the clamp proven at the boundary."
+      - given: "a params file without the eager entry"
+        when: "loaded"
+        then: "loud OperatingParamsError (required field, no silent default), and the version lock-step check fails a version-8 file."
+      - given: "PUT proactivity=eager"
+        when: "the live persona polls it up"
+        then: "the very next gate scoring pass uses the eager offset (the TK-215 live-read seam, existing test pattern extended)."
+      - given: "the existing gate/tuner suites"
+        when: "run"
+        then: "green unmodified - rating_tuner custody untouched."
+    non_goals:
+      - "No band floor/cap change; no new gate arm."
+      - "No minimal-side widening (not asked; add on demand)."
+    depends_on:
+      - TK-300
+      - TK-215
+    files_in_scope:
+      - src/wombat/persona/matrix.py
+      - src/wombat/wombat_params.yaml
+      - src/wombat/params.py
+      - src/wombat/gate/trigger.py
+      - src/wombat/config.py
+      - src/wombat/settings_app/api.py
+      - app/src/App.tsx
+      - tests/unit/test_params.py
+      - tests/gate/test_trigger.py
+      - tests/persona/test_matrix.py
+      - tests/settings_app/test_api.py
+      - app/src/App.test.tsx
+  - id: TK-302
+    kind: ticket
+    parent: EP-32
+    title: "The params overlay bridge - eight enumerated wombat_param_* settings rows overlay OperatingParams at boot (validated, clamped, loud), GET/PUT admit them with pydantic bounds, GET gains the read-only timezone field (DEC-67d/h)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-67(d)+(h). params.py - PARAMS_APP_EDITABLE: a closed frozen spec mapping the eight settings keys (wombat_param_morning_brief_time, wombat_param_nightly_dream_time, wombat_param_urgency_threshold, wombat_param_per_class_daily_ceiling, wombat_param_decay_ttl_seconds, wombat_param_mouth_model_timeout_seconds, wombat_param_mouth_daily_token_ceiling, wombat_param_mouth_max_usd_per_drive) -> (OperatingParams field, parser, min, max) with the DEC-67(d) bounds verbatim; load_operating_params gains optional overlay: Mapping[str,str] | None applied AFTER file validation - each entry parsed and clamped to its band, one WARNING per clamped/unparseable row (row skipped on parse failure, never fatal: a bad settings row must not kill boot; the FILE keeps fail-loud custody as the complete default source, wombat_params.yaml stays required and complete). runtime.py - the boot sequence loads params BEFORE assemble_runtime (verified at the load_operating_params call site), so the overlay read rides the load_config settings-table precedent: read the eight wombat_param_* rows from wombat_settings over the already-validated dsn (dsn-less/store raise -> no overlay + one WARNING) and pass overlay into load_operating_params. settings_app/api.py - SettingsUpdate gains the eight optional fields with pydantic ge/le bounds mirroring PARAMS_APP_EDITABLE (out-of-bounds 422s at the door; the boot clamp is defense-in-depth); the GET admitted view unions APP_EDITABLE_FIELDS with the PARAMS_APP_EDITABLE keys (the field-set mirror test updates to the union; load_config drops wombat_param_* rows via its existing admitted-schema filter - verify, the wombat_persona_pins precedent). GET /settings additionally gains read-only timezone: {name, source} from the timezone resolver seam (verify the resolver imports clean of bootstrap/runtime; if not, inline the same resolution logic - the settings_app import-isolation invariant wins)."
+    complexity_budget: "One closed spec + one overlay arg + one boot read + API field admissions + one read-only GET object. NO hot-apply, NO file writes, NO overlay of any non-enumerated field (structurally absent from the spec), NO timezone editing."
+    acceptance_criteria:
+      - given: "a settings store seeded with all eight rows in-band"
+        when: "runtime boot loads params"
+        then: "OperatingParams carries the overlaid values and every other file field is untouched; with NO rows, params equal the file exactly (byte-equal model dump)."
+      - given: "an out-of-band row (urgency 0.30) and a garbage row ('bananas')"
+        when: "overlaid"
+        then: "clamp-to-band and skip respectively, one WARNING each, boot proceeds."
+      - given: "PUT with each field at min, max, out-of-band, and wrong type"
+        when: "posted"
+        then: "200/200/422/422; GET returns stored overrides (null when unset) for all eight keys; both mirror lock-step tests pass on the union."
+      - given: "load_config over a table containing wombat_param_* rows"
+        when: "loaded"
+        then: "WombatConfig is unaffected and no error (the admitted-schema drop verified)."
+      - given: "GET /settings"
+        when: "called"
+        then: "the timezone object is present and read-only (a PUT carrying a timezone key is rejected), and the settings_app subprocess import-isolation test stays green."
+      - given: "the brief/dream timer wiring at bootstrap"
+        when: "overlaid times are present"
+        then: "the timers schedule at the overlaid times (existing timer tests extended with an overlay case)."
+    non_goals:
+      - "No hot-apply of params (restart-tier recorded in DEC-67d)."
+      - "No overlay of any non-enumerated field - rating_tuner/personality_band/flush/presence/sweeper/dream keys structurally absent from the spec (a test asserts the spec's key set verbatim)."
+      - "No file writes ever - the overlay is the user's delta, the yaml stays the default source."
+    depends_on:
+      - TK-240
+      - TK-197
+      - TK-13
+    files_in_scope:
+      - src/wombat/params.py
+      - src/wombat/runtime.py
+      - src/wombat/settings_app/api.py
+      - tests/unit/test_params.py
+      - tests/unit/test_runtime.py
+      - tests/settings_app/test_api.py
+  - id: TK-303
+    kind: ticket
+    parent: EP-31
+    title: "Reply window + spoken-reply cap become config fields - wombat_reply_window_seconds [30,600] and wombat_spoken_reply_max_chars [200,1200] unpin LAST_SPOKEN_TTL_SECONDS and _MAX_SPEECH_CHARS by name; wombat_asr_model admitted tiny|base|small|medium (DEC-67e/f)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-67(e)+(f). config.py - three fields join WombatConfig + APP_EDITABLE_FIELDS: wombat_reply_window_seconds: float = 120.0 (ge=30 le=600); wombat_spoken_reply_max_chars: int = 400 (ge=200 le=1200); wombat_asr_model narrows from free str (verified default 'base', currently NOT app-editable) to Literal['tiny','base','small','medium'] and joins APP_EDITABLE_FIELDS (env override still honored by load_config's existing precedence - verify and pin it). voice/reply_context.py - LastSpokenRegister gains ctor ttl_seconds defaulting to the module constant LAST_SPOKEN_TTL_SECONDS = 120.0 (kept as the default's home, its DEC-63 no-knob docstring re-pointed to DEC-67e's named supersession); bootstrap's register construction passes config.wombat_reply_window_seconds. stages/speech_shape.py - the shape seam gains an injected max_chars defaulting to _MAX_SPEECH_CHARS = 400 (module constant kept as the default's home), threaded from config at the bootstrap construction site. settings_app SettingsUpdate mirrors all three (ge/le bounds; asr_model Literal). Restart-tier all three. The register's 600-char stored-text cap and single-slot shape stay pinned - DEC-67e unpins EXACTLY the two named constants, nothing else."
+    complexity_budget: "Three config fields + two default-preserving ctor params + two construction-site threads + API mirror. NO hot-apply, NO VAD/auto-listen (DEF-11 untouched), NO other constant unpinned."
+    acceptance_criteria:
+      - given: "a register built with ttl 300"
+        when: "text ages 250s / 301s"
+        then: "fresh / stale respectively - and default-construction behavior is byte-identical to today (the 120s suites pass unmodified)."
+      - given: "speech shaping with max_chars 800"
+        when: "a 600-char reply shapes"
+        then: "it passes whole; default-construction keeps the 400 behavior byte-identically."
+      - given: "assemble_runtime with the fields set in config"
+        when: "the register and speech stage are built"
+        then: "both carry the configured values (construction-site test)."
+      - given: "PUT wombat_asr_model='small', 'huge', reply window 20, cap 5000"
+        when: "posted"
+        then: "200 / 422 / 422 / 422 - the bounds live at the API door AND the config field."
+      - given: "the DEC-64 walkie-talkie suite (TK-288/289/291 pins)"
+        when: "run"
+        then: "green unmodified - the defaults preserve every pinned behavior."
+    non_goals:
+      - "No hot-apply; no VAD/auto-listen anything (DEF-11 untouched)."
+      - "No change to the register's 600-char cap or single-slot shape (still pinned)."
+    depends_on:
+      - TK-288
+      - TK-196
+    files_in_scope:
+      - src/wombat/config.py
+      - src/wombat/voice/reply_context.py
+      - src/wombat/stages/speech_shape.py
+      - src/wombat/bootstrap.py
+      - src/wombat/settings_app/api.py
+      - tests/voice/test_reply_context.py
+      - tests/unit/test_speech_shape.py
+      - tests/unit/test_bootstrap.py
+      - tests/unit/test_config.py
+      - tests/settings_app/test_api.py
+  - id: TK-304
+    kind: ticket
+    parent: EP-9
+    title: "Quiet hours - wombat_quiet_start/wombat_quiet_end hold the immediate-voice arm via a deterministic gate-side predicate (reduce-only; brief and chat replies structurally unaffected) (DEC-67g)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-67(g). config.py - wombat_quiet_start: str = '' and wombat_quiet_end: str = '' join WombatConfig + APP_EDITABLE_FIELDS (HH:MM validated when non-empty; either empty = feature off; validated pair-wise at the API). NEW src/wombat/gate/quiet_hours.py - in_quiet_hours(now_local: time, start, end) pure predicate, midnight wrap supported (22:00-07:00 spans midnight), start==end or either empty never holds. bootstrap wires the hold at the SAME composition-root seam as the presence hold, consulted by the IMMEDIATE-VOICE arm ONLY: within quiet hours an immediate-voice surfacing HOLDS - the item stays pending and reaches the user via decay/flush/brief exactly like a presence hold (CON-2/CON-3 clean: quiet hours only ever REDUCES surfacing). tz-local via the DEC-21 resolver. The load-flush arm, morning brief delivery, and chat/voice REPLIES are structurally unaffected - a reply is not a surfacing; asking a question during quiet hours still gets its answer. Restart-tier v1."
+    complexity_budget: "One pure predicate module + one composition-root consult + two config fields + API pair validation. NO per-day schedules, NO hot-apply, NO brief/flush/reply gating."
+    acceptance_criteria:
+      - given: "start 22:00 end 07:00"
+        when: "checked at 23:30, 03:00, 08:00, 21:59"
+        then: "hold, hold, pass, pass (wrap proven); start==end or either empty never holds."
+      - given: "the gate with quiet hours active and an over-threshold item"
+        when: "scored"
+        then: "no immediate-voice surfacing; the item remains pending and a later out-of-window pass surfaces it (the presence-hold test pattern)."
+      - given: "a chat/voice turn during quiet hours"
+        when: "composed"
+        then: "the reply flows exactly as today (DEC-57/60 suites green unmodified)."
+      - given: "PUT with '25:99' or only one of the pair set"
+        when: "posted"
+        then: "422 with a pair-wise message; a valid pair persists and GET returns it."
+    non_goals:
+      - "No brief-time interaction (the user owns both knobs independently)."
+      - "No hot-apply; no per-day schedules."
+    depends_on:
+      - TK-27
+      - TK-11
+      - TK-196
+    files_in_scope:
+      - src/wombat/config.py
+      - src/wombat/gate/quiet_hours.py
+      - src/wombat/bootstrap.py
+      - src/wombat/settings_app/api.py
+      - tests/gate/test_quiet_hours.py
+      - tests/unit/test_bootstrap.py
+      - tests/settings_app/test_api.py
+      - tests/unit/test_config.py
+  - id: TK-305
+    kind: ticket
+    parent: EP-32
+    title: "App UI delta 1/2 - persona view gains 'Your name'; voice view gains cloud STT model, local transcription model, reply window, spoken reply cap; RESTART_FIELDS extends (DEC-67i, extension-only)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-67(i) first half, extension-only (the batch left app/src untouched - verified zero drift from the draft's anchors). App.tsx persona view: a 'Your name' Field (wombat_user_name, the TK-292 field finally exposed) joins the assistant-name Panel (restart-tier). Voice view providers Panel gains: wombat_stt_model Field (already admitted API-side - the free win), wombat_asr_model Select (tiny/base/small/medium), wombat_reply_window_seconds numeric Field ('s' unit in label), wombat_spoken_reply_max_chars numeric Field ('chars'). All five join FormState/DEFAULTS/buildPatch/RESTART_FIELDS; existing Field/Select primitives only; existing save bar + restart notice; no new views, no layout change."
+    complexity_budget: "Five form rows in two existing views + type plumbing. NO new primitives, NO steppers/toggles/segmented controls, NO Advanced disclosures (the shelved v2 pattern), NO new views or rail entries."
+    acceptance_criteria:
+      - given: "the persona view with a loaded form"
+        when: "rendered"
+        then: "the Your-name field shows the stored value ('' renders empty) and saving it shows the RESTART notice, not hot-apply."
+      - given: "the voice view"
+        when: "each new control is edited and saved"
+        then: "the PUT patch carries exactly the touched fields with correct types, and the restart notice shows."
+      - given: "out-of-bounds numeric input (window 10, cap 50)"
+        when: "saved"
+        then: "the 422 surfaces as the existing save-error line and the control reverts on reload."
+      - given: "the existing App test suite"
+        when: "run"
+        then: "green unmodified except the form-shape tests named in scope."
+    non_goals:
+      - "No steppers/toggles/segmented primitives; no Advanced disclosures - plain rows in existing panels."
+      - "No preset rows."
+    depends_on:
+      - TK-300
+      - TK-303
+      - TK-200
+    files_in_scope:
+      - app/src/App.tsx
+      - app/src/api.ts
+      - app/src/App.test.tsx
+  - id: TK-306
+    kind: ticket
+    parent: EP-32
+    title: "App UI delta 2/2 - system view learns the settings form: 'Briefs & interruptions' panel (brief time, reflection time, urgency threshold, per-class ceiling, item decay, quiet hours) + 'Limits' panel (model wait, token ceiling, spend cap) + timezone line (DEC-67i)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-67(i) second half. App.tsx system view currently renders only RuntimeControls; it gains (below RuntimeControls, same column) two Panels driven by the SAME formState/save-bar plumbing the other views use: 'Briefs & interruptions' - brief time (HH:MM Field), reflection time (HH:MM Field), urgency threshold (numeric 0.60-0.95), max voice interruptions per sender class per day (numeric 0-10), item decay hours (numeric 1-168, converted to/from wombat_param_decay_ttl_seconds), quiet hours start/end (two HH:MM Fields with pair honesty in a helper line); 'Limits' - model response wait seconds (2-60), daily token ceiling, per-conversation spend cap USD; plus a muted read-only line 'Timezone: {name} ({source})' from the GET timezone object. All restart-tier (RESTART_FIELDS). api.ts SettingsFields/patch types extend with the eight wombat_param_* keys + quiet fields + timezone. Time values: the params bridge stores HH:MM:SS - the UI renders/accepts HH:MM and normalizes to HH:MM:00 on save (recorded UI convention)."
+    complexity_budget: "Two panels + one read-only line in one existing view + api.ts types. NO presets, NO Advanced disclosures, NO new rail entries, NO brief content toggles (DEF-14)."
+    acceptance_criteria:
+      - given: "the system view with a loaded form"
+        when: "rendered"
+        then: "RuntimeControls is byte-unchanged above the two new panels, and unset overrides render the pinned default values as placeholders/labels ('default 07:00')."
+      - given: "brief time set to 06:30 and decay set to 48h"
+        when: "saved"
+        then: "the PUT carries wombat_param_morning_brief_time='06:30:00' and wombat_param_decay_ttl_seconds=172800; the restart notice shows."
+      - given: "the timezone object in GET"
+        when: "rendered"
+        then: "the read-only line shows and no control exists for it."
+      - given: "the storage-unavailable GET degrade"
+        when: "the system view renders"
+        then: "the new panels follow the existing degrade posture of the other form views."
+    non_goals:
+      - "No presets, no Advanced disclosures, no new rail entries."
+      - "No brief content toggles (DEF-14)."
+    depends_on:
+      - TK-302
+      - TK-304
+      - TK-305
+    files_in_scope:
+      - app/src/App.tsx
+      - app/src/api.ts
+      - app/src/App.test.tsx
+  - id: TK-307
+    kind: ticket
+    parent: EP-32
+    title: "Settings-extension proof - one integration module round-trips every DEC-67 field PUT -> store -> boot-consumption and proves the widened persona renders + the untouched pins, end-to-end (proof ticket)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "The TK-291/TK-298 proof-module shape. NEW tests/integration/test_settings_extension_e2e.py (pg-gated, throwaway DSN): (a) PUT every new/widened field through the real FastAPI app -> real SettingsStore -> assert load_operating_params(overlay from the store) carries the eight params values and load_config carries the config-tier fields while DROPPING wombat_param_* rows; (b) a LivePersona poll picks up humor=comedian / brevity=exhaustive / warmth=affectionate / proactivity=eager and instruction_for renders the pinned clauses on chat/compose while draft/reflection stay humor-free and effective_urgency_threshold clamps eager at the floor; (c) a ComposeStage FakeModel spy under the comedian matrix captures the comedian clause in the system message for a chat turn; (d) the untouched-pins sweep - DEFAULT_MATRIX renders on all five mouths byte-identical to pre-arc, rating_tuner/band-floor-cap/flush values unreachable via any settings path (the PARAMS_APP_EDITABLE key set asserted verbatim), quiet-hours hold + reply-window + spoken-cap construction sites carry configured values. Every existing pinned suite green in the same run."
+    complexity_budget: "One integration test module, zero src. NO live model/network calls, NO app/ e2e (component tests own the UI)."
+    acceptance_criteria:
+      - given: "a throwaway pg"
+        when: "the module runs"
+        then: "assertions (a)-(d) all hold in one module run."
+      - given: "the landed arc"
+        when: "the full suite runs"
+        then: "green with zero modifications outside this arc's named test files."
+      - given: "the module's environment"
+        when: "run"
+        then: "zero live model/network calls are made."
+    non_goals:
+      - "No live model calls; no app/ e2e (component tests own the UI)."
+    depends_on:
+      - TK-300
+      - TK-301
+      - TK-302
+      - TK-303
+      - TK-304
+      - TK-306
+    files_in_scope:
+      - tests/integration/test_settings_extension_e2e.py
+  - id: TK-308
+    kind: ticket
+    parent: EP-36
+    title: "Harden build_chat_turn_sink - move the received_at/captured_at fromisoformat parse INSIDE the per-event guard so one malformed timestamp degrades to one WARNING for that event only, later batch events still record (ISS-30 finding 1)"
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: mvp
+    intent: "ISS-30 finding 1 (Opus batch review of TK-292..TK-296; defensive-only today - both real payload shapes emit isoformat). In sources/bootstrap.py build_chat_turn_sink, the datetime.fromisoformat(captured_raw) call sits OUTSIDE the per-event try that wraps store.record_turn - a malformed received_at/captured_at in event 1 of a batch raises out of the sink, so event 2 is never recorded (the SourceRegistry's own guard contains the raise, but the ledger silently loses the rest of the batch). Fix: move the timestamp parse (and the whole per-event field projection) inside the existing per-event try so a malformed event is ONE WARNING naming the source id and the loop continues; the event still enqueues via the registry's separate enqueue arm, byte-unaffected (the TK-295 posture extended from store-raise to parse-raise). Zero behavior change for well-formed events."
+    complexity_budget: "Move a few lines inside an existing try + one test. NO signature change, NO new guard shape, NO projection change."
+    acceptance_criteria:
+      - given: "a two-event batch where event 1 carries item_kind='chat' with a garbage received_at and event 2 is well-formed chat"
+        when: "the sink runs"
+        then: "exactly one WARNING for event 1, event 2 IS recorded in the store, and no exception escapes the sink."
+      - given: "the existing chat-turn sink suite"
+        when: "run"
+        then: "green unmodified - well-formed typed and voice shapes record byte-identically to today."
+    non_goals:
+      - "No projection/whitelist change; no registry change; no new config."
+    depends_on:
+      - TK-295
+    files_in_scope:
+      - src/wombat/sources/bootstrap.py
+      - tests/sources/test_bootstrap.py
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -8671,6 +9018,18 @@ governance:
   - { id: DEF-13, type: deferral, status: deferred, scope: EP-37, date_raised: "2026-07-30", date_updated: "2026-07-30", title: "Defer EP-37 DISPATCH (rescoped v2.158 - the analyze gate requires an epic to carry tickets, so TK-299 dream_derive is MINTED as EP-37 first ticket but deliberately NOT batch-selected): observational user-model inputs beyond chat - external-item derivations (TK-299), behavioral claims into known_user_context, explicit capture - wait until the DEC-65 companion arc LANDS and proves the three seams every later input reuses (the TK-294 UserFactsStore write path, the TK-296 known_user_context render caps, the TK-297 dream custody pattern); dispatching observational work against unproven seams would re-litigate architecture mid-arc - the attachment points are pinned (store upserts with the source provenance column; the ONE render block; deterministic-first per DEC-66), so batch sequencing is the only open question",
       revisit_trigger: "The DEC-65 arc lands (TK-292..TK-298 done + batch-verify) and Jim has seen the first dream_facts pass surface in chat - OR Jim asks why wombat does not know something plainly observable from calendar/gmail - then the architect batch-selects TK-299 (deterministic external-item derivations: no LLM, no egress, pure code over existing projections) and mints the further EP-37 tickets.",
       links: ["DEC-66","DEC-65","EP-37","TK-299","TK-294","TK-296","TK-297","FEAT-3"] }
+  - { id: DEC-67, type: decision, status: accepted, scope: EP-32, date_raised: "2026-07-30", title: "THE USER DECIDES BEHAVIOR KNOBS (JIM DIRECTIVE recorded verbatim - 'im not asking you to redesign the settings im asking you to just give me more options. The settings page looks fine as is. Just add in more options. Make the humor setting wider. I should be able to increase the humor to where its making jokes all the time. Let the user decided how it works rather than us. ... there is no reason for us to redesign the page. Just extend what we already got for now.' - architect rules the delegated hows: NO page redesign, NO preset rows of any kind (persona AND interruption presets both dead - presets are 'us deciding'), direct controls extending the existing app views only; the settings-screen-v2 mock is SHELVED as a build target, its design brief surviving only as the tier-table INVENTORY this arc was scoped from)",
+      context: "Drafted 2026-07-30 against pre-batch HEAD 65f0ebd while the DEC-65 companion batch held the contract; recorded post-batch REBASED against the landed TK-292..TK-296 diff. Verified at record time: persona_policy.yaml version 2 (the widening bumps 2->3), wombat_params.yaml version 8 AND params.py OPERATING_PARAMS_VERSION 7 (eager bumps them 8->9 and 7->8 under each constant's own documented rule), wombat_user_name + wombat_stt_model already admitted in APP_EDITABLE_FIELDS, wombat_asr_model still a free str env-tier field (config.py default 'base'), app/src untouched by the batch (the draft's option-array/RESTART_FIELDS anchors hold), the gate offset function is effective_urgency_threshold (gate/trigger.py), and runtime.py loads operating params BEFORE assemble_runtime - so the params overlay read rides the load_config settings-table precedent over the already-validated dsn rather than a bundle-held store. No other draft assumption was stale.",
+      decision: "(a) PHILOSOPHY, durable and scoped - 'the user decides perceivable behavior; custody internals stay pinned': any knob governing behavior the user can PERCEIVE (tone, humor, verbosity, when/how often wombat speaks up, how long it waits, what it spends of the user's own money) is user-tunable from the app within RECORDED bounded bands; what stays NON-user-tunable is the proven-bound and custody internals - the capability charter (DEC-62/65h, NEVER weakened anywhere in this arc), taint tiers, CON-6 custody, the rating_tuner LOCKED block (TK-48 joint-derivation bound), personality_band floor/cap (the proactivity safety clamp), gate flush mechanics (load_flush_threshold/flush_min_age/max_pending), presence thresholds, sweeper cadence, dream budget ceilings, seen-ledger/flush-latch mechanics (DEC-63 seams), prompt-context caps (TK-290 10/800+5/400, TK-296 15/900), store caps and retentions (TK-294 _MAX_FACTS=200, TK-295 7d, EXTERNAL_ITEMS_PRUNE_DAYS=30, SCRATCHPAD_PURGE_DAYS=14 - not user-perceptible, and TK-299's 3-week recurrence bar depends on the external retention depth). The BOUNDS themselves are architect-recorded constants, not settings - the user decides WITHIN the band, the band is custody. (b) HUMOR WIDENED to a four-level closed set - none | dry | playful | comedian - supersedes-in-part DEC-37(c)'s two-level pin (the 'playful' strike was about an UNAPPROVED recorder addition; Jim has now approved widening explicitly, and 'comedian' is his 'jokes all the time' level). Clause texts follow the TK-221 lesson (name the mechanism, structurally detectable), pinned here: playful = 'Be playful: work in at least one light joke, pun, or witty remark, woven naturally into the reply.'; comedian = 'Be a constant comedian: every reply must carry at least one joke, pun, or comic riff on the subject at hand, and playful exaggeration is welcome - as long as the actual information still comes through clearly.'; dry keeps its shipped clause verbatim. persona_policy.yaml version 2->3 in lock-step with PERSONA_POLICY_VERSION. DEFAULT stays none='' (DEC-38(5) byte-identity invariant untouched). Per-mouth placement stands: humor renders for compose/brief/chat ONLY - draft (user's outbound voice) and reflection (NG-2 adjacency) keep humor withheld, a register/custody rationale, not taste-narrowing. COMPOSITION with DEC-65's chat register: the chat base role is PERMISSIVE (rolls with user-initiated banter at every humor level); the humor axis adds INITIATIVE on top - none=never initiates, dry=one understated aside, playful=initiates when natural, comedian=initiates always. Two knobs, one gradient, no fight. (c) OTHER AXES widened where meaningful: Brevity gains a fourth top level 'exhaustive' (pinned clause 'Write a thorough, complete response - several paragraphs when the subject warrants, covering full context, detail, implications, and nuance.'); Warmth gains 'affectionate' (pinned clause 'Let the tone feel openly affectionate and enthusiastic, like a close friend who is glad to be talking.' - worded to stay CON-1-clean: warmth of tone, never flattery of the user's choices); Proactivity gains 'eager' actuated by a NEW personality_band entry eager: -0.20 (wombat_params.yaml version 8->9 + OPERATING_PARAMS_VERSION 7->8, PersonalityBand model + effective_urgency_threshold mapping extend) with the existing floor 0.60 / cap 0.95 clamp UNCHANGED as the safety bound; Directness is ALREADY full-range (gentle|plain|blunt spans soft to maximal) - recorded audited, not widened. Degrade-path folding stays honest (DEC-37e): template variants fold exhaustive->expansive and affectionate->warm deterministically; humor stays model-path-only on degrade. (d) PARAMS BRIDGE - a narrow enumerated overlay, restart-to-apply: params.py gains PARAMS_APP_EDITABLE, a closed spec {settings_key -> (params_field, parser, min, max)} for EXACTLY eight fields - wombat_param_morning_brief_time (any valid HH:MM:SS; supersedes TK-97's forbids-runtime-knob non_goal and TK-13's never-a-runtime-knob yaml comment), wombat_param_nightly_dream_time (same; supersedes TK-52's identical posture), wombat_param_urgency_threshold [0.60,0.95], wombat_param_per_class_daily_ceiling [0,10] (0 = the user turning immediate voice OFF entirely - their right), wombat_param_decay_ttl_seconds [3600,604800], wombat_param_mouth_model_timeout_seconds [2,60], wombat_param_mouth_daily_token_ceiling [10000,1000000], wombat_param_mouth_max_usd_per_drive [0.05,5.00]. Overlay rows live in the SAME wombat_settings table (one user store, one PUT path); load_config DROPS them (admitted-schema filter, the wombat_persona_pins precedent); runtime.py reads them at boot BEFORE load_operating_params (the load_config settings-read precedent over the validated dsn) and passes them into load_operating_params(overlay=...) which validates, CLAMPS to the recorded band with one loud WARNING per clamped/rejected row, and never weakens the file's fail-loud custody (wombat_params.yaml stays the complete required source of DEFAULTS; the overlay is the user's delta). mouth_max_calls_per_drive stays file-only (inner backstop mechanics, not perceptible). (e) CONFIG-FIELD PROMOTIONS, narrowly superseding named DEC-63/64-era pins: wombat_reply_window_seconds (default 120, [30,600]) supersedes reply_context.py's LAST_SPOKEN_TTL_SECONDS pin (TK-288's no-knob clause) - the walkie-talkie reply window is exactly a perceivable behavior; wombat_spoken_reply_max_chars (default 400, [200,1200]) supersedes speech_shape.py's _MAX_SPEECH_CHARS pin - spoken-reply length likewise. Both settings-table tier, restart-to-apply, threaded at the composition root. These are the ONLY two DEC-63-precedent constants unpinned; every other pinned constant named in (a) STANDS - the no-knob precedent is superseded per-constant, never by blanket rule. (f) VOICE FIELD ADMISSIONS: wombat_asr_model joins APP_EDITABLE_FIELDS as Literal['tiny','base','small','medium'] (settings-table tier, restart); wombat_stt_model (already admitted) finally RENDERS in the voice view (free win). A TTS voice PICKER (provider voice listing) stays OUT - the raw voice-id field stands (new egress surface for a nicety; recorded rejection). (g) QUIET HOURS: wombat_quiet_start / wombat_quiet_end (HH:MM strings, both-set = active, '' = off, midnight wrap supported) hold the gate's IMMEDIATE-VOICE arm only via a new deterministic quiet_hours predicate at the same composition-root seam as the presence hold - held items stay pending and reach the user via flush/brief exactly like any other hold (CON-2/CON-3 clean: quiet hours only ever REDUCES surfacing; the morning brief and chat replies are NOT gated by it - asking a question during quiet hours still gets its answer). Restart-to-apply v1. (h) READ-ONLY TIMEZONE: GET /settings gains an additive read-only timezone object (zone name + source) from the resolver seam - display-only; editing stays operator-tier (DEC-32 posture stands). (i) UI DELTA is EXTENSION-ONLY, slotted into the AS-BUILT app views (today/persona/voice/keys/system rail unchanged, no new views, no new primitives beyond what Field/Select already give): persona view gains the 'Your name' field (TK-292's wombat_user_name finally exposed) and the widened axis options; voice view gains cloud STT model, local transcription model, reply window, spoken reply cap; system view gains a 'Briefs & interruptions' panel (brief time, reflection time, urgency threshold, per-class daily ceiling, item decay, quiet hours) and a 'Limits' panel (model wait, daily token ceiling, per-conversation spend cap) plus the timezone line - the system view learns to render the settings form + save bar it never had. Hot-apply stays EXACTLY the five persona axes (existing poll seam); every other new field is restart-tier and joins RESTART_FIELDS/the restart notice. Brief content toggles (calendar/inbox/notepad sections) are DEFERRED (DEF-14) - brief composition restructure, not knob exposure; 'extend what we already got' cuts against it today. Carried by TK-300..TK-307.",
+      consequences: "(+) Jim's directive is contract-real with a durable, scoped philosophy line - future knob questions resolve against (a) instead of re-litigating. (+) Every supersession is NAMED (DEC-37c in part; TK-97/TK-52/TK-13 brief/dream-time postures; the two DEC-63-precedent constants) - the append-only spine stays honest and every other pin demonstrably stands. (+) The capability charter, taint tiers, CON-6, rating_tuner lock, and band floor/cap are restated as non-tunable in the same breath that widens everything else - the custody boundary is now explicit governance, not folklore. (-) Nine new settings rows are restart-tier v1 - Jim may hit apply-friction; a hot-apply follow-up is minted only on that friction, not speculatively. (-) The comedian level makes prompt-injection-adjacent humor the USER'S choice; the charter suffix and CON-1 wording keep it custody-clean.",
+      alternatives: ["Redesign the settings page per the v2 mock (REJECTED - Jim verbatim: 'there is no reason for us to redesign the page'; the mock is shelved as a build target, kept as inventory)", "Preset rows (Quiet/Balanced/Chatty, persona presets) as the friendly face over raw numbers (REJECTED - presets are 'us deciding'; direct controls only under Jim's frame)", "Blanket unpin of DEC-63-precedent constants (REJECTED - per-constant named supersession only; the no-knob precedent otherwise stands)", "Hot-apply for the new fields (REJECTED for v1 - restart-tier keeps the arc small; revisit on Jim friction)", "A TTS voice picker via provider listing (REJECTED - a new egress surface for a nicety; the raw voice-id field stands)"],
+      links: ["DEC-37","DEC-38","DEC-62","DEC-63","DEC-64","DEC-65","DEC-32","DEC-21","CON-1","CON-2","CON-3","CON-6","EP-32","EP-33","EP-31","EP-9","EP-36","DEF-14","DEF-11","TK-288","TK-97","TK-52","TK-13","TK-215","TK-290","TK-294","TK-295","TK-296","TK-299","TK-300","TK-301","TK-302","TK-303","TK-304","TK-305","TK-306","TK-307"] }
+  - { id: DEF-14, type: deferral, status: deferred, scope: EP-19, date_raised: "2026-07-30", date_updated: "2026-07-30", title: "Brief content toggles (calendar/inbox/notepad section on/off) DEFERRED - requires a brief-renderer restructure, not knob exposure, so DEC-67's 'extend what we already got' frame cuts against it today; the v2 design brief's designed home stands as the eventual UI slot",
+      revisit_trigger: "Jim asks for brief-section control, or a brief-renderer ticket opens that surface for cause - then mint the toggle ticket(s) against the opened renderer seam.",
+      links: ["DEC-67","EP-19","EP-32"] }
+  - { id: ISS-30, type: issue, status: resolved, scope: EP-33, date_raised: "2026-07-30", date_updated: "2026-07-30", title: "Opus batch review of TK-292..TK-296 (verdict PASS, none blocking) - four minor findings recorded verbatim: (1) TK-295 / sources/bootstrap.py build_chat_turn_sink parses datetime.fromisoformat(captured_raw) OUTSIDE the per-event try wrapping store.record_turn - a malformed received_at in event 1 of a batch raises out of the sink and event 2 is never recorded (SourceRegistry's own try/except contains it; defensive-only today since both real payload shapes emit isoformat); (2) TK-293 / stages/compose.py _GROUNDING_ONLY_KEYS duplicates the key names produced by voice/context_prefetch.py + bootstrap's asr_context_hook but no test pins the two sets against each other - a future fifth grounding key silently reopens the v2.165 degrade leak; (3) TK-296 / chat/surface.py _accept_message (async, on the drain loop) fires the shared closure doing three synchronous psycopg queries inline, blocking the event loop per typed message - extends the accepted ASR-poll posture, not a new class of problem; (4) TK-292 / tests/persona/test_builder.py _ALL_MOUTHS stayed at four, so Mouth.CHAT is excluded from its generic property tests (test_expression.py's copy WAS extended to five)",
+      resolution: "Triaged within authority, all four homed: finding (1) -> NEW TK-308 (EP-36, P2/S - the timestamp parse moves inside the existing per-event guard so one malformed event is one WARNING and later batch events still record; rides the next convenient batch); findings (2)+(4) -> folded into TK-298's acceptance criteria as TEST-ONLY fold-ins (a drift pin asserting _GROUNDING_ONLY_KEYS equals the exact stampable key set of the composition-root context-hook closure; _ALL_MOUTHS extended to the five-mouth set) - both land with the companion tail batch that TK-298 already leads; finding (3) -> ACCEPTED RISK, no ticket: three quick indexed local-pg point reads per typed message on a single-user loopback surface, extending the already-accepted synchronous-ASR-poll posture - revisit ONLY on perceptible typed-chat latency or when an async-store refactor opens for cause.",
+      links: ["TK-308","TK-298","TK-295","TK-293","TK-296","TK-292","EP-36","EP-33","DEC-65"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -9041,3 +9400,5 @@ changelog:
   - { date: "2026-07-30", version: "2.163", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-295 DONE (board 212/216) - DEC-65(e) ledger lands exactly per the mint plus the v2.159 rulings r1/r2. NEW migrations/012_chat_turns.sql - wombat_chat_turns(id BIGSERIAL PK, text, voice BOOLEAN, captured_at TIMESTAMPTZ) + captured_at index, idempotent (NG-3); NEW src/wombat/chat_turns.py - lazy dsn-injected ChatTurnStore (record_turn / turns_since ascending / purge_older_than) with _RETENTION_DAYS = 7 as a PRIVATE pinned module constant (DEC-63 no-knob; runtime passes literal 7 per the ticket text, deliberately not a shared import). schema_preflight gains the ELEVENTH ensure_all_schemas entry. WRITE SEAM per r2 - sources/bootstrap.py gains build_chat_turn_sink (the item_kind == 'chat' tap covering BOTH typed-chat text and voice-ASR transcript payload shapes, per-event guarded so a store raise is ONE WARNING and the event still enqueues) plus _compose_sinks, composing it with the TK-245 external-item sink into the ONE callable SourceRegistry accepts - either half absent degrades to the other byte-identically, store None = today's sink exactly. Root bootstrap constructs ChatTurnStore(dsn) beside ScratchpadStore, threads it into build_source_registry, exposes it on RuntimeBundle; per r1 runtime.py fires bundle.chat_turn_store.purge_older_than(7) once at boot beside the scratchpad purge_stale site. NOT-list HELD - never rendered into any prompt, never a history window, never a gate/scoring input; dream-extraction (TK-297) is the ONLY reader; user utterances only, no reply logging, no correlation ids (CON-1/CON-6 clean; the DEC-64 multi-turn-history rejection restated, not reopened). Necessary follow-on ACCEPTED beyond files_in_scope - the sibling count-pinning suites (test_external_store.py, test_scratchpad.py, test_user_facts.py, test_schema_preflight.py) mechanically bumped 10 -> 11, the SAME shape TK-294/TK-286/TK-247 recorded when THEY added an entry; zero other content touched. All four ACs pinned by runnable checks. Builder self-ran the full bar green - ruff clean, mypy strict Success 348 files (src+tests), full suite 1960 passed / 14 skipped (all live-credential-gated) / 0 failed on a throwaway docker postgres:16 @5437 (WOMBAT_TEST_PG_DSN, started+stopped by the run, never the live 5436 db). Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - ONE Opus review audits the whole DEC-65 batch after TK-296 lands. NEXT - TK-296 (typed-chat context parity + the known_user_context stamp, the batch's last ticket)." }
   - { date: "2026-07-30", version: "2.164", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-296 DONE (board 213/216, BATCH COMPLETE - all five dispatched tickets of the DEC-65 companion arc landed; TK-297/TK-298 await the next batch). DEC-65(f) lands exactly per the mint plus the v2.159 r3 hook-homing ruling - the DEC-64 recorded typed-chat grounding follow-up CLOSES. (1) voice/context_prefetch.py gains build_user_facts_context(store) -> at most {known_user_context: one-fact-per-line} via the SAME _render helper under NEW pinned caps _MAX_FACTS_LINES=15/_MAX_FACTS_CHARS=900 (DEC-63 no-knob), plus a UserFactsContextStore Protocol mirroring VoiceContextStore so fakes never import the store; degrade shape mirrors build_voice_context EXACTLY - store None = {} no call no warning, zero rows = NO key (never empty string), any raise = {} + exactly ONE WARNING (CON-3). (2) Per r3 - ChatSource gains optional ctor kwarg context_hook held as a PUBLIC attribute (the wake precedent, unlike ASRSource's private _context_hook), default None = byte-identical; chat/surface.py _accept_message fires source.context_hook ONCE at payload-build time, mapping merged UNDER the unoverridable built-ins (item_kind/text/received_at spread AFTER the extras), raise = ONE WARNING + unstamped turn that still proceeds - the TK-289 posture verbatim. (3) bootstrap.assemble_runtime constructs UserFactsStore(dsn) beside scratchpad_store (always-constructed/fully-lazy, the Q-46 shape) and extends the EXISTING asr_context_hook closure IN PLACE to also merge build_user_facts_context - then wires the SAME closure onto chat_source.context_hook post-construction (Python late-binding closures make the source-order forward reference safe, documented at both sites and clean under mypy): typed turns gain replying_to + calendar/gmail grounding + facts, voice turns gain facts, in one stroke; gmail/gcal/brief payloads carry NONE of these keys (pinned). ONE files_in_scope note - src/wombat/sources/bootstrap.py needed NO edit (the r3 construct-then-wire homing makes a pass-through unnecessary; the TK-289-precedent no-edit-in-scope shape). Compose byte-untouched by construction - format_payload_fields delivers everything on the existing Q-50 wire. All four ACs pinned by runnable checks incl. the hook-None zero-diff pin and the real-assemble-runtime both-surfaces spy check in tests/unit/test_bootstrap.py. Builder self-ran the full bar green - ruff clean, mypy clean 348 files, full suite 1972 passed / 14 skipped (live-credential-gated) / 0 failed on a throwaway docker postgres:16 @5437 (WOMBAT_TEST_PG_DSN, never the live db), scoped suites also run individually. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - ONE Opus review now audits the whole five-ticket DEC-65 diff (TK-292..TK-296). NEXT - batch selection for TK-297 (dream_facts) -> TK-298 (charter sentence + e2e proof); TK-299 stays undispatched per DEF-13." }
   - { date: "2026-07-30", version: "2.165", by: "architect (batch-review repair round 1; within authority)", change: "REPAIR (Opus batch review round 1, cross-ticket TK-293 x TK-296) - the DEC-65 batch review found that TemplateComposer renders EVERY sorted payload key, so once TK-296 stamped known_user_context (and the TK-289/TK-290 replying_to + context_calendar_today/context_recent_email keys reached typed chat via the shared hook), a chat-turn DEGRADE would dump those prompt-only grounding fields verbatim into the typed chat pane - voice is shielded downstream by SpeechShapeStage (DEC-55c never-verbatim) but ChatReplyStage resolves degrade text to the pane unshaped. FIX confined to stages/compose.py + tests/unit/test_compose_stage.py - new pinned module frozenset _GROUNDING_ONLY_KEYS (replying_to, known_user_context, context_calendar_today, context_recent_email - exactly the keys the context_hook closure may stamp) filtered from the payload handed to TemplateComposer.render ON THE DEGRADE BRANCH ONLY; the model-facing prompt above still carries every grounding field unfiltered (Q-50 wire untouched), non-chat kinds unaffected in practice (these keys are never stamped on them), and the item's own content still renders - a filter, not a black hole. New repair test pins both halves in one run - the failed model call SAW all four fields in user_msg.content while the degraded text contains none of them and equals TemplateComposer render of the stripped payload exactly. Full suite re-run green pre-commit (uv run pytest -q). DEC-37e honest asymmetry preserved - degrade stays deterministic template, now grounding-clean. Batch review round 1 CLOSED with this single finding repaired; TK-292..TK-296 stand." }
+  - { date: "2026-07-30", version: "2.166", by: "architect (recording Jim's directive under delegation; rebased against the landed batch)", change: "Governance: DEC-67 + DEF-14 + TK-300..TK-307 - the settings-extension arc on Jim's more-options directive ('Make the humor setting wider ... Let the user decided how it works rather than us. Just extend what we already got.'). User-decides philosophy recorded and SCOPED (perceivable behavior knobs tunable within recorded bands; charter/taint/CON-6/rating_tuner/band-floor-cap/gate-mechanics/caps stay pinned - 'the user decides perceivable behavior; custody internals stay pinned'); humor widens to none|dry|playful|comedian (supersedes DEC-37(c) in part - the old anti-'playful' strike was about an unapproved recorder addition, Jim has now approved explicitly and comedian is his jokes-all-the-time level); brevity/warmth gain exhaustive/affectionate; proactivity gains eager (personality_band eager: -0.20, floor/cap clamp unchanged); eight-field wombat_param_* overlay (restart-tier, clamped, the yaml stays the fail-loud default source) supersedes TK-97/TK-52/TK-13's never-a-runtime-knob posture for brief/reflection times; wombat_reply_window_seconds + wombat_spoken_reply_max_chars unpin LAST_SPOKEN_TTL_SECONDS and _MAX_SPEECH_CHARS BY NAME (per-constant supersession, the DEC-63 precedent otherwise stands); wombat_asr_model admitted, wombat_stt_model rendered, quiet hours (immediate-voice arm hold only, reduce-only), read-only timezone field; UI extends the as-built views only - no redesign, no preset rows (v2 mock shelved as build target, kept as inventory); brief content toggles -> DEF-14. RECORD-TIME REBASE against the landed TK-292..TK-296 diff (draft was written at 65f0ebd): persona_policy version anchors confirmed 2->3; wombat_params.yaml 8->9 + OPERATING_PARAMS_VERSION 7->8 under each constant's own rule (the draft's 'PARAMS_VERSION' name corrected); gate function named effective_urgency_threshold; TK-302's overlay read re-homed to the load_config settings-table precedent (runtime loads params before assemble_runtime); TK-304 re-parented EP-9 (trigger arms, not the draft's EP-3); no ticket-id renumbering needed (TK-299 still last; DEC-66/DEF-13 still last governance ids). Board reopens 213/224; batch order TK-300 -> 301 -> 302 -> 303 -> 304 -> 305 -> 306 -> 307 AFTER the companion tail (TK-297/TK-298); validate + gate_check analyze PASS." }
+  - { date: "2026-07-30", version: "2.167", by: "architect (batch-review round 2 triage; within authority)", change: "Governance: ISS-30 - the Opus batch review of the DEC-65 companion batch (TK-292..TK-296, verdict PASS, none blocking) left four minor findings, each now homed: (1) build_chat_turn_sink's fromisoformat outside the per-event guard -> NEW TK-308 (EP-36, P2/S, parse moves inside the guard so one malformed event cannot silently drop the rest of the batch from the ledger); (2) the _GROUNDING_ONLY_KEYS drift risk and (4) test_builder's four-mouth _ALL_MOUTHS -> folded into TK-298's ACs as test-only fold-ins (drift pin against the composition-root closure's exact stampable key set; five-mouth property coverage) so they land with the companion tail batch; (3) the synchronous psycopg reads on ChatSurface._accept_message -> ACCEPTED RISK (extends the recorded ASR-poll posture; revisit only on perceptible typed-chat latency or an async-store refactor opened for cause). TK-298 files_in_scope += tests/persona/test_builder.py; complexity_budget updated to name the fold-ins. Board 213/225. validate + gate_check analyze PASS." }
