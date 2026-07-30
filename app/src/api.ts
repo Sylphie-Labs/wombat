@@ -38,6 +38,9 @@ export type Warmth = "reserved" | "neutral" | "warm";
 export type Directness = "gentle" | "plain" | "blunt";
 export type Humor = "none" | "dry";
 export type Proactivity = "minimal" | "balanced" | "forward";
+// TK-305 (DEC-67i, mirrors TK-303's SettingsUpdate.wombat_asr_model): the DEC-64
+// walkie-talkie local-ASR model Literal.
+export type AsrModel = "tiny" | "base" | "small" | "medium";
 
 export interface SettingsFields {
   wombat_stt_provider: Provider | null;
@@ -56,13 +59,20 @@ export interface SettingsFields {
   // ("key:<code>"/"mouse:<button>", "" = unbound) - the renderer is the sole consumer, so no
   // restart notice accompanies a PUT of this field.
   wombat_ptt_binding: string | null;
+  // TK-305 (DEC-67i, mirrors TK-292/303's admitted fields): the persona
+  // display name and the four voice-provider/DEC-64 walkie-talkie knobs.
+  wombat_user_name: string | null;
+  wombat_stt_model: string | null;
+  wombat_asr_model: AsrModel | null;
+  wombat_reply_window_seconds: number | null;
+  wombat_spoken_reply_max_chars: number | null;
 }
 
 export interface SettingsResponse {
   // Widened with `Record<string, unknown>` because the backend view mirrors
-  // the FULL `APP_EDITABLE_FIELDS` (e.g. it also carries `wombat_stt_model`,
-  // which this form does not edit) - `SettingsFields` types only the fields
-  // this ticket's form reads/writes.
+  // the FULL `APP_EDITABLE_FIELDS` (e.g. it also carries the `wombat_param_*`
+  // overlay rows, which this form does not edit) - `SettingsFields` types
+  // only the fields this ticket's form reads/writes.
   settings: SettingsFields & Record<string, unknown>;
   keys: Record<KeyProvider, boolean>;
 }

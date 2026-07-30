@@ -18,13 +18,22 @@ loaded into a FROZEN ``OperatingParams`` — there is no mutation API and no wri
 this store is structurally incapable of being written by the nightly tuner (AC5). A missing
 or mistyped field fails LOUD at load time (``extra="forbid"`` + required fields); there is no
 silent default in code — the documented defaults live in the versioned YAML.
+
+TK-302 (DEC-67(d)/(h)): ``load_operating_params``'s keyword-only ``overlay`` applies, AFTER file
+validation, a boot-time app-editable overlay of the EIGHT ``PARAMS_APP_EDITABLE`` keys sourced
+from ``wombat_settings`` (``wombat.runtime.serve``) — the YAML file keeps fail-loud custody as
+the complete default source; the overlay is a restart-tier, clamp-and-skip, never-fatal veneer
+on top of it.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Mapping
 from datetime import time
 from importlib import resources
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -35,6 +44,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 OPERATING_PARAMS_VERSION = 8
 
 _PARAMS_FILENAME = "wombat_params.yaml"
+
+logger = logging.getLogger(__name__)
 
 
 class OperatingParamsError(RuntimeError):
@@ -153,12 +164,97 @@ def _default_params_path() -> Path:
     return Path(str(resources.files("wombat").joinpath(_PARAMS_FILENAME)))
 
 
-def load_operating_params(path: Path | None = None) -> OperatingParams:
+def _parse_time_of_day(raw: str) -> time:
+    return time.fromisoformat(raw)
+
+
+def _parse_float(raw: str) -> float:
+    return float(raw)
+
+
+def _parse_int(raw: str) -> int:
+    return int(raw)
+
+
+class ParamOverlaySpec(NamedTuple):
+    """One row of the closed DEC-67(d) app-editable operating-parameter overlay spec: the
+    ``OperatingParams`` field it maps to, the str -> value parser, and the inclusive
+    ``[min, max]`` clamp band. ``min``/``max`` are both ``None`` for the two HH:MM:SS time
+    fields, which admit any valid time with no numeric band."""
+
+    field: str
+    parser: Callable[[str], Any]
+    min: float | None
+    max: float | None
+
+
+# DEC-67(d): the closed, frozen spec for wombat's EIGHT app-editable operating-parameter
+# overlay keys — the ONLY ``OperatingParams`` fields a settings-table row may override at boot
+# (``load_operating_params``'s ``overlay=`` below). Every other field (``rating_tuner``,
+# ``personality_band``, ``flush_min_age_seconds``, ``presence_*``, ``sweeper_*``,
+# ``dream_budget_*``, ...) is structurally absent from this mapping — the human-edited YAML
+# stays their ONLY source, by construction (non_goal: no overlay of any non-enumerated field).
+PARAMS_APP_EDITABLE: Mapping[str, ParamOverlaySpec] = {
+    "wombat_param_morning_brief_time": ParamOverlaySpec(
+        "morning_brief_time", _parse_time_of_day, None, None
+    ),
+    "wombat_param_nightly_dream_time": ParamOverlaySpec(
+        "nightly_dream_time", _parse_time_of_day, None, None
+    ),
+    "wombat_param_urgency_threshold": ParamOverlaySpec(
+        "urgency_threshold", _parse_float, 0.60, 0.95
+    ),
+    "wombat_param_per_class_daily_ceiling": ParamOverlaySpec(
+        "per_class_daily_ceiling", _parse_int, 0, 10
+    ),
+    "wombat_param_decay_ttl_seconds": ParamOverlaySpec(
+        "decay_ttl_seconds", _parse_float, 3600.0, 604800.0
+    ),
+    "wombat_param_mouth_model_timeout_seconds": ParamOverlaySpec(
+        "mouth_model_timeout_seconds", _parse_float, 2.0, 60.0
+    ),
+    "wombat_param_mouth_daily_token_ceiling": ParamOverlaySpec(
+        "mouth_daily_token_ceiling", _parse_int, 10000, 1000000
+    ),
+    "wombat_param_mouth_max_usd_per_drive": ParamOverlaySpec(
+        "mouth_max_usd_per_drive", _parse_float, 0.05, 5.00
+    ),
+}
+
+
+def _clamp(value: Any, spec: ParamOverlaySpec) -> tuple[Any, bool]:
+    """Clamp ``value`` into ``spec``'s inclusive band; ``(value, False)`` unchanged when the spec
+    carries no band (the two time fields) or ``value`` already sits inside it."""
+    if spec.min is None or spec.max is None:
+        return value, False
+    if value < spec.min:
+        return spec.min, True
+    if value > spec.max:
+        return spec.max, True
+    return value, False
+
+
+def load_operating_params(
+    path: Path | None = None,
+    *,
+    overlay: Mapping[str, str] | None = None,
+) -> OperatingParams:
     """Load + validate the operating parameters from the versioned YAML, or fail LOUD.
 
     Reads the human-edited source-of-truth (the packaged ``wombat_params.yaml`` unless an
     explicit ``path`` is given). A missing file, non-mapping content, or any missing/mistyped/
-    unexpected field raises ``OperatingParamsError`` — never a silent default (AC1).
+    unexpected field raises ``OperatingParamsError`` — never a silent default (AC1). The FILE
+    keeps fail-loud custody as the complete default source.
+
+    ``overlay`` (DEC-67(d), applied AFTER file validation) is the boot-time app-editable
+    operating-parameter overlay: every key present in ``PARAMS_APP_EDITABLE`` is parsed with its
+    spec's parser and clamped into its ``[min, max]`` band. An unparseable value is DROPPED with
+    ONE ``logger.warning`` naming the key and raw value (never fatal); a parseable but
+    out-of-band value is clamped to the nearer bound with ONE ``logger.warning`` naming the key,
+    the parsed value, and the clamp result. A key absent from ``PARAMS_APP_EDITABLE`` is ignored
+    silently (callers are expected to have already filtered to the eight admitted keys). No
+    overlay (``None`` or empty) returns the file-validated model completely unchanged (byte-equal
+    ``model_dump()``, AC1).
     """
     src = path or _default_params_path()
     try:
@@ -173,6 +269,41 @@ def load_operating_params(path: Path | None = None) -> OperatingParams:
         )
 
     try:
-        return OperatingParams.model_validate(raw)
+        params = OperatingParams.model_validate(raw)
     except ValidationError as exc:
         raise OperatingParamsError(f"invalid operating-parameter file {src}: {exc}") from exc
+
+    if not overlay:
+        return params
+
+    updates: dict[str, Any] = {}
+    for key, raw_value in overlay.items():
+        spec = PARAMS_APP_EDITABLE.get(key)
+        if spec is None:
+            continue
+        try:
+            parsed = spec.parser(raw_value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "wombat_settings contains an unparseable operating-parameter overlay value for "
+                "%s: %r; skipping this row (the file's own value is kept)",
+                key,
+                raw_value,
+            )
+            continue
+        clamped, was_clamped = _clamp(parsed, spec)
+        if was_clamped:
+            logger.warning(
+                "wombat_settings operating-parameter overlay value for %s (%r) is outside "
+                "[%s, %s]; clamping to %r",
+                key,
+                parsed,
+                spec.min,
+                spec.max,
+                clamped,
+            )
+        updates[spec.field] = clamped
+
+    if not updates:
+        return params
+    return params.model_copy(update=updates)

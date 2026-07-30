@@ -30,18 +30,29 @@ detail naming the settings storage — never a bare 500, never a secret in the b
 STRUCTURAL: this module (and the ``wombat.settings_app`` package as a whole) imports NOTHING from
 ``wombat.bootstrap`` or ``wombat.runtime`` — the settings app must run while ``serve()`` is down
 (``tests/settings_app/test_api.py``'s subprocess-clean check proves this at import time).
+
+TK-302 (DEC-67(d)/(h)): ``GET``/``PUT /settings`` additionally admit ``wombat.params.
+PARAMS_APP_EDITABLE``'s eight ``wombat_param_*`` operating-parameter overlay keys — the
+``ADMITTED_SETTINGS_FIELDS`` union of those and ``APP_EDITABLE_FIELDS``. ``GET /settings`` also
+gains a read-only ``timezone`` object (RULING v2.172 r4): it mirrors ``wombat.config.
+resolve_wombat_zone``'s env/system precedence directly, WITHOUT calling it or constructing a
+``WombatConfig`` (this process must not build a full config) — a ``PUT`` carrying a ``timezone``
+key 422s (``SettingsUpdate`` has no such field, ``extra="forbid"``).
 """
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+import tzlocal
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
 from wombat.external_store import ExternalItemStore
+from wombat.params import PARAMS_APP_EDITABLE
 from wombat.settings_app.google_connect import (
     GOOGLE_SERVICES,
     ConsentInProgressError,
@@ -50,6 +61,12 @@ from wombat.settings_app.google_connect import (
 )
 from wombat.settings_store import SettingsStore
 from wombat.voice.key_store import VoiceKeyStore, VoiceKeyStoreError
+
+# TK-302 (DEC-67d/h): the GET-admitted view's field set — the union of the legacy WombatConfig-
+# mirroring APP_EDITABLE_FIELDS and the eight DEC-67(d) wombat_param_* operating-parameter
+# overlay keys. SettingsUpdate's field set is kept in lock-step with this union by
+# ``tests/settings_app/test_api.py::test_mirror_model_field_set_matches_app_editable_fields``.
+ADMITTED_SETTINGS_FIELDS: tuple[str, ...] = (*APP_EDITABLE_FIELDS, *PARAMS_APP_EDITABLE)
 
 # TK-246 (DEC-45(e), ruling v2.68 r4): the default lookback/lookahead window (in hours) for
 # GET /external/calendar when the caller omits ``window_hours``.
@@ -123,6 +140,23 @@ class SettingsUpdate(BaseModel):
     wombat_reply_window_seconds: float | None = Field(default=None, ge=30, le=600)
     wombat_spoken_reply_max_chars: int | None = Field(default=None, ge=200, le=1200)
     wombat_asr_model: Literal["tiny", "base", "small", "medium"] | None = None
+    # TK-302 (DEC-67d/h): the eight DEC-67(d) app-editable OperatingParams overlay keys —
+    # ``wombat.params.PARAMS_APP_EDITABLE``'s spec, mirrored here VERBATIM. Restart-tier (no
+    # hot-apply; ``wombat.runtime.serve()`` reads these once at boot). ge/le mirrors each spec
+    # row's ``[min, max]`` band exactly — out-of-band 422s at the door; the boot-time clamp in
+    # ``load_operating_params`` is defense-in-depth against a row landing by another path (e.g. a
+    # manual INSERT). The two HH:MM:SS time fields carry no numeric band (any valid time is
+    # admitted at the door); format validity is enforced at boot by the spec's own parser.
+    wombat_param_morning_brief_time: str | None = None
+    wombat_param_nightly_dream_time: str | None = None
+    wombat_param_urgency_threshold: float | None = Field(default=None, ge=0.60, le=0.95)
+    wombat_param_per_class_daily_ceiling: int | None = Field(default=None, ge=0, le=10)
+    wombat_param_decay_ttl_seconds: float | None = Field(default=None, ge=3600, le=604800)
+    wombat_param_mouth_model_timeout_seconds: float | None = Field(default=None, ge=2, le=60)
+    wombat_param_mouth_daily_token_ceiling: int | None = Field(
+        default=None, ge=10000, le=1000000
+    )
+    wombat_param_mouth_max_usd_per_drive: float | None = Field(default=None, ge=0.05, le=5.00)
 
 
 class KeyBody(BaseModel):
@@ -141,9 +175,28 @@ class KeyBody(BaseModel):
 
 
 def _settings_view(existing: dict[str, Any]) -> dict[str, Any]:
-    """The admitted-field-only view of ``existing`` — every ``APP_EDITABLE_FIELDS`` key, ``null``
-    when absent from the file."""
-    return {field: existing.get(field) for field in APP_EDITABLE_FIELDS}
+    """The admitted-field-only view of ``existing`` — every ``ADMITTED_SETTINGS_FIELDS`` key,
+    ``null`` when absent from the table."""
+    return {field: existing.get(field) for field in ADMITTED_SETTINGS_FIELDS}
+
+
+def _timezone_view() -> dict[str, str | None]:
+    """RULING v2.172 r4: the read-only ``GET /settings`` timezone object — mirrors
+    ``wombat.config.resolve_wombat_zone``'s precedence directly WITHOUT calling it (that needs a
+    full ``WombatConfig``, which this process must never construct) and WITHOUT importing
+    ``wombat.bootstrap``/``wombat.runtime`` (the subprocess import-isolation test stays green).
+
+    ``WOMBAT_TIMEZONE`` set (non-blank) -> ``{"name": <value>, "source": "env"}``; unset ->
+    ``tzlocal.get_localzone().key`` with ``source: "system"``; a resolution failure there ->
+    ``{"name": None, "source": "unresolved"}``. Never raises — GET never 500s over this.
+    """
+    env_value = os.environ.get("WOMBAT_TIMEZONE")
+    if env_value:
+        return {"name": env_value, "source": "env"}
+    try:
+        return {"name": tzlocal.get_localzone().key, "source": "system"}
+    except Exception:
+        return {"name": None, "source": "unresolved"}
 
 
 def _key_presence(key_store: VoiceKeyStore) -> dict[str, bool]:
@@ -204,6 +257,7 @@ def create_app(
             "settings": _settings_view(existing),
             "keys": _key_presence(key_store),
             "storage_unavailable": unavailable,
+            "timezone": _timezone_view(),
         }
 
     @app.put("/settings", dependencies=[Depends(_require_token)])
@@ -287,6 +341,7 @@ def create_app(
 
 
 __all__ = [
+    "ADMITTED_SETTINGS_FIELDS",
     "BIND_HOST",
     "DEFAULT_CALENDAR_WINDOW_HOURS",
     "DEFAULT_GMAIL_LIMIT",

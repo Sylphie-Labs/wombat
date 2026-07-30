@@ -66,8 +66,10 @@ from fastapi.testclient import TestClient
 from wombat.config import APP_EDITABLE_FIELDS, WombatConfig
 from wombat.external_store import ExternalItem, ExternalItemStore
 from wombat.external_store import ensure_schema as ensure_external_items_schema
+from wombat.params import PARAMS_APP_EDITABLE
 from wombat.settings_app.api import (
     _STORAGE_UNAVAILABLE_DETAIL,
+    ADMITTED_SETTINGS_FIELDS,
     BIND_HOST,
     SettingsUpdate,
     create_app,
@@ -230,7 +232,7 @@ def test_tokened_get_settings_returns_current_values_and_key_presence_booleans()
     assert response.status_code == 200
     body = response.json()
     assert body["settings"]["wombat_assistant_name"] == "Jeeves"
-    assert set(body["settings"]) == set(APP_EDITABLE_FIELDS)
+    assert set(body["settings"]) == set(ADMITTED_SETTINGS_FIELDS)
     assert body["keys"] == {"elevenlabs": True, "deepgram": False, "fish": False}
     assert body["storage_unavailable"] is False
 
@@ -618,6 +620,163 @@ def test_put_settings_reply_window_and_speech_cap_within_bounds_round_trip() -> 
     assert response.status_code == 200
     assert response.json()["settings"]["wombat_reply_window_seconds"] == 300
     assert response.json()["settings"]["wombat_spoken_reply_max_chars"] == 800
+
+
+# --- TK-302 (DEC-67d/h): the eight wombat_param_* operating-parameter overlay keys -------------
+
+
+def test_put_settings_param_urgency_threshold_min_and_max_are_200() -> None:
+    client = _client()
+    min_response = client.put(
+        "/settings",
+        json={"wombat_param_urgency_threshold": 0.60},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert min_response.status_code == 200
+    assert min_response.json()["settings"]["wombat_param_urgency_threshold"] == 0.60
+
+    max_response = client.put(
+        "/settings",
+        json={"wombat_param_urgency_threshold": 0.95},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert max_response.status_code == 200
+    assert max_response.json()["settings"]["wombat_param_urgency_threshold"] == 0.95
+
+
+def test_put_settings_param_urgency_threshold_out_of_band_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_param_urgency_threshold": 0.30},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_param_urgency_threshold_wrong_type_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_param_urgency_threshold": "bananas"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_param_per_class_daily_ceiling_zero_is_200() -> None:
+    # "0 = user turning immediate voice OFF - their right" (DEC-67d) — 0 sits AT the floor.
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_param_per_class_daily_ceiling": 0},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_param_per_class_daily_ceiling"] == 0
+
+
+def test_put_settings_param_per_class_daily_ceiling_above_maximum_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_param_per_class_daily_ceiling": 11},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_param_time_fields_round_trip() -> None:
+    """The two HH:MM:SS fields carry no numeric band — any string PUTs 200 at the door (format
+    validity is enforced at boot by params.load_operating_params's own parser, not here)."""
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={
+            "wombat_param_morning_brief_time": "08:15:00",
+            "wombat_param_nightly_dream_time": "01:30:00",
+        },
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_param_morning_brief_time"] == "08:15:00"
+    assert response.json()["settings"]["wombat_param_nightly_dream_time"] == "01:30:00"
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_param_morning_brief_time"] == "08:15:00"
+
+
+def test_get_settings_param_fields_default_to_null_when_unset() -> None:
+    client = _client()
+    response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    body = response.json()["settings"]
+    for key in PARAMS_APP_EDITABLE:
+        assert body[key] is None
+
+
+# --- TK-302 (DEC-67d/h), RULING v2.172 r4: GET /settings's read-only timezone object ------------
+
+
+def test_get_settings_timezone_reflects_env_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WOMBAT_TIMEZONE", "America/New_York")
+    client = _client()
+    response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert response.json()["timezone"] == {"name": "America/New_York", "source": "env"}
+
+
+def test_get_settings_timezone_falls_back_to_system_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WOMBAT_TIMEZONE", raising=False)
+    client = _client()
+    response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    body = response.json()["timezone"]
+    assert body["source"] == "system"
+    assert isinstance(body["name"], str) and body["name"]
+
+
+def test_get_settings_timezone_unresolved_when_system_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WOMBAT_TIMEZONE", raising=False)
+    import tzlocal
+
+    def _raise() -> object:
+        raise RuntimeError("simulated: could not resolve the host's local timezone")
+
+    monkeypatch.setattr(tzlocal, "get_localzone", _raise)
+    client = _client()
+    response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert response.json()["timezone"] == {"name": None, "source": "unresolved"}
+
+
+def test_get_settings_timezone_never_500s_and_never_imports_bootstrap_or_runtime() -> None:
+    """AC5: import-isolation stays green even with the new timezone object wired in."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "import wombat.settings_app.api\n"
+            "assert 'wombat.bootstrap' not in sys.modules\n"
+            "assert 'wombat.runtime' not in sys.modules\n"
+            "print('OK')\n",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "OK"
+
+
+def test_put_settings_timezone_key_is_rejected() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"timezone": "America/New_York"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
 
 
 def test_put_key_unknown_provider_is_404_or_422() -> None:
@@ -1198,7 +1357,10 @@ def test_subprocess_honors_keyring_service_env_override(tmp_path: Path) -> None:
 
 
 def test_mirror_model_field_set_matches_app_editable_fields() -> None:
-    assert set(SettingsUpdate.model_fields) == set(APP_EDITABLE_FIELDS)
+    # TK-302 (DEC-67d/h): SettingsUpdate's field set now mirrors the UNION of APP_EDITABLE_FIELDS
+    # and PARAMS_APP_EDITABLE's eight wombat_param_* keys.
+    assert set(SettingsUpdate.model_fields) == set(ADMITTED_SETTINGS_FIELDS)
+    assert set(ADMITTED_SETTINGS_FIELDS) == set(APP_EDITABLE_FIELDS) | set(PARAMS_APP_EDITABLE)
 
 
 def _literal_args(annotation: object) -> frozenset[object] | None:
@@ -1218,3 +1380,37 @@ def test_mirror_model_literal_vocab_matches_wombat_config() -> None:
         config_literal = _literal_args(WombatConfig.model_fields[name].annotation)
         mirror_literal = _literal_args(SettingsUpdate.model_fields[name].annotation)
         assert config_literal == mirror_literal, f"{name} vocabulary drifted"
+
+
+# --- TK-302 (DEC-67d/h) AC4: load_config() DROPS wombat_param_* rows -----------------------------
+
+
+def test_load_config_drops_wombat_param_rows_via_the_admitted_schema_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``wombat_settings`` table carrying ``wombat_param_*`` rows never reaches ``WombatConfig``
+    — the wombat_persona_pins precedent: ``_SettingsTableSource.__call__``'s existing admitted-
+    field filter (``APP_EDITABLE_FIELDS`` only) already drops any other key silently. Exercised
+    directly against the holder ``load_config()``'s own ``SettingsStore.get_all()`` populates —
+    never a real Postgres. ``tmp_path``-chdir'd so the operator's real ``.env`` can never
+    re-supply ``wombat_assistant_name`` and mask the table-sourced assertion below."""
+    import wombat.config as config_module
+
+    monkeypatch.chdir(tmp_path)
+    config_module._TABLE_SETTINGS_HOLDER.update(
+        {
+            "wombat_param_urgency_threshold": "0.80",
+            "wombat_param_per_class_daily_ceiling": "5",
+            "wombat_assistant_name": "Table Name",
+        }
+    )
+    try:
+        cfg = WombatConfig(
+            deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com"
+        )
+    finally:
+        config_module._TABLE_SETTINGS_HOLDER.clear()
+
+    assert not hasattr(cfg, "wombat_param_urgency_threshold")
+    assert not hasattr(cfg, "wombat_param_per_class_daily_ceiling")
+    assert cfg.wombat_assistant_name == "Table Name"  # the admitted row still lands, unaffected

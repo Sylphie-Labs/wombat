@@ -138,6 +138,82 @@ def _reset_singleton() -> Iterator[None]:
     bootstrap.reset_engine()
 
 
+# --- TK-302 (DEC-67d/h), ruling v2.172 r3: _read_params_overlay -------------------------------
+
+
+class _FakeSettingsStoreForOverlay:
+    """An in-memory stand-in for ``SettingsStore`` (never touches Postgres) — proves
+    ``_read_params_overlay`` filters/stringifies ``get_all()``'s rows and always closes."""
+
+    def __init__(
+        self, rows: dict[str, Any] | None = None, *, raise_on_get_all: bool = False
+    ) -> None:
+        self._rows = rows or {}
+        self._raise_on_get_all = raise_on_get_all
+        self.closed = False
+
+    def get_all(self) -> dict[str, Any]:
+        if self._raise_on_get_all:
+            raise RuntimeError("simulated pg unreachable")
+        return dict(self._rows)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_read_params_overlay_filters_to_the_eight_keys_and_stringifies_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeSettingsStoreForOverlay(
+        rows={
+            "wombat_param_urgency_threshold": 0.8,
+            "wombat_param_per_class_daily_ceiling": 5,
+            "wombat_persona_brevity": "terse",  # NOT an overlay key -- must be dropped
+            "wombat_persona_pins": {"foo": "bar"},  # NOT an overlay key -- must be dropped
+        }
+    )
+    monkeypatch.setattr(runtime, "SettingsStore", lambda dsn: fake)
+
+    overlay = runtime._read_params_overlay(_FAKE_DSN)
+
+    assert overlay == {
+        "wombat_param_urgency_threshold": "0.8",
+        "wombat_param_per_class_daily_ceiling": "5",
+    }
+    assert fake.closed is True
+
+
+def test_read_params_overlay_degrades_to_empty_when_construction_raises(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """CON-3: a first-ever boot (``wombat_settings`` doesn't exist yet, schema preflight runs
+    later inside ``assemble_runtime``) must never block boot — empty overlay + ONE WARNING."""
+
+    def _raise(dsn: str) -> _FakeSettingsStoreForOverlay:
+        raise RuntimeError("simulated: relation \"wombat_settings\" does not exist")
+
+    monkeypatch.setattr(runtime, "SettingsStore", _raise)
+
+    with caplog.at_level(logging.WARNING):
+        overlay = runtime._read_params_overlay(_FAKE_DSN)
+
+    assert overlay == {}
+    assert "wombat_settings" in caplog.text
+
+
+def test_read_params_overlay_degrades_to_empty_when_get_all_raises_and_still_closes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake = _FakeSettingsStoreForOverlay(raise_on_get_all=True)
+    monkeypatch.setattr(runtime, "SettingsStore", lambda dsn: fake)
+
+    with caplog.at_level(logging.WARNING):
+        overlay = runtime._read_params_overlay(_FAKE_DSN)
+
+    assert overlay == {}
+    assert fake.closed is True  # closed via the inner finally even though get_all() raised
+
+
 @dataclass
 class _FakeQueue:
     """A minimal in-memory stand-in for ``WombatQueue``: one queued batch per ``drain()`` call,
@@ -777,6 +853,47 @@ def test_assemble_runtime_blank_brief_path_skips_schedule(
     assert bundle.brief_schedule_pathway_id is None
     with pytest.raises(PathwayError):
         bundle.pathways.get("wombat.brief_schedule")
+
+
+# --- TK-302 (DEC-67d/h) AC6: overlaid morning_brief_time/nightly_dream_time wire into the ------
+# --- BriefTimerStage/DreamTimerStage assemble_runtime already builds (bootstrap.py 1428/1457) --
+
+
+def test_ac6_overlaid_brief_and_dream_times_wire_verbatim_into_the_schedule_timers(
+    tmp_path: Path,
+) -> None:
+    """``bootstrap.py`` is untouched by this ticket — it already reads ``op.morning_brief_time``/
+    ``op.nightly_dream_time`` unchanged (lines 1428/1457). This proves an OVERLAID
+    ``OperatingParams`` (built the same way ``wombat.runtime.serve()`` now does) flows verbatim
+    through ``assemble_runtime`` into the BriefTimerStage/DreamTimerStage it wires."""
+    from datetime import time
+
+    from wombat.pathways.dream_trigger import DreamTimerStage
+    from wombat.stages.brief_timer_stage import BriefTimerStage
+
+    op = load_operating_params(
+        overlay={
+            "wombat_param_morning_brief_time": "09:45:00",
+            "wombat_param_nightly_dream_time": "01:15:00",
+        }
+    )
+    assert op.morning_brief_time == time(9, 45, 0)
+    assert op.nightly_dream_time == time(1, 15, 0)
+
+    config = _config_with_brief_path(str(tmp_path / "brief.txt"))
+    bundle = bootstrap.assemble_runtime(
+        config=config, dsn=_FAKE_DSN, params=op, replay_pending=False, tz=ZoneInfo("UTC")
+    )
+
+    assert bundle.brief_schedule_pathway_id is not None
+    brief_timer = bundle.pathways.get(bundle.brief_schedule_pathway_id).get("brief_timer")
+    assert isinstance(brief_timer, BriefTimerStage)
+    assert brief_timer._brief_time == time(9, 45, 0)
+
+    assert bundle.dream_schedule_pathway_id is not None
+    dream_timer = bundle.pathways.get(bundle.dream_schedule_pathway_id).get("dream_timer")
+    assert isinstance(dream_timer, DreamTimerStage)
+    assert dream_timer._dream_time == time(1, 15, 0)
 
 
 class _NullEnqueuer:
@@ -1644,6 +1761,64 @@ async def test_serve_calls_import_legacy_settings_file_after_assemble_before_dri
     await runtime.serve()
 
     assert calls == ["assemble_runtime", "import_legacy_settings_file", "_drive_and_serve"]
+
+
+# --- TK-302 (DEC-67d/h), ruling v2.172 r3: serve() reads the params overlay strictly between ---
+# --- resolve_wombat_zone() and load_operating_params() ------------------------------------------
+
+
+async def test_serve_wires_params_overlay_between_resolve_zone_and_load_operating_params(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    calls: list[str] = []
+    captured_overlay: dict[str, str] | None = None
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+
+    def _fake_resolve_zone(config: WombatConfig) -> ZoneInfo:
+        calls.append("resolve_wombat_zone")
+        return ZoneInfo("UTC")
+
+    def _fake_read_overlay(dsn: str) -> dict[str, str]:
+        calls.append("_read_params_overlay")
+        assert dsn == _FAKE_DSN
+        return {"wombat_param_urgency_threshold": "0.80"}
+
+    def _fake_load_operating_params(*, overlay: dict[str, str] | None = None) -> Any:
+        nonlocal captured_overlay
+        calls.append("load_operating_params")
+        captured_overlay = overlay
+        return load_operating_params()
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", _fake_resolve_zone)
+    monkeypatch.setattr(runtime, "_read_params_overlay", _fake_read_overlay)
+    monkeypatch.setattr(runtime, "load_operating_params", _fake_load_operating_params)
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()
+
+    assert calls == ["resolve_wombat_zone", "_read_params_overlay", "load_operating_params"]
+    assert captured_overlay == {"wombat_param_urgency_threshold": "0.80"}
 
 
 # --- TK-245 (ruling v2.68 r5): serve() prunes wombat_external_items exactly once at boot --------

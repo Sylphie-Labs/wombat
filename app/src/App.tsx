@@ -23,6 +23,7 @@ import {
   putKey,
   putSettings,
   KEY_PROVIDERS,
+  type AsrModel,
   type Brevity,
   type Directness,
   type Humor,
@@ -47,9 +48,14 @@ import {
 
 interface FormState {
   wombat_assistant_name: string;
+  wombat_user_name: string;
   wombat_stt_provider: Provider;
   wombat_tts_provider: Provider;
   wombat_tts_voice_id: string;
+  wombat_stt_model: string;
+  wombat_asr_model: AsrModel;
+  wombat_reply_window_seconds: number;
+  wombat_spoken_reply_max_chars: number;
   wombat_persona_brevity: Brevity;
   wombat_persona_warmth: Warmth;
   wombat_persona_directness: Directness;
@@ -61,11 +67,20 @@ type FormField = keyof FormState;
 
 // DEFAULT_MATRIX (src/wombat/persona/matrix.py) - the fallback shown when a
 // field is `null` (never customized) in wombat.settings.json.
+// TK-305: the new fields' fallbacks mirror WombatConfig's own field defaults
+// (src/wombat/config.py) - wombat_asr_model="base", wombat_reply_window_seconds=120.0,
+// wombat_spoken_reply_max_chars=400; wombat_stt_model/wombat_user_name follow the
+// established "" fallback for optional/plain-str fields (wombat_tts_voice_id, above).
 const DEFAULTS: FormState = {
   wombat_assistant_name: "",
+  wombat_user_name: "",
   wombat_stt_provider: "local",
   wombat_tts_provider: "local",
   wombat_tts_voice_id: "",
+  wombat_stt_model: "",
+  wombat_asr_model: "base",
+  wombat_reply_window_seconds: 120,
+  wombat_spoken_reply_max_chars: 400,
   wombat_persona_brevity: "terse",
   wombat_persona_warmth: "reserved",
   wombat_persona_directness: "plain",
@@ -83,9 +98,14 @@ const PERSONA_FIELDS: readonly FormField[] = [
 
 const RESTART_FIELDS: readonly FormField[] = [
   "wombat_assistant_name",
+  "wombat_user_name",
   "wombat_stt_provider",
   "wombat_tts_provider",
   "wombat_tts_voice_id",
+  "wombat_stt_model",
+  "wombat_asr_model",
+  "wombat_reply_window_seconds",
+  "wombat_spoken_reply_max_chars",
 ];
 
 // wombat.settings_app.api.SettingsUpdate's provider Literal, verbatim.
@@ -130,6 +150,14 @@ const PROACTIVITY_OPTIONS: SelectOption[] = [
   { value: "eager", label: "Eager (very forward)" },
 ];
 
+// wombat.settings_app.api.SettingsUpdate.wombat_asr_model's Literal, verbatim (TK-303/305).
+const ASR_MODEL_OPTIONS: SelectOption[] = [
+  { value: "tiny", label: "Tiny" },
+  { value: "base", label: "Base" },
+  { value: "small", label: "Small" },
+  { value: "medium", label: "Medium" },
+];
+
 const KEY_PROVIDER_LABELS: Record<KeyProvider, string> = {
   elevenlabs: "ElevenLabs API key",
   deepgram: "Deepgram API key",
@@ -151,9 +179,16 @@ const EMPTY_KEYS_CONFIGURED: Record<KeyProvider, boolean> = {
 function toFormState(settings: SettingsFields): FormState {
   return {
     wombat_assistant_name: settings.wombat_assistant_name ?? DEFAULTS.wombat_assistant_name,
+    wombat_user_name: settings.wombat_user_name ?? DEFAULTS.wombat_user_name,
     wombat_stt_provider: settings.wombat_stt_provider ?? DEFAULTS.wombat_stt_provider,
     wombat_tts_provider: settings.wombat_tts_provider ?? DEFAULTS.wombat_tts_provider,
     wombat_tts_voice_id: settings.wombat_tts_voice_id ?? DEFAULTS.wombat_tts_voice_id,
+    wombat_stt_model: settings.wombat_stt_model ?? DEFAULTS.wombat_stt_model,
+    wombat_asr_model: settings.wombat_asr_model ?? DEFAULTS.wombat_asr_model,
+    wombat_reply_window_seconds:
+      settings.wombat_reply_window_seconds ?? DEFAULTS.wombat_reply_window_seconds,
+    wombat_spoken_reply_max_chars:
+      settings.wombat_spoken_reply_max_chars ?? DEFAULTS.wombat_spoken_reply_max_chars,
     wombat_persona_brevity: settings.wombat_persona_brevity ?? DEFAULTS.wombat_persona_brevity,
     wombat_persona_warmth: settings.wombat_persona_warmth ?? DEFAULTS.wombat_persona_warmth,
     wombat_persona_directness:
@@ -170,6 +205,9 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
   if (touched.has("wombat_assistant_name")) {
     patch.wombat_assistant_name = formState.wombat_assistant_name;
   }
+  if (touched.has("wombat_user_name")) {
+    patch.wombat_user_name = formState.wombat_user_name;
+  }
   if (touched.has("wombat_stt_provider")) {
     patch.wombat_stt_provider = formState.wombat_stt_provider;
   }
@@ -178,6 +216,18 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
   }
   if (touched.has("wombat_tts_voice_id")) {
     patch.wombat_tts_voice_id = formState.wombat_tts_voice_id;
+  }
+  if (touched.has("wombat_stt_model")) {
+    patch.wombat_stt_model = formState.wombat_stt_model;
+  }
+  if (touched.has("wombat_asr_model")) {
+    patch.wombat_asr_model = formState.wombat_asr_model;
+  }
+  if (touched.has("wombat_reply_window_seconds")) {
+    patch.wombat_reply_window_seconds = formState.wombat_reply_window_seconds;
+  }
+  if (touched.has("wombat_spoken_reply_max_chars")) {
+    patch.wombat_spoken_reply_max_chars = formState.wombat_spoken_reply_max_chars;
   }
   if (touched.has("wombat_persona_brevity")) {
     patch.wombat_persona_brevity = formState.wombat_persona_brevity;
@@ -350,6 +400,12 @@ export function App() {
                         value={formState.wombat_assistant_name}
                         onChange={(e) => updateField("wombat_assistant_name", e.target.value)}
                       />
+                      <Field
+                        id="user-name"
+                        label="Your name"
+                        value={formState.wombat_user_name}
+                        onChange={(e) => updateField("wombat_user_name", e.target.value)}
+                      />
                     </Panel>
 
                     <Panel className="flex flex-col gap-4">
@@ -437,6 +493,39 @@ export function App() {
                         label="TTS voice ID"
                         value={formState.wombat_tts_voice_id}
                         onChange={(e) => updateField("wombat_tts_voice_id", e.target.value)}
+                      />
+                      <Field
+                        id="stt-model"
+                        label="Cloud STT model"
+                        value={formState.wombat_stt_model}
+                        onChange={(e) => updateField("wombat_stt_model", e.target.value)}
+                      />
+                      <Select
+                        id="asr-model"
+                        label="Local ASR model"
+                        options={ASR_MODEL_OPTIONS}
+                        value={formState.wombat_asr_model}
+                        onChange={(e) =>
+                          updateField("wombat_asr_model", e.target.value as AsrModel)
+                        }
+                      />
+                      <Field
+                        id="reply-window-seconds"
+                        label="Reply window (s)"
+                        type="number"
+                        value={formState.wombat_reply_window_seconds}
+                        onChange={(e) =>
+                          updateField("wombat_reply_window_seconds", Number(e.target.value))
+                        }
+                      />
+                      <Field
+                        id="spoken-reply-max-chars"
+                        label="Spoken reply cap (chars)"
+                        type="number"
+                        value={formState.wombat_spoken_reply_max_chars}
+                        onChange={(e) =>
+                          updateField("wombat_spoken_reply_max_chars", Number(e.target.value))
+                        }
                       />
                     </Panel>
 

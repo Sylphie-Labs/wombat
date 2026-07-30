@@ -10,13 +10,15 @@ loud_at_load`` below.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import FrozenInstanceError
+from datetime import time
 from pathlib import Path
 
 import pytest
 import yaml
 
-from wombat.params import OperatingParamsError, load_operating_params
+from wombat.params import PARAMS_APP_EDITABLE, OperatingParamsError, load_operating_params
 from wombat.rating.params import (
     RATING_PARAMS_VERSION,
     EventClass,
@@ -151,3 +153,117 @@ def test_version_8_file_missing_eager_fails_loud_at_load(tmp_path: Path) -> None
 
     with pytest.raises(OperatingParamsError):
         load_operating_params(dst)
+
+
+# --- TK-302 (DEC-67d/h): PARAMS_APP_EDITABLE overlay spec + load_operating_params(overlay=) ----
+
+
+def test_params_app_editable_key_set_is_exactly_the_eight_dec67d_keys() -> None:
+    # DEC-67(d) non_goal: no overlay of any non-enumerated field — the spec's key set is CLOSED,
+    # pinned verbatim.
+    assert set(PARAMS_APP_EDITABLE) == {
+        "wombat_param_morning_brief_time",
+        "wombat_param_nightly_dream_time",
+        "wombat_param_urgency_threshold",
+        "wombat_param_per_class_daily_ceiling",
+        "wombat_param_decay_ttl_seconds",
+        "wombat_param_mouth_model_timeout_seconds",
+        "wombat_param_mouth_daily_token_ceiling",
+        "wombat_param_mouth_max_usd_per_drive",
+    }
+
+
+def test_params_app_editable_bounds_match_dec67d_verbatim() -> None:
+    resolved = {key: (spec.field, spec.min, spec.max) for key, spec in PARAMS_APP_EDITABLE.items()}
+    assert resolved == {
+        "wombat_param_morning_brief_time": ("morning_brief_time", None, None),
+        "wombat_param_nightly_dream_time": ("nightly_dream_time", None, None),
+        "wombat_param_urgency_threshold": ("urgency_threshold", 0.60, 0.95),
+        "wombat_param_per_class_daily_ceiling": ("per_class_daily_ceiling", 0, 10),
+        "wombat_param_decay_ttl_seconds": ("decay_ttl_seconds", 3600.0, 604800.0),
+        "wombat_param_mouth_model_timeout_seconds": ("mouth_model_timeout_seconds", 2.0, 60.0),
+        "wombat_param_mouth_daily_token_ceiling": ("mouth_daily_token_ceiling", 10000, 1000000),
+        "wombat_param_mouth_max_usd_per_drive": ("mouth_max_usd_per_drive", 0.05, 5.00),
+    }
+
+
+def test_non_enumerated_fields_are_structurally_absent_from_the_spec() -> None:
+    """OUT of scope (verbatim): rating_tuner/personality_band/flush/presence/sweeper/dream
+    fields are never overlay-able — the spec maps ONLY to the eight documented fields."""
+    mapped_fields = {spec.field for spec in PARAMS_APP_EDITABLE.values()}
+    assert "rating_tuner" not in mapped_fields
+    assert "personality_band" not in mapped_fields
+    assert "flush_min_age_seconds" not in mapped_fields
+    assert "presence_staleness_ceiling_seconds" not in mapped_fields
+    assert "sweeper_interval_seconds" not in mapped_fields
+    assert "dream_budget_max_usd" not in mapped_fields
+
+
+def test_overlay_with_all_eight_rows_lands_and_is_file_equal_otherwise() -> None:
+    # AC1: a store seeded with all eight rows -> OperatingParams carries them, everything else
+    # stays file-equal.
+    base = load_operating_params()
+    overlay = {
+        "wombat_param_morning_brief_time": "08:15:00",
+        "wombat_param_nightly_dream_time": "03:30:00",
+        "wombat_param_urgency_threshold": "0.80",
+        "wombat_param_per_class_daily_ceiling": "5",
+        "wombat_param_decay_ttl_seconds": "7200",
+        "wombat_param_mouth_model_timeout_seconds": "15",
+        "wombat_param_mouth_daily_token_ceiling": "50000",
+        "wombat_param_mouth_max_usd_per_drive": "1.25",
+    }
+
+    overlaid = load_operating_params(overlay=overlay)
+
+    assert overlaid.morning_brief_time == time(8, 15, 0)
+    assert overlaid.nightly_dream_time == time(3, 30, 0)
+    assert overlaid.urgency_threshold == 0.80
+    assert overlaid.per_class_daily_ceiling == 5
+    assert overlaid.decay_ttl_seconds == 7200.0
+    assert overlaid.mouth_model_timeout_seconds == 15.0
+    assert overlaid.mouth_daily_token_ceiling == 50000
+    assert overlaid.mouth_max_usd_per_drive == 1.25
+
+    overlaid_fields = {spec.field for spec in PARAMS_APP_EDITABLE.values()}
+    assert overlaid.model_dump(exclude=overlaid_fields) == base.model_dump(exclude=overlaid_fields)
+
+
+def test_per_class_daily_ceiling_zero_is_accepted_unclamped() -> None:
+    # "0 = user turning immediate voice OFF - their right" — 0 sits AT the floor, never clamped
+    # above it.
+    overlaid = load_operating_params(overlay={"wombat_param_per_class_daily_ceiling": "0"})
+    assert overlaid.per_class_daily_ceiling == 0
+
+
+def test_no_overlay_rows_returns_a_byte_equal_model_dump() -> None:
+    # AC1: no rows -> byte-equal model dump, whether overlay is None or an empty mapping.
+    base = load_operating_params()
+    assert load_operating_params(overlay=None).model_dump() == base.model_dump()
+    assert load_operating_params(overlay={}).model_dump() == base.model_dump()
+
+
+def test_ac2_out_of_band_value_clamps_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        overlaid = load_operating_params(overlay={"wombat_param_urgency_threshold": "0.30"})
+
+    assert overlaid.urgency_threshold == 0.60  # clamped to the DEC-67(d) floor
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat_param_urgency_threshold" in warnings[0]
+
+
+def test_ac2_unparseable_value_is_skipped_with_one_warning_and_boot_proceeds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    base = load_operating_params()
+    with caplog.at_level(logging.WARNING):
+        # never raises — boot proceeds regardless of a garbage row.
+        overlaid = load_operating_params(
+            overlay={"wombat_param_mouth_daily_token_ceiling": "bananas"}
+        )
+
+    assert overlaid.mouth_daily_token_ceiling == base.mouth_daily_token_ceiling  # unchanged
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "wombat_param_mouth_daily_token_ceiling" in warnings[0]

@@ -21,7 +21,7 @@ import { Header } from "./components/Header";
 const PORT = 41417;
 const TOKEN = "test-token";
 
-type SettingsShape = Record<string, string | null>;
+type SettingsShape = Record<string, string | number | null>;
 
 function baseSettings(): SettingsShape {
   return {
@@ -30,6 +30,10 @@ function baseSettings(): SettingsShape {
     wombat_tts_voice_id: "voice-1",
     wombat_stt_model: null,
     wombat_assistant_name: "Wombat",
+    wombat_user_name: null,
+    wombat_asr_model: null,
+    wombat_reply_window_seconds: null,
+    wombat_spoken_reply_max_chars: null,
     wombat_persona_brevity: "balanced",
     wombat_persona_warmth: "warm",
     wombat_persona_directness: "blunt",
@@ -80,7 +84,19 @@ function installFakeApi(
       return Response.json({ settings: { ...currentSettings }, keys: { ...currentKeys } });
     }
     if (method === "PUT" && url.endsWith("/settings")) {
-      Object.assign(currentSettings, body as SettingsShape);
+      // Mirrors wombat.settings_app.api.SettingsUpdate's Field bounds (TK-303/305) - an
+      // out-of-range numeric 422s here exactly as the real API would, WITHOUT touching
+      // currentSettings (so a subsequent GET still reflects the last-good value).
+      const patch = body as SettingsShape;
+      const window = patch.wombat_reply_window_seconds;
+      const cap = patch.wombat_spoken_reply_max_chars;
+      const outOfBounds =
+        (typeof window === "number" && (window < 30 || window > 600)) ||
+        (typeof cap === "number" && (cap < 200 || cap > 1200));
+      if (outOfBounds) {
+        return new Response(null, { status: 422 });
+      }
+      Object.assign(currentSettings, patch);
       return Response.json({ settings: { ...currentSettings } });
     }
     const keyMatch = /\/keys\/(elevenlabs|deepgram|fish)$/.exec(url);
@@ -357,6 +373,115 @@ describe("App (TK-301 AC3: eager proactivity option)", () => {
 
     expect(await screen.findByText("Persona changes apply on the next turn.")).toBeTruthy();
     expect(screen.queryByText("Restart Wombat to apply these changes.")).toBeNull();
+  });
+});
+
+describe("App (TK-305 AC1: persona view gains Your name)", () => {
+  it("renders '' when wombat_user_name is unset, and saving it shows the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
+
+    expect((screen.getByLabelText("Your name") as HTMLInputElement).value).toBe("");
+
+    fireEvent.change(screen.getByLabelText("Your name"), { target: { value: "Jim" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({ wombat_user_name: "Jim" });
+    });
+
+    expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+    expect(screen.queryByText("Persona changes apply on the next turn.")).toBeNull();
+  });
+
+  it("renders a stored Your name value", async () => {
+    installFakeApi({ ...baseSettings(), wombat_user_name: "Jim" });
+    render(<App />);
+    gotoPersona();
+
+    expect(await screen.findByDisplayValue("Jim")).toBeTruthy();
+  });
+});
+
+describe("App (TK-305 AC2: voice view gains cloud STT model / local ASR model / reply window / spoken cap)", () => {
+  it("PUTs exactly the touched voice fields with correct types, and shows the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoVoice();
+    await screen.findByLabelText("STT provider");
+
+    expect((screen.getByLabelText("Local ASR model") as HTMLSelectElement).value).toBe("base");
+    expect((screen.getByLabelText("Reply window (s)") as HTMLInputElement).value).toBe("120");
+    expect((screen.getByLabelText("Spoken reply cap (chars)") as HTMLInputElement).value).toBe(
+      "400",
+    );
+
+    fireEvent.change(screen.getByLabelText("Cloud STT model"), {
+      target: { value: "nova-2" },
+    });
+    fireEvent.change(screen.getByLabelText("Local ASR model"), {
+      target: { value: "small" },
+    });
+    fireEvent.change(screen.getByLabelText("Reply window (s)"), {
+      target: { value: "180" },
+    });
+    fireEvent.change(screen.getByLabelText("Spoken reply cap (chars)"), {
+      target: { value: "500" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({
+        wombat_stt_model: "nova-2",
+        wombat_asr_model: "small",
+        wombat_reply_window_seconds: 180,
+        wombat_spoken_reply_max_chars: 500,
+      });
+    });
+
+    expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+  });
+});
+
+describe("App (TK-305 AC3: out-of-bounds numeric input 422s and reverts)", () => {
+  it("surfaces the 422 via the save-error line and reverts to the stored value on reload", async () => {
+    const { calls } = installFakeApi();
+    const { unmount } = render(<App />);
+    gotoVoice();
+    await screen.findByLabelText("STT provider");
+
+    fireEvent.change(screen.getByLabelText("Reply window (s)"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("Spoken reply cap (chars)"), {
+      target: { value: "50" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === "PUT" && call.url.endsWith("/settings"))).toBe(
+        true,
+      );
+    });
+    expect(await screen.findByText("Save failed: PUT /settings failed: 422")).toBeTruthy();
+
+    // The failed PUT never persisted server-side - a fresh load (simulated by
+    // unmount+remount, since this app has no reload button) shows the
+    // still-stored defaults, not the rejected 10/50.
+    unmount();
+    render(<App />);
+    gotoVoice();
+
+    expect(await screen.findByLabelText("Reply window (s)")).toHaveProperty("value", "120");
+    expect(screen.getByLabelText("Spoken reply cap (chars)")).toHaveProperty("value", "400");
   });
 });
 

@@ -70,12 +70,12 @@ from wombat.bootstrap import _DRAIN_POLL_INTERVAL_SECONDS, RuntimeBundle, assemb
 from wombat.chat.surface import ChatSurface
 from wombat.config import ConfigurationError, load_config, resolve_wombat_zone
 from wombat.external_store import EXTERNAL_ITEMS_PRUNE_DAYS
-from wombat.params import OperatingParams, load_operating_params
+from wombat.params import PARAMS_APP_EDITABLE, OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
 from wombat.pathways.dream_trigger import dream_timer_tick_artifact
 from wombat.safety.local_residency import check_config
 from wombat.scratchpad import SCRATCHPAD_PURGE_DAYS
-from wombat.settings_store import import_legacy_settings_file
+from wombat.settings_store import SettingsStore, import_legacy_settings_file
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,32 @@ _DREAM_SCHEDULE_RUN_ID_PREFIX = "wombat-dream-schedule"
 # plain module constant (no env flag, no config field per the ruling: the guard derives from
 # observable state only). Tests shrink this via monkeypatch to keep the timeout-elapses case fast.
 _HANDSHAKE_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def _read_params_overlay(dsn: str) -> dict[str, str]:
+    """DEC-67(d), ruling v2.172 r3: read the EIGHT ``wombat_param_*`` rows ``wombat_settings``
+    may carry, for ``load_operating_params``'s boot-time overlay.
+
+    ANY failure — a first-ever boot before ``assemble_runtime``'s schema preflight has ever run
+    (the ``wombat_settings`` table doesn't exist yet), a connection error, anything — degrades to
+    an EMPTY overlay plus ONE ``logger.warning`` (CON-3 posture): this must never block boot, and
+    the eventual schema preflight inside ``assemble_runtime`` runs regardless, healing the very
+    next restart.
+    """
+    try:
+        store = SettingsStore(dsn)
+        try:
+            raw = store.get_all()
+        finally:
+            store.close()
+    except Exception:
+        logger.warning(
+            "could not read the wombat_settings operating-parameter overlay (e.g. a first-ever "
+            "boot before the schema preflight has run); booting with wombat_params.yaml only",
+            exc_info=True,
+        )
+        return {}
+    return {key: str(value) for key, value in raw.items() if key in PARAMS_APP_EDITABLE}
 
 
 def _sweeper_clock(bundle: RuntimeBundle) -> Callable[[], datetime]:
@@ -429,6 +455,13 @@ async def serve() -> None:
     hand-rolled store-less ``RuntimeBundle``. The 7-day window is the SAME pinned retention
     ``chat_turns._RETENTION_DAYS`` documents; passed as a literal here per the ruling (no shared
     importable constant, mirroring this ticket's own "no knob" pin).
+
+    ``_read_params_overlay(dsn)`` (TK-302, DEC-67(d), ruling v2.172 r3) runs strictly BETWEEN
+    ``resolve_wombat_zone(config)`` and ``load_operating_params()`` — ``dsn`` is already validated
+    loud above. It reads the EIGHT ``wombat_param_*`` ``wombat_settings`` rows and feeds them to
+    ``load_operating_params`` as its overlay; ANY read failure (including a first-ever boot, before
+    ``assemble_runtime``'s schema preflight below has ever created the table) degrades to an empty
+    overlay plus one WARNING rather than blocking boot.
     """
     config = load_config()
     check_config(config)
@@ -438,7 +471,7 @@ async def serve() -> None:
             "missing required environment variable WOMBAT_PG_DSN; wombat will not start"
         )
     tz = resolve_wombat_zone(config)
-    params = load_operating_params()
+    params = load_operating_params(overlay=_read_params_overlay(dsn))
     bundle = assemble_runtime(config=config, dsn=dsn, params=params, tz=tz)
     import_legacy_settings_file(dsn)
     if bundle.external_item_store is not None:
