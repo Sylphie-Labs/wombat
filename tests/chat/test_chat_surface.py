@@ -78,9 +78,12 @@ class _Stack:
 
 
 async def _start_stack(
-    tmp_path: Path, *, reply_timeout_seconds: float = 5.0
+    tmp_path: Path,
+    *,
+    reply_timeout_seconds: float = 5.0,
+    context_hook: Callable[[], dict[str, str]] | None = None,
 ) -> _Stack:
-    source = ChatSource()
+    source = ChatSource(context_hook=context_hook)
     broker = ChatReplyBroker()
     surface = ChatSurface(
         source=source,
@@ -274,6 +277,111 @@ async def test_ac1_spy_only_egress_is_push_then_registry_poll_then_enqueuer(
         stack.broker.resolve(stack.enqueuer.items[0].idempotency_key, "ok")
         status, _headers, _body = await asyncio.wait_for(post_task, timeout=5.0)
         assert status == 200
+    finally:
+        await _stop_stack(stack)
+
+
+# --- TK-296 (DEC-65f, RULING r3 v2.159): the context_hook merge -------------------------------
+
+
+async def test_tk296_context_hook_none_leaves_the_payload_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """A ``None`` hook (the default -- unwired boot) must leave today's payload byte-identical."""
+    stack = await _start_stack(tmp_path, context_hook=None)
+    try:
+        host, port = stack.surface.address
+        post_task = asyncio.create_task(
+            _http_request(
+                host,
+                port,
+                method="POST",
+                path="/chat",
+                headers={"X-Wombat-Chat-Token": _TOKEN},
+                body=json.dumps({"text": "no hook here"}).encode("utf-8"),
+            )
+        )
+        await _wait_until(lambda: len(stack.enqueuer.items) >= 1)
+        payload = stack.enqueuer.items[0].payload
+        assert payload == {
+            "item_kind": "chat",
+            "text": "no hook here",
+            "received_at": payload["received_at"],
+        }
+        stack.broker.resolve(stack.enqueuer.items[0].idempotency_key, "ok")
+        await asyncio.wait_for(post_task, timeout=5.0)
+    finally:
+        await _stop_stack(stack)
+
+
+async def test_tk296_context_hook_result_merges_under_the_built_in_fields(
+    tmp_path: Path,
+) -> None:
+    """The hook's mapping is merged UNDER item_kind/text/received_at -- those three keys are
+    never overridable, no matter what the hook returns (mirrors ASRSource's TK-289 merge order)."""
+
+    def _hook() -> dict[str, str]:
+        return {
+            "known_user_context": "Likes coffee",
+            "item_kind": "should-never-win",
+            "text": "should-never-win",
+        }
+
+    stack = await _start_stack(tmp_path, context_hook=_hook)
+    try:
+        host, port = stack.surface.address
+        post_task = asyncio.create_task(
+            _http_request(
+                host,
+                port,
+                method="POST",
+                path="/chat",
+                headers={"X-Wombat-Chat-Token": _TOKEN},
+                body=json.dumps({"text": "real message"}).encode("utf-8"),
+            )
+        )
+        await _wait_until(lambda: len(stack.enqueuer.items) >= 1)
+        payload = stack.enqueuer.items[0].payload
+        assert payload["known_user_context"] == "Likes coffee"
+        assert payload["item_kind"] == "chat"
+        assert payload["text"] == "real message"
+        stack.broker.resolve(stack.enqueuer.items[0].idempotency_key, "ok")
+        await asyncio.wait_for(post_task, timeout=5.0)
+    finally:
+        await _stop_stack(stack)
+
+
+async def test_tk296_raising_context_hook_logs_one_warning_and_proceeds_unstamped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    def _raising_hook() -> dict[str, str]:
+        raise RuntimeError("boom")
+
+    stack = await _start_stack(tmp_path, context_hook=_raising_hook)
+    try:
+        host, port = stack.surface.address
+        with caplog.at_level(logging.WARNING, logger="wombat.chat.surface"):
+            post_task = asyncio.create_task(
+                _http_request(
+                    host,
+                    port,
+                    method="POST",
+                    path="/chat",
+                    headers={"X-Wombat-Chat-Token": _TOKEN},
+                    body=json.dumps({"text": "hook raises"}).encode("utf-8"),
+                )
+            )
+            await _wait_until(lambda: len(stack.enqueuer.items) >= 1)
+        payload = stack.enqueuer.items[0].payload
+        assert payload == {
+            "item_kind": "chat",
+            "text": "hook raises",
+            "received_at": payload["received_at"],
+        }
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        stack.broker.resolve(stack.enqueuer.items[0].idempotency_key, "ok")
+        await asyncio.wait_for(post_task, timeout=5.0)
     finally:
         await _stop_stack(stack)
 

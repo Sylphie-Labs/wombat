@@ -31,6 +31,9 @@ from wombat.voice.context_prefetch import (
     _GCAL_MAX_CHARS,
     _GCAL_MAX_ITEMS,
     _GMAIL_MAX_CHARS,
+    _MAX_FACTS_CHARS,
+    _MAX_FACTS_LINES,
+    build_user_facts_context,
     build_voice_context,
 )
 
@@ -330,6 +333,73 @@ def test_ac3_raising_store_yields_no_keys_and_exactly_one_warning(
 ) -> None:
     caplog.set_level(logging.WARNING, logger="wombat.voice.context_prefetch")
     result = build_voice_context(_RaisingStore(), tz=_TZ, clock=_clock(_NOON))
+    assert result == {}
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+# --------------------------------------------------------------------- TK-296 build_user_facts
+
+
+class _FakeFactsStore:
+    """A minimal stand-in satisfying ``UserFactsContextStore``."""
+
+    def __init__(self, *, rows: list[dict[str, Any]] | None = None) -> None:
+        self.rows = rows or []
+        self.calls: list[int] = []
+
+    def list_facts(self, limit: int) -> list[dict[str, Any]]:
+        self.calls.append(limit)
+        return self.rows
+
+
+class _RaisingFactsStore:
+    def list_facts(self, limit: int) -> list[dict[str, Any]]:
+        raise RuntimeError("boom")
+
+
+def _fact_row(fact: str) -> dict[str, Any]:
+    return {
+        "fact_key": fact,
+        "fact": fact,
+        "source": "told",
+        "first_seen_at": _NOON,
+        "updated_at": _NOON,
+    }
+
+
+def test_tk296_seeded_store_returns_one_fact_per_line() -> None:
+    store = _FakeFactsStore(rows=[_fact_row("Likes coffee"), _fact_row("Works remotely")])
+    result = build_user_facts_context(store)
+    assert set(result.keys()) == {"known_user_context"}
+    assert result["known_user_context"] == "Likes coffee\nWorks remotely"
+    assert store.calls == [_MAX_FACTS_LINES]
+
+
+def test_tk296_truncated_deterministically_at_fifteen_lines_nine_hundred_chars() -> None:
+    rows = [_fact_row(f"fact number {i}") for i in range(30)]
+    store = _FakeFactsStore(rows=rows)
+    result1 = build_user_facts_context(store)
+    result2 = build_user_facts_context(store)
+    assert result1 == result2  # same input -> same bytes
+    lines = result1["known_user_context"].splitlines()
+    assert len(lines) <= _MAX_FACTS_LINES
+    assert len(result1["known_user_context"]) <= _MAX_FACTS_CHARS
+
+
+def test_tk296_none_store_yields_no_keys() -> None:
+    assert build_user_facts_context(None) == {}
+
+
+def test_tk296_empty_store_yields_no_keys() -> None:
+    assert build_user_facts_context(_FakeFactsStore(rows=[])) == {}
+
+
+def test_tk296_raising_store_yields_no_keys_and_exactly_one_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="wombat.voice.context_prefetch")
+    result = build_user_facts_context(_RaisingFactsStore())
     assert result == {}
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1

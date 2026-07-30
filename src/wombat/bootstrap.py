@@ -241,13 +241,14 @@ from .stages.review_or_speak import ReviewOrSpeakStage
 from .stages.speech_shape import SpeechShapeStage
 from .substrate import SubstrateBundle, build_substrate
 from .trail.writer import ActionTrailWriter
+from .user_facts import UserFactsStore
 from .user_model.claims import Claim, ClaimPredicate
 from .user_model.feedback_source import FeedbackSignal
 from .user_model.observation_writer import ObservationWriter
 from .user_model.outcome_inference import ItemDisposition
 from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
-from .voice.context_prefetch import build_voice_context
+from .voice.context_prefetch import build_user_facts_context, build_voice_context
 from .voice.reply_context import LastSpokenRegister
 from .voice.select import build_tts_adapter
 
@@ -1097,11 +1098,27 @@ def assemble_runtime(
     # external_item_store constructed above, over the SAME configured tz, at call time (a fresh
     # today-window/recent-gmail read every poll, never memoized). A None/raising store degrades to
     # {} plus its own single warning (CON-3); this hook still returns whatever replying_to gave.
+    #
+    # TK-296 (DEC-65f): ALSO merged into this SAME closure — build_user_facts_context reads
+    # user_facts_store, constructed further below (beside scratchpad_store). Safe despite the
+    # source-order forward reference: Python closures resolve free variables at CALL time, and
+    # this closure is only ever called (by ASRSource.poll()/ChatSurface._accept_message, both
+    # well after assemble_runtime returns) once user_facts_store has been assigned.
     def asr_context_hook() -> dict[str, str]:
         text = last_spoken_register.current()
         extra: dict[str, str] = {} if text is None else {"replying_to": text}
         extra.update(build_voice_context(external_item_store, tz=tz, clock=_utc_now))
+        extra.update(build_user_facts_context(user_facts_store))
         return extra
+
+    if chat_source is not None:
+        # TK-296 (DEC-65f, RULING r3 v2.159): the SAME shared closure, wired into ChatSource's
+        # PUBLIC context_hook attribute — typed chat turns now get the identical known_user_
+        # context/replying_to/calendar/gmail grounding voice turns already get. Post-construction
+        # assignment (ChatSource was already constructed above, before this closure existed) —
+        # mirrors the wake attribute's own late-wire pattern (set by a different caller, runtime.py
+        # there; here it is simply defined later in this same function).
+        chat_source.context_hook = asr_context_hook
 
     if draft_composer_stage is not None:
         # TK-177: the draft-item leg — compose_dispatch (DRAFT) -> draft_composer -> draft_dispatch.
@@ -1309,6 +1326,12 @@ def assemble_runtime(
     # fully lazy — no connection at construction), mirroring external_item_store above (TK-245,
     # now constructed earlier — TK-290 needs it in scope for asr_context_hook's closure).
     scratchpad_store = ScratchpadStore(dsn)
+    # TK-296 (DEC-65f): the durable what-wombat-knows-about-the-user store — ALWAYS constructed
+    # (dsn is a required str here; UserFactsStore is fully lazy — no connection at construction),
+    # mirroring scratchpad_store immediately above. Read by asr_context_hook's closure (already
+    # defined above it in this function's source — see that closure's own comment for why the
+    # forward reference is safe).
+    user_facts_store = UserFactsStore(dsn)
     # TK-295 (DEC-65e): the 7-day rolling chat/voice-turn ledger — ALWAYS constructed (dsn is a
     # required str here; fully lazy, mirrors scratchpad_store above). Threaded into
     # build_source_registry below so the SourceRegistry sink tap records the user's own

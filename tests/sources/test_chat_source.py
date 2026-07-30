@@ -139,6 +139,22 @@ async def test_poll_with_no_wake_configured_behaves_like_plain_push_source() -> 
     assert [e.event_key for e in drained] == ["ek-1"]
 
 
+def test_chat_source_default_context_hook_is_none() -> None:
+    """TK-296 (DEC-65f): the default -- unwired boot -- context_hook is None, matching the wake
+    attribute's own default-None precedent."""
+    source = ChatSource()
+    assert source.context_hook is None
+
+
+def test_chat_source_accepts_a_context_hook_ctor_kwarg_and_holds_it_publicly() -> None:
+    def _hook() -> dict[str, str]:
+        return {"known_user_context": "Likes coffee"}
+
+    source = ChatSource(context_hook=_hook)
+    assert source.context_hook is _hook
+    assert source.context_hook() == {"known_user_context": "Likes coffee"}
+
+
 def test_chat_source_module_imports_no_model_compose_or_mouth_module() -> None:
     """Structural CON-1 guard: the source module itself never reaches toward the mouth."""
     imported = _imported_module_names(_CHAT_SOURCE_PATH.read_text(encoding="utf-8"))

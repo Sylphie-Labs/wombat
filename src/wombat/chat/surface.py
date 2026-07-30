@@ -33,6 +33,15 @@ enqueue time, register a broker future under that id, THEN push the event onto t
 instance (never a hardcoded ``"chat"`` literal) are what make the pre-computed id and the
 registry-derived id agree.
 
+TK-296 (DEC-65f, RULING r3 v2.159): if the injected ``ChatSource`` carries a non-``None``
+``context_hook`` (a PUBLIC attribute, ``sources.chat_source.ChatSource``'s own ``wake``
+precedent), ``_accept_message`` fires it ONCE at payload-build time — strictly before the three
+built-in fields are added — and merges its returned mapping UNDER them (``item_kind``/``text``/
+``received_at`` are never overridable, mirroring ``sources.asr.ASRSource``'s TK-289
+``context_hook`` merge order exactly). A raising hook is caught here, logged as ONE loud WARNING,
+and the message proceeds with an unstamped payload — a context-hook failure must never drop or
+delay a typed chat turn.
+
 The held connection then awaits that future up to ``CHAT_REPLY_TIMEOUT_SECONDS`` (30.0): a
 resolve within the window answers ``{"status": "replied", "text": <composed text>}``; a timeout
 answers ``{"status": "held", "id": <item_id>}`` and MOVES the registration into a bounded LATE
@@ -76,7 +85,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -477,7 +486,20 @@ class ChatSurface:
         the ``ChatSource`` (register-before-push, Q-110(d) ruling 4) — no other queue/enqueue
         touch happens here or anywhere else in this module."""
         event_key = uuid4().hex
+        extra_fields: Mapping[str, str] = {}
+        if self._source.context_hook is not None:
+            # TK-296: guarded, unlike the rest of this method — a raising context_hook must
+            # degrade to an unstamped payload, never drop or delay the message (see the module
+            # docstring).
+            try:
+                extra_fields = self._source.context_hook()
+            except Exception:
+                logger.warning(
+                    "chat surface: context_hook raised — proceeding with an unstamped payload",
+                    exc_info=True,
+                )
         payload = {
+            **extra_fields,
             "item_kind": "chat",
             "text": text,
             "received_at": datetime.now(UTC).isoformat(),

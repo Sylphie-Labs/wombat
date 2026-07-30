@@ -18,6 +18,7 @@ from cogworx.loop.graph import StageGraph
 from cogworx.loop.pathway import PathwayRegistry
 from cogworx.loop.result import StageResult, Transition
 from cogworx.loop.state import RunStatus
+from cogworx.model.base import ModelResponse
 from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 from cogworx.testing.doubles import InMemoryGraphStore, InMemoryJournal, InMemoryLatentStore
@@ -48,12 +49,14 @@ from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
 from wombat.persona.builder import Mouth
+from wombat.queue import QueueItem
 from wombat.scratchpad import ScratchpadStore
 from wombat.sources.base import SourceEvent
 from wombat.sources.chat_source import ChatSource
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.substrate import cold_boot_bundle
+from wombat.user_facts import UserFactsStore
 from wombat.voice.reply_context import LastSpokenRegister
 
 # The ten seams the Engine must carry after composition (4 required substrate + 6 optional).
@@ -658,12 +661,14 @@ async def test_assemble_runtime_asr_context_hook_merges_voice_context_with_reply
     assert captured["tz"] == ZoneInfo("UTC")
 
 
-def test_chat_source_has_no_context_hook_seam() -> None:
-    """AC5 (structural): the context_hook seam is wired ONLY into ASRSource -- ChatSource's own
-    constructor never accepts or references it, so a typed chat turn can never carry a context
-    key by construction."""
+def test_chat_source_accepts_a_context_hook_ctor_kwarg() -> None:
+    """TK-296 (DEC-65f, RULING r3 v2.159) supersedes TK-289's AC5: ChatSource NOW accepts an
+    optional context_hook ctor kwarg, held as a PUBLIC attribute (the wake precedent) -- see
+    tests/sources/test_chat_source.py for the shape and tests/chat/test_chat_surface.py for the
+    merge-under-built-ins behavior."""
     params = inspect.signature(ChatSource.__init__).parameters
-    assert "context_hook" not in params
+    assert "context_hook" in params
+    assert ChatSource().context_hook is None
 
 
 @_requires_pg
@@ -747,6 +752,188 @@ async def test_assemble_runtime_asr_context_hook_carries_real_pg_gcal_and_gmail_
 
     assert "Sprint planning" in events[0].payload["context_calendar_today"]
     assert "Standup notes" in events[0].payload["context_recent_email"]
+
+
+# --- TK-296 (DEC-65f): known_user_context stamp + typed-chat context parity -------------------
+
+
+def test_ac3_context_hook_seam_is_never_wired_into_gcal_or_brief_builders() -> None:
+    """AC3 structural half: the shared closure threads ONLY into ASRSource.context_hook (via
+    build_source_registry's context_hook kwarg, itself threaded into _maybe_register_asr ONLY per
+    that module's own docstring) and ChatSource.context_hook -- gcal's poller registration and
+    the brief compose stage builder never accept it, so a gcal/brief surface can never carry
+    known_user_context/replying_to/calendar/gmail keys by construction."""
+    assert (
+        "context_hook"
+        not in inspect.signature(sources_bootstrap_module._maybe_register_gcal).parameters
+    )
+    assert "context_hook" not in inspect.signature(bootstrap.build_brief_compose_stage).parameters
+    assert "context_hook" not in inspect.signature(bootstrap.build_compose_stage).parameters
+
+
+def _tk296_drain_tick() -> Artifact:
+    return Artifact(
+        kind="drain-tick",
+        produced_by="test",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=datetime.now(UTC)),
+        data={},
+    )
+
+
+@_requires_pg
+async def test_ac3_typed_chat_and_voice_turn_each_carry_known_user_context_through_compose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC3 (pg-gated): with seeded facts + external stores and a fresh last_spoken_register, BOTH
+    a typed chat turn AND a voice turn reach the REAL assemble_runtime-wired production Gate ->
+    ComposeStage carrying known_user_context (facts read live from Postgres); the voice turn ALSO
+    carries replying_to. Drives the real drain pathway assemble_runtime registers, swapping in a
+    FakeModel (never a live call) exactly like tests/integration/test_voice_conversation_context_
+    e2e.py (TK-291) does."""
+    assert _PG_DSN is not None
+    dsn = _PG_DSN
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            for table in (
+                "wombat_queue",
+                "daily_ledger",
+                "pending_journal",
+                "wombat_external_items",
+                "wombat_user_facts",
+                "wombat_seen_events",
+            ):
+                cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        conn.commit()
+
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my plate today"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    tz = ZoneInfo("UTC")
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_asr_drop_dir": str(drop_dir),
+            "wombat_chat_handshake_file": str(tmp_path / "chat_handshake.json"),
+        }
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config, dsn=dsn, params=op, replay_pending=True, tz=tz
+    )
+
+    # Seed the SAME dsn the composition-root closure reads -- independent store instances, same
+    # underlying tables.
+    facts_store = UserFactsStore(dsn)
+    external_store = ExternalItemStore(dsn)
+    try:
+        facts_store.upsert_fact("tk296-fact-1", "Likes coffee in the morning", source="told")
+        now = datetime.now(UTC)
+        external_store.upsert_many(
+            "gcal",
+            [
+                ExternalItem(
+                    item_key="tk296-evt-1",
+                    payload={
+                        "event_id": "tk296-evt-1",
+                        "title": "Standup",
+                        "start": now.isoformat(),
+                        "end": now.isoformat(),
+                        "all_day": False,
+                    },
+                    occurs_at=now,
+                )
+            ],
+            fetched_at=now,
+        )
+    finally:
+        facts_store.close()
+        external_store.close()
+
+    # A fresh last_spoken_register entry -- the voice-only distinguishing clause.
+    speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
+    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    register.note_spoken("earlier-item", "Should I send it now?")
+
+    assert bundle.chat_source is not None
+    chat_source = bundle.chat_source
+    assert chat_source.context_hook is not None
+
+    shared_model = FakeModel(
+        response=ModelResponse(text="ok reply", model_id="fake", finish_reason="stop")
+    )
+    models = ModelRegistry()
+    models.register_factory("deepseek", lambda guard: shared_model)
+    engine = Engine(
+        models=models,
+        journal=InMemoryJournal(),
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=bundle.pathways,
+        model_profile="deepseek",
+        clock=lambda: datetime.now(UTC),
+    )
+
+    # ==================================================================== typed chat turn
+    chat_extra = chat_source.context_hook()
+    chat_payload = {
+        **chat_extra,
+        "item_kind": "chat",
+        "text": "what should I know today",
+        "received_at": datetime.now(UTC).isoformat(),
+    }
+    bundle.source_registry._enqueue.enqueue(
+        QueueItem(
+            idempotency_key=derive_key(chat_source.id, "tk296-chat-1"),
+            payload=chat_payload,
+        )
+    )
+    final_chat = await engine.run(
+        run_id="tk296-chat-run",
+        session_id="tk296-chat-run",
+        pathway_id=bundle.drain_pathway_id,
+        initial=_tk296_drain_tick(),
+    )
+    assert final_chat.status is RunStatus.COMPLETED
+    # The compose call is whichever of this turn's model calls carries known_user_context --
+    # located by content rather than a pinned index, so an extra hop (e.g. reflection_compose)
+    # firing on some turns never makes this assertion brittle.
+    chat_compose_calls = [
+        call for call in shared_model.calls if "known_user_context:" in call[1].content
+    ]
+    assert len(chat_compose_calls) == 1
+    chat_user_message = chat_compose_calls[0][1].content
+    assert "Likes coffee in the morning" in chat_user_message
+    calls_before_voice_turn = len(shared_model.calls)
+
+    # ==================================================================== voice turn
+    asr_source = bundle.source_registry._sources["asr"]
+    (drop_dir / "tk296-note.wav").write_bytes(b"tk296-voice-bytes")
+    voice_events = await asr_source.poll()
+    assert len(voice_events) == 1
+    bundle.source_registry._enqueue.enqueue(
+        QueueItem(
+            idempotency_key=derive_key(asr_source.id, voice_events[0].event_key),
+            payload=voice_events[0].payload,
+        )
+    )
+    final_voice = await engine.run(
+        run_id="tk296-voice-run",
+        session_id="tk296-voice-run",
+        pathway_id=bundle.drain_pathway_id,
+        initial=_tk296_drain_tick(),
+    )
+    assert final_voice.status is RunStatus.COMPLETED
+    voice_turn_calls = shared_model.calls[calls_before_voice_turn:]
+    voice_compose_calls = [
+        call for call in voice_turn_calls if "known_user_context:" in call[1].content
+    ]
+    assert len(voice_compose_calls) == 1
+    voice_user_message = voice_compose_calls[0][1].content
+    assert "Likes coffee in the morning" in voice_user_message
+    assert "replying_to: Should I send it now?" in voice_user_message
 
 
 # --- TK-245 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ExternalItemStore(dsn) ------

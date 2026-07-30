@@ -24,6 +24,14 @@ V2.151 ruling, structural (DEC-26 held by construction): the gmail row's ``paylo
 EXACTLY ``{message_id, subject, sender, received_at, priority_band}`` (the DEC-45 projection,
 ``sources/bootstrap.py``'s ``build_external_item_sink``) — the full message content has no key in
 that table at all, so this module reads ONLY the five named projection fields above.
+
+``build_user_facts_context(store)`` (TK-296, DEC-65f) is the sibling grounding builder for the
+durable what-wombat-knows-about-the-user store (``user_facts.UserFactsStore``): AT MOST
+``{"known_user_context": one-fact-per-line block}``, reading ``store.list_facts(_MAX_FACTS_LINES)``
+and rendering via the SAME ``_render`` helper under NEW pinned caps (``_MAX_FACTS_LINES`` = 15 /
+``_MAX_FACTS_CHARS`` = 900, DEC-63 no-knob precedent). Degrade shape mirrors
+``build_voice_context`` EXACTLY: ``store=None`` -> ``{}`` no call no warning, zero rows -> no key,
+any raise -> ``{}`` plus exactly ONE loud warning (CON-3).
 """
 
 from __future__ import annotations
@@ -45,6 +53,10 @@ _GCAL_MAX_CHARS = 800
 _GMAIL_LIMIT = 5
 _GMAIL_MAX_CHARS = 400
 
+# TK-296 (DEC-65f): the known_user_context caps — same no-knob precedent as the pair above.
+_MAX_FACTS_LINES = 15
+_MAX_FACTS_CHARS = 900
+
 
 class VoiceContextStore(Protocol):
     """The structural shape ``build_voice_context`` needs from a store — matches
@@ -55,6 +67,14 @@ class VoiceContextStore(Protocol):
     def get_window(self, source: str, start: datetime, end: datetime) -> list[dict[str, Any]]: ...
 
     def get_recent(self, source: str, limit: int) -> list[dict[str, Any]]: ...
+
+
+class UserFactsContextStore(Protocol):
+    """The structural shape ``build_user_facts_context`` needs from a store — matches
+    ``user_facts.UserFactsStore.list_facts`` exactly (mirrors ``VoiceContextStore`` above); a
+    test fake only needs to satisfy this shape, never import ``UserFactsStore`` itself."""
+
+    def list_facts(self, limit: int) -> list[dict[str, Any]]: ...
 
 
 def build_voice_context(
@@ -105,6 +125,36 @@ def build_voice_context(
     return result
 
 
+def build_user_facts_context(store: UserFactsContextStore | None) -> dict[str, str]:
+    """Return AT MOST ``{"known_user_context": ...}`` — one fact per line, deterministically
+    truncated at ``_MAX_FACTS_LINES`` items / ``_MAX_FACTS_CHARS`` chars (TK-296, DEC-65f).
+
+    ``store`` is ``None`` on an unwired boot: returns ``{}`` immediately, no call, no warning.
+    Zero rows contributes NO key (never an empty string). ANY exception raised by
+    ``store.list_facts`` degrades to ``{}`` plus exactly ONE loud warning (CON-3 parity with
+    ``build_voice_context``).
+    """
+    if store is None:
+        return {}
+    try:
+        rows = store.list_facts(_MAX_FACTS_LINES)
+    except Exception:
+        logger.warning(
+            "build_user_facts_context: store raised — proceeding with no known-user-context "
+            "payload",
+            exc_info=True,
+        )
+        return {}
+    if not rows:
+        return {}
+    rendered = _render(
+        (row["fact"] for row in rows), max_items=_MAX_FACTS_LINES, max_chars=_MAX_FACTS_CHARS
+    )
+    if not rendered:
+        return {}
+    return {"known_user_context": rendered}
+
+
 def _gcal_line(row: dict[str, Any], tz: ZoneInfo) -> str:
     """One compact line for a gcal row's ``payload`` (the raw ``CalendarEvent.to_payload``
     shape: ``event_id``/``title``/``start``/``end``/``all_day``)."""
@@ -144,4 +194,9 @@ def _render(lines: Iterable[str], *, max_items: int, max_chars: int) -> str:
     return "\n".join(kept)
 
 
-__all__ = ["VoiceContextStore", "build_voice_context"]
+__all__ = [
+    "UserFactsContextStore",
+    "VoiceContextStore",
+    "build_user_facts_context",
+    "build_voice_context",
+]

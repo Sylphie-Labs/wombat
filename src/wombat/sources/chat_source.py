@@ -23,11 +23,18 @@ wake once THIS coroutine chain yields, and ``sources.registry.SourceRegistry._po
 await point between ``poll()`` returning and its synchronous sink-call + enqueue loop finishing
 (the next await is its own ``asyncio.sleep`` afterward). So by the time the pump task is actually
 scheduled, the queue write has already committed — single-event-loop atomicity, not a race.
+
+TK-296 (DEC-65f, RULING r3 v2.159): an optional ctor kwarg ``context_hook`` — a callable returning
+extra str-to-str fields — held as a PUBLIC attribute (the ``wake`` precedent above, unlike
+``sources.asr.ASRSource``'s own PRIVATE ``_context_hook``): ``wombat.chat.surface.ChatSurface.
+_accept_message`` reads ``source.context_hook`` directly at payload-build time and merges its
+returned mapping UNDER the built-in ``item_kind``/``text``/``received_at`` fields — this module
+itself never calls it. ``None`` (the default) leaves every existing behavior byte-identical.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from wombat.sources.base import PushSource, SourceEvent
 
@@ -44,13 +51,16 @@ class ChatSource(PushSource):
     """The chat surface's registered ``InputSource`` (Q-110(d) ruling 1). A bare ``PushSource``
     under id ``"chat"`` — no behavior of its own beyond what ``PushSource`` already provides."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, context_hook: Callable[[], Mapping[str, str]] | None = None) -> None:
         super().__init__(id=CHAT_SOURCE_ID, poll_interval_seconds=CHAT_POLL_INTERVAL_SECONDS)
         # TK-269 (DEC-56a): the drain pump's wake callable — ``None`` (today's behavior, no wake)
         # until ``wombat.runtime._drive_and_serve`` sets it on the running loop. A default-None
         # plain attribute (not a constructor arg) because assemble_runtime constructs this
         # instance well before that loop-bound wake exists.
         self.wake: Callable[[], None] | None = None
+        # TK-296 (DEC-65f, RULING r3 v2.159): PUBLIC (mirrors ``wake`` above) so ``chat.surface.
+        # ChatSurface._accept_message`` can read it directly — see the module docstring.
+        self.context_hook = context_hook
 
     async def poll(self) -> list[SourceEvent]:
         """``PushSource.poll()`` plus one thing: if it drained >=1 event, fire ``self.wake`` (see
