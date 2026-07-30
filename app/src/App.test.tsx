@@ -256,6 +256,67 @@ describe("App (TK-200 AC3: notice split)", () => {
   });
 });
 
+describe("App (TK-300 AC6: widened Brevity/Warmth/Humor selects)", () => {
+  it("offers exactly the closed DEC-67b/c level sets on each widened select", async () => {
+    installFakeApi();
+    render(<App />);
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
+
+    const optionTexts = (select: HTMLSelectElement): string[] =>
+      Array.from(select.options).map((option) => option.value);
+
+    expect(optionTexts(screen.getByLabelText("Brevity") as HTMLSelectElement)).toEqual([
+      "terse",
+      "balanced",
+      "expansive",
+      "exhaustive",
+    ]);
+    expect(optionTexts(screen.getByLabelText("Warmth") as HTMLSelectElement)).toEqual([
+      "reserved",
+      "neutral",
+      "warm",
+      "affectionate",
+    ]);
+    expect(optionTexts(screen.getByLabelText("Humor") as HTMLSelectElement)).toEqual([
+      "none",
+      "dry",
+      "playful",
+      "comedian",
+    ]);
+  });
+
+  it("saves a new humor level via the existing patch path, showing the hot-apply hint not the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
+
+    fireEvent.change(screen.getByLabelText("Brevity"), { target: { value: "exhaustive" } });
+    fireEvent.change(screen.getByLabelText("Warmth"), { target: { value: "affectionate" } });
+    fireEvent.change(screen.getByLabelText("Humor"), { target: { value: "comedian" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === "PUT" && call.url.endsWith("/settings"))).toBe(
+        true,
+      );
+    });
+
+    const settingsPut = calls.find(
+      (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+    );
+    expect(settingsPut?.body).toEqual({
+      wombat_persona_brevity: "exhaustive",
+      wombat_persona_warmth: "affectionate",
+      wombat_persona_humor: "comedian",
+    });
+
+    expect(await screen.findByText("Persona changes apply on the next turn.")).toBeTruthy();
+    expect(screen.queryByText("Restart Wombat to apply these changes.")).toBeNull();
+  });
+});
+
 describe("App (TK-249 shell AC1: header/rail/chat dock/Today landing)", () => {
   it("renders the header mark+wordmark, Today as the default landing view, and every nav category", async () => {
     installFakeApi();

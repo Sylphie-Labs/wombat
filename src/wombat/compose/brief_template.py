@@ -36,9 +36,11 @@ built from it, stay byte-untouched. The TK-100 single-source invariant is RESTAT
 as: ``fallback = persona_degrade_wrap(body, matrix)``, and ``persona_degrade_wrap`` is the
 IDENTITY function at ``DEFAULT_MATRIX`` (``brevity=TERSE``, ``warmth=RESERVED``) — so the default
 fallback stays byte-identical to today. Only ``Brevity`` (a fixed header/closing line) and
-``Warmth`` (one fixed greeting line, WARM only) are honored — ``Directness``/``Humor`` have NO
-degrade variant BY RULING and are never read here (pinned by
-``tests/persona/test_degrade_variants.py``).
+``Warmth`` (one fixed greeting line) are honored — ``Directness``/``Humor`` have NO degrade
+variant BY RULING and are never read here (pinned by ``tests/persona/test_degrade_variants.py``).
+TK-300 (DEC-67b/c): EXHAUSTIVE has no degrade variant of its own and joins the EXPANSIVE arm;
+AFFECTIONATE has no degrade variant of its own and joins the WARM arm — neither is a distinct
+degrade rendering.
 """
 
 from __future__ import annotations
@@ -51,6 +53,14 @@ from wombat.calendar.models import CalendarEvent
 from wombat.domain.brief_decision_artifact import BriefDecisionArtifact
 from wombat.domain.brief_payload import GmailBriefItem
 from wombat.persona.matrix import Brevity, PersonaMatrix, Warmth
+
+# TK-300 (DEC-67b/c): EXHAUSTIVE/AFFECTIONATE have no degrade variant of their own — a template
+# cannot honestly write "several paragraphs" or feign enthusiasm from fixed, sealed data — so
+# they join the EXPANSIVE/WARM arms respectively (the ruling: without these explicit folds,
+# EXHAUSTIVE would silently fall to the bare (TERSE) rendering and AFFECTIONATE would silently
+# add no greeting at all).
+_EXPANSIVE_ARM = (Brevity.EXPANSIVE, Brevity.EXHAUSTIVE)
+_WARM_ARM = (Warmth.WARM, Warmth.AFFECTIONATE)
 
 
 # A fixed, terse steward instruction (mirrors compose.py's _system_instruction posture) — no
@@ -192,9 +202,12 @@ def persona_degrade_wrap(body: str, matrix: PersonaMatrix) -> str:
     restated: ``fallback = persona_degrade_wrap(body, matrix)``).
 
     ``matrix.brevity``: TERSE -> ``body`` untouched; BALANCED -> ``_BRIEF_BALANCED_HEADER_LINE``
-    prepended; EXPANSIVE -> that same header prepended AND ``_BRIEF_EXPANSIVE_CLOSING_LINE``
-    appended. ``matrix.warmth``: WARM -> ``_BRIEF_WARM_GREETING_LINE`` prepended AHEAD of
-    everything above (RESERVED/NEUTRAL add nothing).
+    prepended; EXPANSIVE (and EXHAUSTIVE, TK-300 DEC-67b, which joins the SAME arm and has no
+    degrade variant of its own) -> that same header prepended AND
+    ``_BRIEF_EXPANSIVE_CLOSING_LINE`` appended. ``matrix.warmth``: WARM (and AFFECTIONATE,
+    TK-300 DEC-67c, which joins the SAME arm and has no degrade variant of its own) ->
+    ``_BRIEF_WARM_GREETING_LINE`` prepended AHEAD of everything above (RESERVED/NEUTRAL add
+    nothing).
 
     Only ``Brevity``/``Warmth`` are read — ``Directness``/``Humor`` have NO degrade variant BY
     RULING (a template cannot honestly hedge or joke, Q-107(b)) and are never consulted here, at
@@ -202,12 +215,12 @@ def persona_degrade_wrap(body: str, matrix: PersonaMatrix) -> str:
     """
     if matrix.brevity is Brevity.BALANCED:
         lines = [_BRIEF_BALANCED_HEADER_LINE, body]
-    elif matrix.brevity is Brevity.EXPANSIVE:
+    elif matrix.brevity in _EXPANSIVE_ARM:
         lines = [_BRIEF_BALANCED_HEADER_LINE, body, _BRIEF_EXPANSIVE_CLOSING_LINE]
     else:
         lines = [body]
 
-    if matrix.warmth is Warmth.WARM:
+    if matrix.warmth in _WARM_ARM:
         lines = [_BRIEF_WARM_GREETING_LINE, *lines]
 
     return "\n".join(lines)

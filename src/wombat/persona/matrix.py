@@ -7,13 +7,24 @@ fields live here (TK-208 puts them on ``WombatConfig`` itself). TK-208 does add
 ``wombat_persona_*`` fields (a ``Protocol``, Q-106(c)), so this module still never imports
 ``wombat.config`` (no cycle).
 
-FIVE AXES, each a closed named-level enum (DEC-33, amended by DEC-37):
-    - ``Brevity``:     terse | balanced | expansive
-    - ``Warmth``:      reserved | neutral | warm
+FIVE AXES, each a closed named-level enum (DEC-33, amended by DEC-37, WIDENED by DEC-67(b)/(c)
+per TK-300):
+    - ``Brevity``:     terse | balanced | expansive | exhaustive
+    - ``Warmth``:      reserved | neutral | warm | affectionate
     - ``Directness``:  gentle | plain | blunt
-    - ``Humor``:       none | dry — EXACTLY TWO levels. DEC-37(c) struck the recorder-added
-      third level "playful" as unapproved; humor renders only for the compose/brief mouths,
-      never for Gmail drafts or reflection (TK-207 concern, noted here for context only).
+    - ``Humor``:       none | dry | playful | comedian. DEC-37(c) originally struck the
+      recorder-added level "playful" as unapproved at EXACTLY TWO levels; DEC-67(b) supersedes
+      DEC-37(c) IN PART — widening the closed set back to include ``playful`` and adding a new
+      ``comedian`` level, while the set stays CLOSED (still no arbitrary/free-form humor). Humor
+      renders only for the compose/brief/chat mouths, never for Gmail drafts or reflection
+      (TK-207/TK-220 concern, noted here for context only).
+
+      Humor-x-chat composition note (DEC-67(b)): the CHAT base role is already permissive
+      toward user-initiated banter at every humor level — a user who jokes gets rolled with
+      regardless of the humor axis. What the humor axis adds on top is INITIATIVE — whether the
+      mouth originates humor unprompted: ``none`` never initiates a joke; ``dry`` allows one
+      understated aside; ``playful`` jokes when it comes naturally; ``comedian`` always works in
+      a joke, pun, or comic riff.
     - ``Proactivity``: minimal | balanced | forward
 
 ``DEFAULT_MATRIX`` = (terse, reserved, plain, none, balanced). Proactivity's default is
@@ -42,19 +53,23 @@ from typing import Protocol
 
 
 class Brevity(StrEnum):
-    """Closed enum — EXACTLY three levels (DEC-33). No other value is valid."""
+    """Closed enum — EXACTLY four levels (DEC-33, widened by DEC-67(b) per TK-300). No other
+    value is valid."""
 
     TERSE = "terse"
     BALANCED = "balanced"
     EXPANSIVE = "expansive"
+    EXHAUSTIVE = "exhaustive"
 
 
 class Warmth(StrEnum):
-    """Closed enum — EXACTLY three levels (DEC-33). No other value is valid."""
+    """Closed enum — EXACTLY four levels (DEC-33, widened by DEC-67(c) per TK-300). No other
+    value is valid."""
 
     RESERVED = "reserved"
     NEUTRAL = "neutral"
     WARM = "warm"
+    AFFECTIONATE = "affectionate"
 
 
 class Directness(StrEnum):
@@ -66,10 +81,14 @@ class Directness(StrEnum):
 
 
 class Humor(StrEnum):
-    """Closed enum — EXACTLY two levels (DEC-37(c) struck "playful"). No other value is valid."""
+    """Closed enum — EXACTLY four levels (DEC-37(c) originally struck "playful" at two levels;
+    DEC-67(b) supersedes DEC-37(c) in part, widening the closed set to four). No other value is
+    valid."""
 
     NONE = "none"
     DRY = "dry"
+    PLAYFUL = "playful"
+    COMEDIAN = "comedian"
 
 
 class Proactivity(StrEnum):

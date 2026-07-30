@@ -22,6 +22,12 @@ from wombat.gate.models import ItemKind
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Brevity
 
+# TK-300 (DEC-67b): EXHAUSTIVE has no degrade variant of its own — a template cannot honestly
+# write "several paragraphs" from a fixed payload — so it joins the EXPANSIVE arm (the ruling:
+# without this explicit fold, EXHAUSTIVE would silently fall through to the BALANCED rendering
+# instead, which is the wrong side of the brevity ladder).
+_EXPANSIVE_ARM = (Brevity.EXPANSIVE, Brevity.EXHAUSTIVE)
+
 
 def format_payload_fields(payload: dict[str, Any]) -> str:
     """Render a payload dict as deterministic ``key: value`` text, sorted by key.
@@ -55,8 +61,10 @@ class TemplateComposer:
     every ``render`` call. ``None`` (the default) or ``brevity=TERSE`` renders the ORIGINAL
     one-line bytes, byte-identical to every pre-TK-216 caller/test. ``BALANCED`` renders a
     kind-header line followed by one ``key: value`` line per (sorted) payload field. ``EXPANSIVE``
-    is the BALANCED layout plus ``_EXPANSIVE_CLOSING_LINE`` appended. ``Directness``/``Humor`` are
-    never read here — see the module docstring.
+    is the BALANCED layout plus ``_EXPANSIVE_CLOSING_LINE`` appended; ``EXHAUSTIVE`` (TK-300,
+    DEC-67b) joins the SAME EXPANSIVE arm — it has no degrade variant of its own, so it renders
+    byte-identical to ``EXPANSIVE``. ``Directness``/``Humor`` are never read here — see the
+    module docstring.
     """
 
     def __init__(self, live_persona: LivePersona | None = None) -> None:
@@ -71,7 +79,7 @@ class TemplateComposer:
             return f"[{item_kind.value}] {format_payload_fields(payload)}"
 
         lines = [f"[{item_kind.value}]", *_sorted_field_lines(payload)]
-        if matrix.brevity is Brevity.EXPANSIVE:
+        if matrix.brevity in _EXPANSIVE_ARM:
             lines.append(_EXPANSIVE_CLOSING_LINE)
         return "\n".join(lines)
 

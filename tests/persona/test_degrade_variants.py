@@ -16,6 +16,12 @@ joke) — this asymmetry is pinned here, never silent.
   Also: a degraded ``ComposeStage`` run (model raising) with a wired ``live_persona`` at
       ``brevity=BALANCED`` emits the balanced template in its ``composed_output`` artifact
       (drive-level integration, cheap).
+
+TK-300 (DEC-67b/c) AC4: EXHAUSTIVE has no degrade variant of its own and folds into the SAME
+EXPANSIVE arm (both ``TemplateComposer.render`` and ``persona_degrade_wrap``); AFFECTIONATE has
+no degrade variant of its own and folds into the SAME WARM arm (``persona_degrade_wrap`` only —
+``TemplateComposer`` has no warmth-bearing content). Humor is never consulted on degrade at any
+level, including the two new ones (DEC-37(e) honest asymmetry, unaffected by the widening).
 """
 
 from __future__ import annotations
@@ -190,6 +196,57 @@ def test_ac2_persona_degrade_wrap_reserved_and_neutral_add_nothing(warmth: Warmt
     wrapped = persona_degrade_wrap(body, _matrix_with(warmth=warmth))
 
     assert wrapped == body
+
+
+# --------------------------------------------------------------------------- TK-300 AC4 (DEC-67b/c)
+
+
+def test_ac4_template_composer_exhaustive_renders_the_same_as_expansive() -> None:
+    """EXHAUSTIVE has no degrade variant of its own — a template cannot honestly write "several
+    paragraphs" — so it joins the EXPANSIVE arm and renders byte-identical to it."""
+    expansive_composer = TemplateComposer(
+        live_persona=_live_persona(_matrix_with(brevity=Brevity.EXPANSIVE))
+    )
+    exhaustive_composer = TemplateComposer(
+        live_persona=_live_persona(_matrix_with(brevity=Brevity.EXHAUSTIVE))
+    )
+
+    expansive = expansive_composer.render(_ITEM_KIND, _PAYLOAD)
+    exhaustive = exhaustive_composer.render(_ITEM_KIND, _PAYLOAD)
+
+    assert exhaustive == expansive
+    assert exhaustive == "[generic]\na: 1\nb: 2\nThat's everything for this item."
+
+
+def test_ac4_persona_degrade_wrap_exhaustive_folds_into_expansive_arm() -> None:
+    body = _quiet_brief_body()
+
+    expansive_wrap = persona_degrade_wrap(body, _matrix_with(brevity=Brevity.EXPANSIVE))
+    exhaustive_wrap = persona_degrade_wrap(body, _matrix_with(brevity=Brevity.EXHAUSTIVE))
+
+    assert exhaustive_wrap == expansive_wrap
+
+
+def test_ac4_persona_degrade_wrap_affectionate_folds_into_warm_arm() -> None:
+    body = _quiet_brief_body()
+
+    warm_wrap = persona_degrade_wrap(body, _matrix_with(warmth=Warmth.WARM))
+    affectionate_wrap = persona_degrade_wrap(body, _matrix_with(warmth=Warmth.AFFECTIONATE))
+
+    assert affectionate_wrap == warm_wrap
+    assert affectionate_wrap.splitlines()[0] == "Good morning!"
+
+
+def test_ac4_humor_adds_nothing_at_the_two_new_levels_either() -> None:
+    """DEC-37(e) honest asymmetry, restated for the two new humor levels: neither the template
+    composer nor the brief degrade wrap ever reads humor, at any level."""
+    body = _quiet_brief_body()
+    for humor_level in (Humor.PLAYFUL, Humor.COMEDIAN):
+        matrix = _matrix_with(humor=humor_level)
+        composer = TemplateComposer(live_persona=_live_persona(matrix))
+
+        assert composer.render(_ITEM_KIND, _PAYLOAD) == "[generic] a: 1; b: 2"
+        assert persona_degrade_wrap(body, matrix) == body
 
 
 # --------------------------------------------------------------------------------------- AC3

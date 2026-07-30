@@ -417,6 +417,46 @@ def test_put_settings_out_of_vocab_value_is_422() -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("wombat_persona_brevity", "exhaustive"),
+        ("wombat_persona_warmth", "affectionate"),
+        ("wombat_persona_humor", "playful"),
+        ("wombat_persona_humor", "comedian"),
+    ],
+)
+def test_put_settings_tk300_widened_persona_level_is_200_and_persists(
+    field: str, value: str
+) -> None:
+    """AC5 (TK-300, DEC-67b/c): each newly-admitted level PUTs 200 and round-trips on GET."""
+    client = _client()
+
+    response = client.put("/settings", json={field: value}, headers={"X-Wombat-Token": TOKEN})
+    assert response.status_code == 200
+    assert response.json()["settings"][field] == value
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"][field] == value
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("wombat_persona_brevity", "verbose"),
+        ("wombat_persona_warmth", "gushing"),
+        ("wombat_persona_humor", "sarcastic"),
+    ],
+)
+def test_put_settings_persona_out_of_vocab_value_is_422(field: str, value: str) -> None:
+    """AC5: an out-of-vocab value on the widened axes still 422s, closed-set discipline."""
+    client = _client()
+
+    response = client.put("/settings", json={field: value}, headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 422
+
+
 def test_put_settings_unknown_key_is_422() -> None:
     client = _client()
     response = client.put(

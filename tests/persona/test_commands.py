@@ -166,10 +166,10 @@ def test_saturation_at_low_end_for_every_axis() -> None:
 
 def test_saturation_at_high_end_for_every_axis() -> None:
     high_matrix = PersonaMatrix(
-        brevity=Brevity.EXPANSIVE,
-        warmth=Warmth.WARM,
+        brevity=Brevity.EXHAUSTIVE,
+        warmth=Warmth.AFFECTIONATE,
         directness=Directness.BLUNT,
-        humor=Humor.DRY,
+        humor=Humor.COMEDIAN,
         proactivity=Proactivity.FORWARD,
     )
     for _utterance, command in GRAMMAR:

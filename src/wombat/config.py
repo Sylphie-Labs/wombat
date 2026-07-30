@@ -235,10 +235,12 @@ class WombatConfig(BaseSettings):
     # hot-applying them into a live persona, TK-215 owns proactivity's gate-side actuation. Each
     # axis's vocabulary is closed (a ``Literal``) and enforced at boot: an unrecognized value
     # fails ``load_config`` loudly, naming the offending variable (e.g. ``WOMBAT_PERSONA_HUMOR``).
-    wombat_persona_brevity: Literal["terse", "balanced", "expansive"] = "terse"
-    wombat_persona_warmth: Literal["reserved", "neutral", "warm"] = "reserved"
+    # TK-300 (DEC-67b/c): brevity/warmth/humor widened — see wombat.persona.matrix for the
+    # closed-set rationale.
+    wombat_persona_brevity: Literal["terse", "balanced", "expansive", "exhaustive"] = "terse"
+    wombat_persona_warmth: Literal["reserved", "neutral", "warm", "affectionate"] = "reserved"
     wombat_persona_directness: Literal["gentle", "plain", "blunt"] = "plain"
-    wombat_persona_humor: Literal["none", "dry"] = "none"
+    wombat_persona_humor: Literal["none", "dry", "playful", "comedian"] = "none"
     wombat_persona_proactivity: Literal["minimal", "balanced", "forward"] = "balanced"
 
     # OPTIONAL (TK-222, EP-32, Q-110(d)): the runtime chat surface's handshake-file path — an

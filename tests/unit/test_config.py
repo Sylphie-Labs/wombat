@@ -29,7 +29,7 @@ from wombat.config import (
     load_config,
     resolve_wombat_zone,
 )
-from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Humor, matrix_from_config
+from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Humor, Warmth, matrix_from_config
 from wombat.settings_store import SettingsStore, ensure_schema
 
 _PG_DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
@@ -320,7 +320,9 @@ def test_load_config_table_drops_secret_row_and_invalid_admitted_value(
         conn.commit()
     store = SettingsStore(_PG_DSN)
     try:
-        store.put({"wombat_persona_humor": "playful", "wombat_assistant_name": "Kip"})
+        # TK-300 (DEC-67b): "playful" is now a valid humor level — use "sarcastic", still
+        # outside the closed set, to exercise the out-of-vocab drop.
+        store.put({"wombat_persona_humor": "sarcastic", "wombat_assistant_name": "Kip"})
     finally:
         store.close()
 
@@ -334,7 +336,7 @@ def test_load_config_table_drops_secret_row_and_invalid_admitted_value(
     assert len(warnings) == 2
     assert any("deepseek_api_key" in w.message for w in warnings)
     assert any(
-        "wombat_persona_humor" in w.message and "playful" in w.message for w in warnings
+        "wombat_persona_humor" in w.message and "sarcastic" in w.message for w in warnings
     )
 
 
@@ -408,6 +410,25 @@ def test_load_config_populates_persona_fields_when_set_others_default(
     assert matrix.warmth == DEFAULT_MATRIX.warmth
     assert matrix.directness == DEFAULT_MATRIX.directness
     assert matrix.proactivity == DEFAULT_MATRIX.proactivity
+
+
+def test_load_config_accepts_the_tk300_widened_persona_levels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-300 (DEC-67b/c): the widened brevity/warmth/humor levels load without raising."""
+
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_PERSONA_BREVITY", "exhaustive")
+    monkeypatch.setenv("WOMBAT_PERSONA_WARMTH", "affectionate")
+    monkeypatch.setenv("WOMBAT_PERSONA_HUMOR", "comedian")
+
+    config = load_config()
+    matrix = matrix_from_config(config)
+
+    assert matrix.brevity == Brevity.EXHAUSTIVE
+    assert matrix.warmth == Warmth.AFFECTIONATE
+    assert matrix.humor == Humor.COMEDIAN
 
 
 def test_load_config_rejects_unknown_persona_warmth_naming_the_var(
@@ -547,9 +568,11 @@ def test_load_config_table_accepts_user_name_str(
 def test_load_config_rejects_unknown_persona_humor_env_var_naming_it_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # TK-300 (DEC-67b): "playful" is now a valid humor level — use "sarcastic", still outside
+    # the closed set, so this still exercises the env-tier fail-loud path.
     monkeypatch.chdir(tmp_path)
     _set_required_env(monkeypatch)
-    monkeypatch.setenv("WOMBAT_PERSONA_HUMOR", "playful")
+    monkeypatch.setenv("WOMBAT_PERSONA_HUMOR", "sarcastic")
 
     with pytest.raises(ConfigurationError) as exc_info:
         load_config()

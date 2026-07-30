@@ -113,6 +113,7 @@ GRAMMAR: tuple[tuple[str, PersonaCommand], ...] = (
     ("set brevity to terse", _set("brevity", Brevity.TERSE.value)),
     ("set brevity to balanced", _set("brevity", Brevity.BALANCED.value)),
     ("set brevity to expansive", _set("brevity", Brevity.EXPANSIVE.value)),
+    ("set brevity to exhaustive", _set("brevity", Brevity.EXHAUSTIVE.value)),
     # warmth — step
     ("be warmer", _step("warmth", 1)),
     ("be more reserved", _step("warmth", -1)),
@@ -120,6 +121,7 @@ GRAMMAR: tuple[tuple[str, PersonaCommand], ...] = (
     ("set warmth to reserved", _set("warmth", Warmth.RESERVED.value)),
     ("set warmth to neutral", _set("warmth", Warmth.NEUTRAL.value)),
     ("set warmth to warm", _set("warmth", Warmth.WARM.value)),
+    ("set warmth to affectionate", _set("warmth", Warmth.AFFECTIONATE.value)),
     # directness — step
     ("be more direct", _step("directness", 1)),
     ("be gentler", _step("directness", -1)),
@@ -133,6 +135,8 @@ GRAMMAR: tuple[tuple[str, PersonaCommand], ...] = (
     # humor — set-level
     ("set humor to none", _set("humor", Humor.NONE.value)),
     ("set humor to dry", _set("humor", Humor.DRY.value)),
+    ("set humor to playful", _set("humor", Humor.PLAYFUL.value)),
+    ("set humor to comedian", _set("humor", Humor.COMEDIAN.value)),
     # proactivity — step
     ("be more proactive", _step("proactivity", 1)),
     ("be less proactive", _step("proactivity", -1)),

@@ -1,12 +1,14 @@
-"""TK-207 — ``instruction_for`` pure clause algebra acceptance criteria (EP-33, DEC-33/DEC-37).
+"""TK-207 — ``instruction_for`` pure clause algebra acceptance criteria (EP-33, DEC-33/DEC-37,
+widened by TK-300's DEC-67b/c).
 
   AC1 byte-identity at DEFAULT_MATRIX: COMPOSE/BRIEF/DRAFT match their live TK-194 builder output
       for the same name (>=2 names each); REFLECTION matches ``_SYSTEM_INSTRUCTION`` verbatim for
       every tested name (it has no name slot).
-  AC2 exhaustive property over all 162 matrix combinations, per mouth: guard_suffix is always a
-      verbatim substring; rendering is deterministic; each non-default level of
-      brevity/warmth/directness changes the output of ALL FOUR mouths relative to DEFAULT; each
-      non-default humor level changes COMPOSE/BRIEF but the humor clause text never appears in
+  AC2 exhaustive property over all 576 matrix combinations (TK-300: brevity/warmth/humor each
+      widened), per mouth: guard_suffix is always a verbatim substring; rendering is
+      deterministic; each non-default level of brevity/warmth/directness changes the output of
+      ALL FOUR mouths relative to DEFAULT; each non-default humor level (including the two new
+      ones, playful/comedian) changes COMPOSE/BRIEF but the humor clause text never appears in
       DRAFT/REFLECTION output at any level; proactivity changes nothing (equality across its
       three levels, other axes fixed).
   AC3 purity: builder.py imports nothing beyond stdlib enum/dataclasses/typing plus
@@ -108,8 +110,10 @@ def _all_matrices() -> list[PersonaMatrix]:
     ]
 
 
-def test_full_matrix_space_is_162() -> None:
-    assert len(_all_matrices()) == 162
+def test_full_matrix_space_is_576() -> None:
+    """TK-300 (DEC-67b/c): brevity/warmth/humor each widened from 3/3/2 to 4/4/4 levels, so the
+    full space is 4*4*3*4*3 = 576."""
+    assert len(_all_matrices()) == 576
 
 
 @pytest.mark.parametrize("mouth", _ALL_MOUTHS)
@@ -169,22 +173,40 @@ def test_non_default_directness_changes_output(mouth: Mouth) -> None:
         assert instruction_for(mouth, matrix, "Steward") != default_output
 
 
-def test_non_default_humor_changes_compose_and_brief() -> None:
+@pytest.mark.parametrize("humor_level", (Humor.DRY, Humor.PLAYFUL, Humor.COMEDIAN))
+def test_non_default_humor_changes_compose_and_brief(humor_level: Humor) -> None:
     for mouth in (Mouth.COMPOSE, Mouth.BRIEF):
         default_output = instruction_for(mouth, DEFAULT_MATRIX, "Steward")
         matrix = PersonaMatrix(
             brevity=DEFAULT_MATRIX.brevity,
             warmth=DEFAULT_MATRIX.warmth,
             directness=DEFAULT_MATRIX.directness,
-            humor=Humor.DRY,
+            humor=humor_level,
             proactivity=DEFAULT_MATRIX.proactivity,
         )
         assert instruction_for(mouth, matrix, "Steward") != default_output
 
 
+def test_comedian_clause_verbatim_on_compose_brief_chat() -> None:
+    """TK-300 AC2: the comedian clause text (DEC-67b, pinned) appears verbatim on every mouth
+    that grants humor — compose/brief/chat — when humor=comedian."""
+    comedian_sentence = default_policy().clauses["humor"][Humor.COMEDIAN.value]
+    matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=DEFAULT_MATRIX.directness,
+        humor=Humor.COMEDIAN,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    for mouth in (Mouth.COMPOSE, Mouth.BRIEF, Mouth.CHAT):
+        assert comedian_sentence in instruction_for(mouth, matrix, "Steward")
+
+
 @pytest.mark.parametrize("mouth", (Mouth.DRAFT, Mouth.REFLECTION))
 def test_humor_clause_text_absent_from_draft_and_reflection_at_every_level(mouth: Mouth) -> None:
-    humor_sentence = default_policy().clauses["humor"][Humor.DRY.value]
+    """TK-300 AC2: draft/reflection carry NO humor clause at any level, including the two new
+    ones (playful/comedian)."""
+    humor_clauses = default_policy().clauses["humor"]
     for humor_level in Humor:
         matrix = PersonaMatrix(
             brevity=DEFAULT_MATRIX.brevity,
@@ -193,7 +215,10 @@ def test_humor_clause_text_absent_from_draft_and_reflection_at_every_level(mouth
             humor=humor_level,
             proactivity=DEFAULT_MATRIX.proactivity,
         )
-        assert humor_sentence not in instruction_for(mouth, matrix, "Steward")
+        rendered = instruction_for(mouth, matrix, "Steward")
+        clause_text = humor_clauses[humor_level.value]
+        if clause_text:
+            assert clause_text not in rendered
 
 
 @pytest.mark.parametrize("mouth", _ALL_MOUTHS)

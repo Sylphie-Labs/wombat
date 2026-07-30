@@ -20,7 +20,9 @@
 #     DEC-38(5) byte-identity invariant, enforced structurally by the loader — not just by
 #     convention — so DEFAULT_MATRIX always renders zero added bytes from clauses.
 
-version: 2
+# v3 (TK-300, DEC-67b/c): brevity gains exhaustive, warmth gains affectionate, humor gains
+# playful + comedian — see persona/matrix.py for the closed-set widening rationale.
+version: 3
 
 # mouth_axes: per-mouth list of the prompt axes that RENDER for that mouth (DEC-38(1) unbars
 # per-mouth placement structurally, superseding-in-part DEC-37(c)'s code walls — this SHIPPED
@@ -63,10 +65,14 @@ clauses:
     # strictly ordered chain rather than collapsing into each other; asks for a short
     # paragraph rather than merely "a bit more detail and context."
     expansive: "Write a short paragraph, roughly four to six sentences, with full context, detail, and any relevant nuance."
+    # TK-300 (DEC-67b): pinned verbatim.
+    exhaustive: "Write a thorough, complete response - several paragraphs when the subject warrants, covering full context, detail, implications, and nuance."
   warmth:
     reserved: ""
     neutral: "Keep the tone even and matter-of-fact."
     warm: "Let the tone feel warm and friendly."
+    # TK-300 (DEC-67c): pinned verbatim.
+    affectionate: "Let the tone feel openly affectionate and enthusiastic, like a close friend who is glad to be talking."
   directness:
     gentle: "Soften the phrasing and hedge gently."
     plain: ""
@@ -81,3 +87,7 @@ clauses:
     # a structurally-detectable prose aside (eval_fixtures.has_humor_aside) on both COMPOSE and
     # BRIEF.
     dry: "Work in one dry, understated aside, set off in parentheses or dashes."
+    # TK-300 (DEC-67b): pinned verbatim.
+    playful: "Be playful: work in at least one light joke, pun, or witty remark, woven naturally into the reply."
+    # TK-300 (DEC-67b): pinned verbatim.
+    comedian: "Be a constant comedian: every reply must carry at least one joke, pun, or comic riff on the subject at hand, and playful exaggeration is welcome - as long as the actual information still comes through clearly."

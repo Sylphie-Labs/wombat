@@ -54,7 +54,9 @@ from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Directness, Humor, Wa
 # level is added, removed, or renamed, so a persisted file can be reconciled against the
 # code's expectation (wombat.params.OPERATING_PARAMS_VERSION precedent).
 # v2 (TK-292, DEC-65a/c): the chat mouth was added to mouth_axes.
-PERSONA_POLICY_VERSION = 2
+# v3 (TK-300, DEC-67b/c): brevity gained exhaustive, warmth gained affectionate, humor gained
+# playful + comedian.
+PERSONA_POLICY_VERSION = 3
 
 _POLICY_FILENAME = "persona_policy.yaml"
 

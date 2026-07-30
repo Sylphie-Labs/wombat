@@ -1,11 +1,12 @@
-"""TK-206 — PersonaMatrix domain type acceptance criteria (EP-33, DEC-33/DEC-37).
+"""TK-206 — PersonaMatrix domain type acceptance criteria (EP-33, DEC-33/DEC-37, widened by
+TK-300's DEC-67b/c).
 
-  AC1 each axis has EXACTLY the DEC-33/DEC-37 levels (checked against the enum member list);
-      ``PersonaMatrix`` is frozen + hashable (``hash()`` works; ``FrozenInstanceError`` on
+  AC1 each axis has EXACTLY the DEC-33/DEC-37/DEC-67 levels (checked against the enum member
+      list); ``PersonaMatrix`` is frozen + hashable (``hash()`` works; ``FrozenInstanceError`` on
       attribute set); ``DEFAULT_MATRIX`` == (terse, reserved, plain, none, balanced).
-  AC2 round-trip: for every matrix in the full 3*3*3*2*3=162 space,
-      ``from_strings(to_strings(m)) == m``; parsing a dict with an invalid axis value raises
-      ``ValueError`` whose message names both the axis and the offending value.
+  AC2 round-trip: for every matrix in the full 4*4*3*4*3=576 space (TK-300: brevity/warmth/
+      humor each widened), ``from_strings(to_strings(m)) == m``; parsing a dict with an invalid
+      axis value raises ``ValueError`` whose message names both the axis and the offending value.
   AC3 the module docstring names all six constitution-excluded axes and their ids
       (CON-2, CON-3, CON-6, CON-1, CON-5, NG-2, NG-3).
 """
@@ -37,19 +38,26 @@ from wombat.persona.matrix import (
 
 
 def test_brevity_levels() -> None:
-    assert list(Brevity) == [Brevity.TERSE, Brevity.BALANCED, Brevity.EXPANSIVE]
+    assert list(Brevity) == [
+        Brevity.TERSE,
+        Brevity.BALANCED,
+        Brevity.EXPANSIVE,
+        Brevity.EXHAUSTIVE,
+    ]
 
 
 def test_warmth_levels() -> None:
-    assert list(Warmth) == [Warmth.RESERVED, Warmth.NEUTRAL, Warmth.WARM]
+    assert list(Warmth) == [Warmth.RESERVED, Warmth.NEUTRAL, Warmth.WARM, Warmth.AFFECTIONATE]
 
 
 def test_directness_levels() -> None:
     assert list(Directness) == [Directness.GENTLE, Directness.PLAIN, Directness.BLUNT]
 
 
-def test_humor_levels_exactly_two() -> None:
-    assert list(Humor) == [Humor.NONE, Humor.DRY]
+def test_humor_levels_exactly_four() -> None:
+    """TK-300 (DEC-67b): supersedes-in-part DEC-37(c)'s two-level closure — the set widens to
+    four but stays closed."""
+    assert list(Humor) == [Humor.NONE, Humor.DRY, Humor.PLAYFUL, Humor.COMEDIAN]
 
 
 def test_proactivity_levels() -> None:
@@ -83,8 +91,10 @@ def _all_matrices() -> list[PersonaMatrix]:
     ]
 
 
-def test_full_space_is_162() -> None:
-    assert len(_all_matrices()) == 3 * 3 * 3 * 2 * 3 == 162
+def test_full_space_is_576() -> None:
+    """TK-300 (DEC-67b/c): brevity/warmth/humor each widened from 3/3/2 to 4/4/4 levels, so the
+    full space is 4*4*3*4*3 = 576."""
+    assert len(_all_matrices()) == 4 * 4 * 3 * 4 * 3 == 576
 
 
 def test_round_trip_full_space() -> None:

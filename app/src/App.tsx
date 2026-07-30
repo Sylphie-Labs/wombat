@@ -97,15 +97,19 @@ const PROVIDER_OPTIONS: SelectOption[] = [
 ];
 
 // src/wombat/persona/matrix.py's five closed axes, verbatim named levels.
+// TK-300 (DEC-67b/c): brevity gains Exhaustive, warmth gains Affectionate, humor gains
+// Playful + Comedian.
 const BREVITY_OPTIONS: SelectOption[] = [
   { value: "terse", label: "Terse" },
   { value: "balanced", label: "Balanced" },
   { value: "expansive", label: "Expansive" },
+  { value: "exhaustive", label: "Exhaustive" },
 ];
 const WARMTH_OPTIONS: SelectOption[] = [
   { value: "reserved", label: "Reserved" },
   { value: "neutral", label: "Neutral" },
   { value: "warm", label: "Warm" },
+  { value: "affectionate", label: "Affectionate" },
 ];
 const DIRECTNESS_OPTIONS: SelectOption[] = [
   { value: "gentle", label: "Gentle" },
@@ -115,6 +119,8 @@ const DIRECTNESS_OPTIONS: SelectOption[] = [
 const HUMOR_OPTIONS: SelectOption[] = [
   { value: "none", label: "None" },
   { value: "dry", label: "Dry" },
+  { value: "playful", label: "Playful" },
+  { value: "comedian", label: "Comedian (jokes all the time)" },
 ];
 const PROACTIVITY_OPTIONS: SelectOption[] = [
   { value: "minimal", label: "Minimal" },

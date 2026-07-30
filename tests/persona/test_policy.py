@@ -10,6 +10,12 @@
 AC1 (byte-identity from data, now fed through wombat.persona.policy) is exercised by
 tests/persona/test_builder.py — this module holds the loader's OWN acceptance criteria plus the
 AC2 data-driven-placement scenario.
+
+TK-300 (DEC-67b/c): PERSONA_POLICY_VERSION 2->3 — brevity gains exhaustive, warmth gains
+affectionate, humor gains playful/comedian. The "TK-300 (DEC-67b/c) AC3" section below covers:
+exhaustive/affectionate/playful/comedian clause texts verbatim on the shipped policy, both
+render on granted mouths, a version-2 file now fails loud, and proactivity-anywhere is still
+rejected (pre-existing tests above, unaffected by the widening).
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ import yaml
 
 from wombat.persona.builder import ClauseAlgebraStrategy, Mouth
 from wombat.persona.expression import EMPTY_CUES, render_expression
-from wombat.persona.matrix import DEFAULT_MATRIX, Humor, PersonaMatrix
+from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Humor, PersonaMatrix, Warmth
 from wombat.persona.policy import (
     PERSONA_POLICY_VERSION,
     PersonaPolicyError,
@@ -53,11 +59,13 @@ def _valid_policy_dict() -> dict[str, Any]:
                 "terse": "",
                 "balanced": "A sentence or two is fine if it helps clarity.",
                 "expansive": "Feel free to add a bit more detail and context.",
+                "exhaustive": "Write a thorough, complete response.",
             },
             "warmth": {
                 "reserved": "",
                 "neutral": "Keep the tone even and matter-of-fact.",
                 "warm": "Let the tone feel warm and friendly.",
+                "affectionate": "Let the tone feel openly affectionate.",
             },
             "directness": {
                 "gentle": "Soften the phrasing and hedge gently.",
@@ -67,6 +75,8 @@ def _valid_policy_dict() -> dict[str, Any]:
             "humor": {
                 "none": "",
                 "dry": "A touch of dry humor is welcome.",
+                "playful": "Be playful with a light joke.",
+                "comedian": "Be a constant comedian.",
             },
         },
     }
@@ -163,6 +173,57 @@ def test_default_policy_is_cached_singleton() -> None:
     assert default_policy() is default_policy()
 
 
+# ----------------------------------------------------------------------- TK-300 (DEC-67b/c) AC3
+
+
+def test_shipped_exhaustive_clause_is_the_pinned_text() -> None:
+    assert default_policy().clauses["brevity"][Brevity.EXHAUSTIVE.value] == (
+        "Write a thorough, complete response - several paragraphs when the subject warrants, "
+        "covering full context, detail, implications, and nuance."
+    )
+
+
+def test_shipped_affectionate_clause_is_the_pinned_text() -> None:
+    assert default_policy().clauses["warmth"][Warmth.AFFECTIONATE.value] == (
+        "Let the tone feel openly affectionate and enthusiastic, like a close friend who is "
+        "glad to be talking."
+    )
+
+
+def test_shipped_playful_clause_is_the_pinned_text() -> None:
+    assert default_policy().clauses["humor"][Humor.PLAYFUL.value] == (
+        "Be playful: work in at least one light joke, pun, or witty remark, woven naturally "
+        "into the reply."
+    )
+
+
+def test_shipped_comedian_clause_is_the_pinned_text() -> None:
+    assert default_policy().clauses["humor"][Humor.COMEDIAN.value] == (
+        "Be a constant comedian: every reply must carry at least one joke, pun, or comic riff "
+        "on the subject at hand, and playful exaggeration is welcome - as long as the actual "
+        "information still comes through clearly."
+    )
+
+
+@pytest.mark.parametrize("mouth", (Mouth.COMPOSE, Mouth.BRIEF, Mouth.CHAT))
+def test_exhaustive_and_affectionate_clauses_render_verbatim_on_granted_mouths(
+    mouth: Mouth,
+) -> None:
+    policy = default_policy()
+    matrix = PersonaMatrix(
+        brevity=Brevity.EXHAUSTIVE,
+        warmth=Warmth.AFFECTIONATE,
+        directness=DEFAULT_MATRIX.directness,
+        humor=DEFAULT_MATRIX.humor,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    strategy = ClauseAlgebraStrategy("Steward", policy=policy)
+    result = render_expression(strategy, mouth, matrix, EMPTY_CUES)
+
+    assert policy.clauses["brevity"][Brevity.EXHAUSTIVE.value] in result.instruction
+    assert policy.clauses["warmth"][Warmth.AFFECTIONATE.value] in result.instruction
+
+
 # --------------------------------------------------------------------------------------- AC3
 
 
@@ -186,6 +247,15 @@ def test_non_mapping_yaml_fails_loud(tmp_path: Path) -> None:
 def test_version_mismatch_fails_loud(tmp_path: Path) -> None:
     payload = _valid_policy_dict()
     payload["version"] = PERSONA_POLICY_VERSION + 1
+    with pytest.raises(PersonaPolicyError, match="version"):
+        load_policy(_write_policy(tmp_path, payload))
+
+
+def test_version_2_policy_file_now_fails_loud(tmp_path: Path) -> None:
+    """TK-300: PERSONA_POLICY_VERSION bumped 2->3 (DEC-67b/c) — a policy file still pinned at
+    the pre-widening version 2 must fail loud rather than silently reconcile."""
+    payload = _valid_policy_dict()
+    payload["version"] = 2
     with pytest.raises(PersonaPolicyError, match="version"):
         load_policy(_write_policy(tmp_path, payload))
 
@@ -255,7 +325,9 @@ def test_missing_axis_key_in_clauses_fails_loud(tmp_path: Path) -> None:
 
 def test_unknown_level_key_fails_loud(tmp_path: Path) -> None:
     payload = _valid_policy_dict()
-    payload["clauses"]["humor"]["playful"] = "Struck by DEC-37(c) — must never validate."
+    # TK-300 (DEC-67b): "playful" is now a valid humor level, so this uses a level name still
+    # outside the closed set — the loader must still reject it.
+    payload["clauses"]["humor"]["sarcastic"] = "Never a real level — must never validate."
     with pytest.raises(PersonaPolicyError, match="unknown level key"):
         load_policy(_write_policy(tmp_path, payload))
 
