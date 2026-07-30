@@ -555,6 +555,9 @@ def build_speech_shape_stage(
         spend_ledger=spend_ledger,
         daily_token_ceiling=op.mouth_daily_token_ceiling,
         timeout_seconds=op.mouth_model_timeout_seconds,
+        # TK-303 (DEC-67e): the DEC-64 spoken-reply length cap, restart-tier from the settings
+        # table/env (no hot-apply).
+        max_chars=config.wombat_spoken_reply_max_chars,
     )
 
 
@@ -1042,7 +1045,11 @@ def assemble_runtime(
     # note_spoken bound method into BOTH speak sites below (this drain-graph SpeakSink AND the
     # brief pathway's BriefDeliverStage further down) — never two registers, never build_speak_
     # sink (zero src callers, stays byte-untouched).
-    last_spoken_register = LastSpokenRegister(clock=_epoch_now)
+    # TK-303 (DEC-67e): ttl_seconds carries the DEC-64 reply window, restart-tier from the
+    # settings table/env (no hot-apply).
+    last_spoken_register = LastSpokenRegister(
+        clock=_epoch_now, ttl_seconds=config.wombat_reply_window_seconds
+    )
     speak_stage = SpeakSink(
         voice_enabled=config.wombat_voice_enabled,
         adapter=tts_adapter,

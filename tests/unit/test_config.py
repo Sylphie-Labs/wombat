@@ -565,6 +565,111 @@ def test_load_config_table_accepts_user_name_str(
 # --- (TK-187 behavior pinned unchanged — only the app-file tier grew tolerant) --------------
 
 
+# --- TK-303 (DEC-67e/f): reply window / spoken-reply cap / asr_model become config fields --------
+
+
+def test_load_config_reply_window_speech_cap_asr_model_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+
+    config = load_config()
+
+    assert config.wombat_reply_window_seconds == 120.0
+    assert config.wombat_spoken_reply_max_chars == 400
+    assert config.wombat_asr_model == "base"
+    for name in (
+        "wombat_reply_window_seconds",
+        "wombat_spoken_reply_max_chars",
+        "wombat_asr_model",
+    ):
+        assert name in APP_EDITABLE_FIELDS
+
+
+def test_load_config_reads_reply_window_speech_cap_asr_model_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_REPLY_WINDOW_SECONDS", "300")
+    monkeypatch.setenv("WOMBAT_SPOKEN_REPLY_MAX_CHARS", "800")
+    monkeypatch.setenv("WOMBAT_ASR_MODEL", "small")
+
+    config = load_config()
+
+    assert config.wombat_reply_window_seconds == 300.0
+    assert config.wombat_spoken_reply_max_chars == 800
+    assert config.wombat_asr_model == "small"
+
+
+def test_load_config_rejects_out_of_bounds_reply_window_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_REPLY_WINDOW_SECONDS", "20")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_REPLY_WINDOW_SECONDS" in str(exc_info.value)
+
+
+def test_load_config_rejects_out_of_bounds_speech_cap_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_SPOKEN_REPLY_MAX_CHARS", "5000")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_SPOKEN_REPLY_MAX_CHARS" in str(exc_info.value)
+
+
+def test_load_config_rejects_unknown_asr_model_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_ASR_MODEL", "huge")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_ASR_MODEL" in str(exc_info.value)
+
+
+@_requires_pg
+def test_load_config_table_accepts_reply_window_speech_cap_asr_model(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC4: all three round-trip through the settings table (app-editable tier)."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put(
+            {
+                "wombat_reply_window_seconds": 300.0,
+                "wombat_spoken_reply_max_chars": 800,
+                "wombat_asr_model": "small",
+            }
+        )
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_reply_window_seconds == 300.0
+    assert config.wombat_spoken_reply_max_chars == 800
+    assert config.wombat_asr_model == "small"
+
+
 def test_load_config_rejects_unknown_persona_humor_env_var_naming_it_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

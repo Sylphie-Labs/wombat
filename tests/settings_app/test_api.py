@@ -565,6 +565,61 @@ def test_get_settings_wombat_user_name_defaults_to_null_when_unset() -> None:
     assert response.json()["settings"]["wombat_user_name"] is None
 
 
+# --- TK-303 (DEC-67e/f): reply window / spoken-reply cap / asr_model PUT validation --------------
+
+
+def test_put_settings_wombat_asr_model_small_is_200_and_persists() -> None:
+    client = _client()
+    response = client.put(
+        "/settings", json={"wombat_asr_model": "small"}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_asr_model"] == "small"
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_asr_model"] == "small"
+
+
+def test_put_settings_wombat_asr_model_out_of_vocab_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings", json={"wombat_asr_model": "huge"}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_reply_window_below_minimum_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_reply_window_seconds": 20},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_spoken_reply_max_chars_above_maximum_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_spoken_reply_max_chars": 5000},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_reply_window_and_speech_cap_within_bounds_round_trip() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_reply_window_seconds": 300, "wombat_spoken_reply_max_chars": 800},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_reply_window_seconds"] == 300
+    assert response.json()["settings"]["wombat_spoken_reply_max_chars"] == 800
+
+
 def test_put_key_unknown_provider_is_404_or_422() -> None:
     client = _client()
     response = client.put(

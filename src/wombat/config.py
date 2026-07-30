@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import tzlocal
 from dotenv import dotenv_values
-from pydantic import SecretStr, TypeAdapter, ValidationError
+from pydantic import Field, SecretStr, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -75,6 +75,12 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     # can persist it; the Python runtime never reads this field (the renderer, TK-276, is the
     # sole consumer), so no restart notice is warranted for it.
     "wombat_ptt_binding",
+    # TK-303 (DEC-67e/f): the DEC-64 walkie-talkie reply window (LastSpokenRegister's TTL),
+    # the spoken-reply length cap (SpeechShapeStage's max_chars), and the local ASR model name
+    # — all three restart-tier (no hot-apply; assemble_runtime reads them once at boot).
+    "wombat_reply_window_seconds",
+    "wombat_spoken_reply_max_chars",
+    "wombat_asr_model",
 )
 
 
@@ -201,8 +207,20 @@ class WombatConfig(BaseSettings):
     # must keep booting without them; ``sources.bootstrap._maybe_register_asr`` skips the ASR
     # source with a loud log naming ``WOMBAT_ASR_DROP_DIR`` when the directory is missing/blank,
     # and separately when faster-whisper (the ``[voice]`` extra) is not installed.
+    # TK-303 (DEC-67e/f): ``wombat_asr_model`` narrows from a free ``str`` to a closed
+    # ``Literal`` and joins ``APP_EDITABLE_FIELDS`` — an unrecognized value fails ``load_config``
+    # loudly (env tier) or is dropped with a warning (table tier), same as every other closed-
+    # vocabulary field above.
     wombat_asr_drop_dir: str | None = None
-    wombat_asr_model: str = "base"
+    wombat_asr_model: Literal["tiny", "base", "small", "medium"] = "base"
+
+    # OPTIONAL (TK-303, DEC-67e/f): the DEC-64 walkie-talkie reply window — how long
+    # ``voice.reply_context.LastSpokenRegister`` treats its last-spoken slot as fresh, and the
+    # hard brevity bound ``stages.speech_shape.SpeechShapeStage`` shapes a spoken reply to.
+    # Restart-tier (assemble_runtime reads them once at boot; no hot-apply). Bounds mirror the
+    # SettingsUpdate PUT validation (wombat.settings_app.api) exactly.
+    wombat_reply_window_seconds: float = Field(default=120.0, ge=30, le=600)
+    wombat_spoken_reply_max_chars: int = Field(default=400, ge=200, le=1200)
 
     # OPTIONAL (TK-187, DEC-28): voice/persona config surface — provider selection, key
     # overrides, voice id, and assistant name. Selecting a provider here is a structural

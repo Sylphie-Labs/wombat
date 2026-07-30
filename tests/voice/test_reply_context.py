@@ -111,3 +111,34 @@ def test_second_note_spoken_resets_the_ttl_window() -> None:
     clock.advance(LAST_SPOKEN_TTL_SECONDS - 1.0)
 
     assert register.current() == "Second reply."
+
+
+# --- TK-303 (DEC-67e): ttl_seconds is unpinned via a keyword-only ctor param ---------------------
+
+
+def test_default_construction_stays_byte_identical_to_the_120s_constant() -> None:
+    """No ttl_seconds passed -- the ctor default must still be LAST_SPOKEN_TTL_SECONDS (120s),
+    proving every existing call site (and every test above) is behavior-preserving."""
+    clock = _FakeClock(now=0.0)
+    register = LastSpokenRegister(clock=clock)
+
+    register.note_spoken("i-1", "Good morning.")
+    clock.advance(LAST_SPOKEN_TTL_SECONDS)
+    assert register.current() == "Good morning."
+
+    clock.advance(0.001)
+    assert register.current() is None
+
+
+def test_ac1_custom_ttl_seconds_is_fresh_at_250s_and_stale_at_301s() -> None:
+    """AC1: a register constructed with ttl_seconds=300 -- fresh at 250s, stale at 301s."""
+    clock = _FakeClock(now=0.0)
+    register = LastSpokenRegister(clock=clock, ttl_seconds=300.0)
+
+    register.note_spoken("i-1", "Good morning.")
+
+    clock.advance(250.0)
+    assert register.current() == "Good morning."
+
+    clock.advance(51.0)  # now at 301s
+    assert register.current() is None

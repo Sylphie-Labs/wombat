@@ -566,6 +566,39 @@ def test_assemble_runtime_wires_one_shared_last_spoken_register_into_both_speak_
     assert register.current() == "spoken via brief"
 
 
+# --- TK-303 (DEC-67e/f): the configured reply window / spoken-reply cap thread through -----------
+
+
+def test_assemble_runtime_carries_configured_reply_window_and_speech_cap(
+    tmp_path: Path,
+) -> None:
+    """AC3: with wombat_reply_window_seconds/wombat_spoken_reply_max_chars set, assemble_runtime
+    builds the shared LastSpokenRegister and the speech_shape stage carrying those exact
+    configured values (construction-site test)."""
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_brief_path": str(tmp_path / "brief.txt"),
+            "wombat_reply_window_seconds": 300.0,
+            "wombat_spoken_reply_max_chars": 800,
+        }
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+
+    speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
+    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    assert register._ttl_seconds == 300.0
+
+    speech_shape_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speech_shape")
+    assert getattr(speech_shape_stage, "_max_chars") == 800  # noqa: B009
+
+
 # --- TK-289 (DEC-64 gap A, half 2): the ASR context_hook -> LastSpokenRegister wiring -------------
 
 

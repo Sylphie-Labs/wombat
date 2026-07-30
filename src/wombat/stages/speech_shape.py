@@ -81,7 +81,9 @@ _SPEECH_SHAPE_INSTRUCTION = (
     "formatting. Never read a URL or link aloud — describe it in words instead."
 )
 
-# DEC-55f: the hard brevity bound a validated speech text must fit within.
+# DEC-55f: the hard brevity bound a validated speech text must fit within. TK-303 (DEC-67e)
+# unpins this: it stays the DEFAULT (this constant is still its home), but SpeechShapeStage now
+# takes an injected max_chars, threaded from config.wombat_spoken_reply_max_chars at bootstrap.
 _MAX_SPEECH_CHARS = 400
 
 # DEC-55f no-placebo validator: one compiled pattern per enumerated closed token class. ANY match
@@ -99,14 +101,16 @@ _FORBIDDEN_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def _shape_speech_text(raw_text: str | None) -> str | None:
+def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS) -> str | None:
     """DEC-55f no-placebo validator: ``raw_text`` unchanged (trimmed) if it is free of every
-    enumerated forbidden token class and within ``_MAX_SPEECH_CHARS``; otherwise ``None``
-    (unsanitizable/overlong/blank -> no speech text, never a rewritten guess)."""
+    enumerated forbidden token class and within ``max_chars`` (TK-303/DEC-67e: defaults to the
+    pinned ``_MAX_SPEECH_CHARS``, injectable so ``SpeechShapeStage`` can carry a configured
+    bound); otherwise ``None`` (unsanitizable/overlong/blank -> no speech text, never a rewritten
+    guess)."""
     if raw_text is None:
         return None
     stripped = raw_text.strip()
-    if not stripped or len(stripped) > _MAX_SPEECH_CHARS:
+    if not stripped or len(stripped) > max_chars:
         return None
     for pattern in _FORBIDDEN_PATTERNS:
         if pattern.search(stripped):
@@ -130,6 +134,7 @@ class SpeechShapeStage:
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         spend_ledger: DailySpendLedger | None = None,
         daily_token_ceiling: int | None = None,
+        max_chars: int = _MAX_SPEECH_CHARS,
     ) -> None:
         # Mirrors ComposeStage's AC3: fail at CONSTRUCTION when this mouth WILL be called (voice
         # on + adapter present) but the shared deepseek profile has no key to build against.
@@ -142,6 +147,9 @@ class SpeechShapeStage:
         self._timeout_seconds = timeout_seconds
         self._spend_ledger = spend_ledger
         self._daily_token_ceiling = daily_token_ceiling
+        # TK-303 (DEC-67e): injected max_chars, defaulting to the pinned _MAX_SPEECH_CHARS —
+        # bootstrap.build_speech_shape_stage threads config.wombat_spoken_reply_max_chars here.
+        self._max_chars = max_chars
         # Built ONCE — the FIXED prompt (DEC-55) plus Mouth.COMPOSE's guard suffix, appended
         # verbatim via the read-only persona.expression seam (no fifth 'speech' mouth, DEC-55e).
         self._system_instruction = " ".join(
@@ -229,7 +237,7 @@ class SpeechShapeStage:
                         "speech_shape: daily spend ledger write failed; speech output stands",
                         exc_info=True,
                     )
-            speech_text = _shape_speech_text(response.text)
+            speech_text = _shape_speech_text(response.text, self._max_chars)
             if speech_text is None:
                 logger.warning(
                     "speech_shape: model response failed speech validation (blank, overlong, or "

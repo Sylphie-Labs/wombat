@@ -38,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
 from wombat.external_store import ExternalItemStore
@@ -117,6 +117,12 @@ class SettingsUpdate(BaseModel):
     # TK-275 (DEC-58 c/d): mirrors WombatConfig.wombat_ptt_binding - a plain str, not a Literal,
     # so it is exempt from the mirror test's vocabulary check (there is no vocabulary to drift).
     wombat_ptt_binding: str | None = None
+    # TK-303 (DEC-67e/f): mirrors WombatConfig's DEC-64 walkie-talkie reply window / spoken-reply
+    # cap (numeric bounds mirrored via Field) and the narrowed wombat_asr_model Literal. All
+    # three are restart-tier (no hot-apply).
+    wombat_reply_window_seconds: float | None = Field(default=None, ge=30, le=600)
+    wombat_spoken_reply_max_chars: int | None = Field(default=None, ge=200, le=1200)
+    wombat_asr_model: Literal["tiny", "base", "small", "medium"] | None = None
 
 
 class KeyBody(BaseModel):

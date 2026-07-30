@@ -8,12 +8,17 @@ Steward has genuinely been heard (never on a silent/voice-off/degraded/failed pa
 owns ONLY the register itself; wiring the hooks into the two speak sites and threading ONE shared
 instance through ``bootstrap.assemble_runtime`` is done at those call sites, not here.
 
-DEC-63 no-knob precedent: NO config/params field. ``_MAX_SPOKEN_CHARS``/``LAST_SPOKEN_TTL_SECONDS``
-are pinned module constants, not operator-tunable. NO persistence — a reply across a process
-restart isn't a conversation (steered explicitly); the slot resets to empty every boot. NO
-locking — every touch point (both speak sites, and TK-289's later PTT-reply consumer) runs on the
-SAME event loop, so a plain mutable object is safe exactly like ``ChatReplyBroker``'s own
-in-memory dicts.
+DEC-63 no-knob precedent (superseded IN PART by TK-303/DEC-67e — see below): NO config/params
+field. ``_MAX_SPOKEN_CHARS`` is a pinned module constant, not operator-tunable. NO persistence —
+a reply across a process restart isn't a conversation (steered explicitly); the slot resets to
+empty every boot. NO locking — every touch point (both speak sites, and TK-289's later PTT-reply
+consumer) runs on the SAME event loop, so a plain mutable object is safe exactly like
+``ChatReplyBroker``'s own in-memory dicts.
+
+TK-303 (DEC-67e): the TTL is UNPINNED — ``LastSpokenRegister`` takes an optional keyword-only
+``ttl_seconds`` (default ``LAST_SPOKEN_TTL_SECONDS``, unchanged), threaded from
+``WombatConfig.wombat_reply_window_seconds`` at ``bootstrap.assemble_runtime``. The 600-char
+stored-text cap and single-slot shape stay byte-untouched — DEC-67e unpins ONLY the TTL.
 """
 
 from __future__ import annotations
@@ -35,10 +40,18 @@ class LastSpokenRegister:
 
     ``clock`` returns epoch seconds (mirrors ``gate.pipeline.Clock``/``sources.presence``'s own
     epoch-seconds clock idiom) — injected so tests can fake elapsed time without real sleeps.
+
+    ``ttl_seconds`` (TK-303, DEC-67e; keyword-only, defaults to ``LAST_SPOKEN_TTL_SECONDS``) is
+    the freshness window ``current()`` reads against — unpinned so ``bootstrap.assemble_runtime``
+    can thread ``WombatConfig.wombat_reply_window_seconds`` through it; the module constant stays
+    the default's home, so every existing call site (and test) that omits it is byte-identical.
     """
 
-    def __init__(self, *, clock: Callable[[], float]) -> None:
+    def __init__(
+        self, *, clock: Callable[[], float], ttl_seconds: float = LAST_SPOKEN_TTL_SECONDS
+    ) -> None:
         self._clock = clock
+        self._ttl_seconds = ttl_seconds
         self._item_id: str | None = None
         self._text: str | None = None
         self._spoken_at: float | None = None
@@ -51,12 +64,12 @@ class LastSpokenRegister:
         self._spoken_at = self._clock()
 
     def current(self) -> str | None:
-        """The last spoken text, IFF its age is within ``LAST_SPOKEN_TTL_SECONDS``; ``None`` when
-        nothing has been spoken yet, or the slot has aged out."""
+        """The last spoken text, IFF its age is within this register's ``ttl_seconds``; ``None``
+        when nothing has been spoken yet, or the slot has aged out."""
         if self._text is None or self._spoken_at is None:
             return None
         age = self._clock() - self._spoken_at
-        if age > LAST_SPOKEN_TTL_SECONDS:
+        if age > self._ttl_seconds:
             return None
         return self._text
 

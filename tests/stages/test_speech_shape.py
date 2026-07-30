@@ -211,6 +211,48 @@ def test_ac2_validator_accepts_plain_spoken_text() -> None:
     assert _shape_speech_text(clean) == clean
 
 
+# --- TK-303 (DEC-67e): max_chars is injectable, defaulting to _MAX_SPEECH_CHARS -------------------
+
+
+def test_ac2_default_max_chars_keeps_the_400_char_behavior() -> None:
+    from wombat.stages.speech_shape import _MAX_SPEECH_CHARS
+
+    at_limit = "x" * _MAX_SPEECH_CHARS
+    over_limit = "x" * (_MAX_SPEECH_CHARS + 1)
+    assert _shape_speech_text(at_limit) == at_limit
+    assert _shape_speech_text(over_limit) is None
+
+
+def test_ac2_injected_max_chars_800_passes_a_600_char_reply_whole() -> None:
+    text = "x" * 600
+    assert _shape_speech_text(text, max_chars=800) == text
+    # still rejected at the default 400-char bound
+    assert _shape_speech_text(text) is None
+
+
+async def test_ac2_stage_with_max_chars_800_carries_a_600_char_model_reply_whole() -> None:
+    reply = "x" * 600
+    model = FakeModel(response=_response(reply))
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=True, adapter_present=True, max_chars=800
+    )
+    ctx = _ctx(model)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text == reply
+    assert degraded is False
+
+
+def test_stage_default_max_chars_preserves_the_400_char_ctor_default() -> None:
+    from wombat.stages.speech_shape import _MAX_SPEECH_CHARS
+
+    stage = SpeechShapeStage(config=_config(), voice_enabled=False, adapter_present=False)
+    assert stage._max_chars == _MAX_SPEECH_CHARS
+
+
 async def test_ac2_forbidden_model_text_degrades_to_no_speech_and_never_reaches_tts() -> None:
     model = FakeModel(response=_response("**Important**: check https://example.com"))
     stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
