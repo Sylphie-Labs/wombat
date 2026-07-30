@@ -12,8 +12,8 @@ absent it, tests are skipped LOUDLY.
       ``occurs_at``; ``prune_older_than`` deletes ONLY ``fetched_at``-older rows and reports the
       count.
   AC3 structural: no ``bootstrap``/``runtime`` import; ``ensure_all_schemas`` carries exactly
-      NINE ``ensure_schema`` calls (TK-247 added the eighth, wombat_scratchpad; TK-286 added the
-      ninth, wombat_seen_events).
+      TEN ``ensure_schema`` calls (TK-247 added the eighth, wombat_scratchpad; TK-286 added the
+      ninth, wombat_seen_events; TK-294 added the tenth, wombat_user_facts).
 """
 
 from __future__ import annotations
@@ -213,12 +213,12 @@ def test_ac3_external_store_imports_nothing_from_bootstrap_or_runtime() -> None:
     assert not any(mod == "runtime" or mod.endswith(".runtime") for mod in imported_modules)
 
 
-def test_ac3_ensure_all_schemas_carries_exactly_nine_entries() -> None:
+def test_ac3_ensure_all_schemas_carries_exactly_ten_entries() -> None:
     source = inspect.getsource(schema_preflight.ensure_all_schemas)
     calls = [
         line.strip()
         for line in source.splitlines()
         if line.strip().startswith("ensure_") and line.strip().endswith("_schema(conn)")
     ]
-    assert len(calls) == 9
+    assert len(calls) == 10
     assert "ensure_external_items_schema(conn)" in source

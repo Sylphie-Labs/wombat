@@ -9,16 +9,17 @@ module assumes its own table already exists (Q-46: schema application is the cal
 never automatic inside a module's own read/write path).
 
 This module closes that gap structurally: ``ensure_all_schemas(dsn)`` opens ONE psycopg
-connection and runs the NINE packaged ``ensure_schema(conn)`` functions this product ships —
+connection and runs the TEN packaged ``ensure_schema(conn)`` functions this product ships —
 ``wombat.queue``, ``wombat.domain.daily_ledger``, ``wombat.gate.pending_journal_pg``,
 ``wombat.behavior.event_log``, ``wombat.trail.schema``, ``wombat.settings_store`` (TK-240),
 ``wombat.external_store`` (TK-244), ``wombat.scratchpad`` (TK-247), ``wombat.sources.seen_ledger``
-(TK-286) — each a ``CREATE TABLE/INDEX IF NOT EXISTS`` (NG-3: no migration framework, no version
-table), so calling this on an already-current database is a safe no-op. ``bootstrap.
-assemble_runtime`` calls this as the FIRST pg act on the ``replay_pending=True`` posture, before
-the TK-166 eager replay (Q-104 ruling). TK-286 (DEC-63a): WITHOUT this ninth call the
-``wombat_seen_events`` table never exists in production — ``ensure_all_schemas`` runs on the
-``replay_pending=True`` boot path (``bootstrap.py``), the ONE place every real boot creates it.
+(TK-286), ``wombat.user_facts`` (TK-294) — each a ``CREATE TABLE/INDEX IF NOT EXISTS`` (NG-3: no
+migration framework, no version table), so calling this on an already-current database is a safe
+no-op. ``bootstrap.assemble_runtime`` calls this as the FIRST pg act on the
+``replay_pending=True`` posture, before the TK-166 eager replay (Q-104 ruling). TK-286 (DEC-63a):
+WITHOUT this ninth call the ``wombat_seen_events`` table never exists in production —
+``ensure_all_schemas`` runs on the ``replay_pending=True`` boot path (``bootstrap.py``), the ONE
+place every real boot creates it.
 """
 
 from __future__ import annotations
@@ -34,12 +35,13 @@ from .scratchpad import ensure_schema as ensure_scratchpad_schema
 from .settings_store import ensure_schema as ensure_settings_store_schema
 from .sources.seen_ledger import ensure_schema as ensure_seen_events_schema
 from .trail.schema import ensure_schema as ensure_action_trail_schema
+from .user_facts import ensure_schema as ensure_user_facts_schema
 
 
 def ensure_all_schemas(dsn: str) -> None:
     """Apply every packaged ``ensure_schema`` migration on ``dsn``, idempotently (CR3-1, Q-104).
 
-    Opens ONE psycopg connection (context-managed — always closed), runs the nine packaged
+    Opens ONE psycopg connection (context-managed — always closed), runs the ten packaged
     ``ensure_schema(conn)`` functions in sequence, commits, and closes. Each is itself a
     ``CREATE ... IF NOT EXISTS`` (NG-3: no migration framework), so a second call against an
     already-current database raises nothing and changes nothing (idempotent). Deliberately never
@@ -56,4 +58,5 @@ def ensure_all_schemas(dsn: str) -> None:
         ensure_external_items_schema(conn)
         ensure_scratchpad_schema(conn)
         ensure_seen_events_schema(conn)
+        ensure_user_facts_schema(conn)
         conn.commit()
