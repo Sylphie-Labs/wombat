@@ -75,7 +75,13 @@ def test_reflection_default_byte_identical_to_live_for_every_name(name: str) -> 
 
 # --------------------------------------------------------------------------------------- AC2
 
-_ALL_MOUTHS = (Mouth.COMPOSE, Mouth.BRIEF, Mouth.DRAFT, Mouth.REFLECTION)
+# TK-298 (ISS-30 fold-in): CHAT joins every GENERIC property test below (guard-suffix presence,
+# determinism, brevity/warmth/directness-changes-output, proactivity-no-op) — it reads all four
+# policy axes (persona_policy.yaml's chat entry) exactly like the other mouths. The two
+# user_name-specific tests near the bottom of this file are NOT generic — CHAT deliberately DOES
+# read user_name, so they keep their own _ORIGINAL_FOUR_MOUTHS tuple instead.
+_ALL_MOUTHS = (Mouth.COMPOSE, Mouth.BRIEF, Mouth.DRAFT, Mouth.REFLECTION, Mouth.CHAT)
+_ORIGINAL_FOUR_MOUTHS = (Mouth.COMPOSE, Mouth.BRIEF, Mouth.DRAFT, Mouth.REFLECTION)
 
 _GUARD_SUFFIX_BY_MOUTH = {
     Mouth.COMPOSE: "No preamble. " + CAPABILITY_CHARTER,
@@ -91,6 +97,7 @@ _GUARD_SUFFIX_BY_MOUTH = {
         "'because you', or 'due to your'), and never produce a multi-sentence analytics summary. "
         "No preamble."
     ),
+    Mouth.CHAT: "No preamble. " + CAPABILITY_CHARTER,
 }
 
 
@@ -251,7 +258,7 @@ def test_chat_guard_is_the_capability_charter() -> None:
 # ------------------------------------------------------------------------------ TK-292 AC2 oracle
 
 
-@pytest.mark.parametrize("mouth", _ALL_MOUTHS)
+@pytest.mark.parametrize("mouth", _ORIGINAL_FOUR_MOUTHS)
 @pytest.mark.parametrize("user_name", (None, "", "Jim"))
 def test_original_four_mouths_byte_identical_to_instruction_for_regardless_of_user_name(
     mouth: Mouth, user_name: str | None
@@ -265,7 +272,7 @@ def test_original_four_mouths_byte_identical_to_instruction_for_regardless_of_us
         assert without == with_user_name
 
 
-@pytest.mark.parametrize("mouth", _ALL_MOUTHS)
+@pytest.mark.parametrize("mouth", _ORIGINAL_FOUR_MOUTHS)
 def test_original_four_mouths_byte_identical_via_live_persona_regardless_of_user_name(
     mouth: Mouth,
 ) -> None:

@@ -37,7 +37,7 @@ from wombat.stages.artifacts import (
     composed_output_to_artifact_data,
     composed_output_voice_turn_from_artifact_data,
 )
-from wombat.stages.compose import ComposeStage
+from wombat.stages.compose import _GROUNDING_ONLY_KEYS, ComposeStage
 
 _FIXED_NOW = datetime(2026, 7, 2, 12, 0, 0, tzinfo=UTC)
 
@@ -528,6 +528,28 @@ async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_t
     assert "sure, want me to book it?" not in text
     # the item's own genuine content still renders — the fix isn't a black hole, just a filter.
     assert text == TemplateComposer().render(ItemKind.CHAT, {"text": "hey"})
+
+
+# --- TK-298 (ISS-30 fold-in): pin _GROUNDING_ONLY_KEYS to the exact set bootstrap.py's
+# asr_context_hook closure can stamp -----------------------------------------------------------
+
+
+def test_grounding_only_keys_pinned_to_the_exact_context_hook_stampable_set() -> None:
+    """``_GROUNDING_ONLY_KEYS`` must equal EXACTLY the keys ``assemble_runtime``'s shared
+    ``asr_context_hook`` closure can stamp onto a chat payload: ``replying_to`` (TK-289) plus
+    ``known_user_context``/``context_calendar_today``/``context_recent_email`` (TK-290/TK-296).
+    A future fifth grounding key added to that closure without a matching addition here would
+    silently reopen the v2.165 degrade leak (a grounding field dumped verbatim to the typed chat
+    pane) — this test is the structural tripwire."""
+
+    assert frozenset(
+        {
+            "replying_to",
+            "known_user_context",
+            "context_calendar_today",
+            "context_recent_email",
+        }
+    ) == _GROUNDING_ONLY_KEYS
 
 
 # --- wire round-trips: json.dumps + inverse must be lossless (Q-49 regressions) -------------------

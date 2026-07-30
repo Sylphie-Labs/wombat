@@ -1,0 +1,107 @@
+"""tests/capabilities/test_capability_charter.py — TK-298 (DEC-65(h), RULING r4 v2.168): the
+CAPABILITY_CHARTER memory-accuracy diff test.
+
+wombat's charter (TK-284, DEC-62) told the model what it CANNOT do but never that it CAN recall
+personal details the user shared earlier — an omission, not a capability grant: the model already
+sees prior-conversation facts in its prompt (DEC-65f's ``known_user_context``), so silently never
+telling it that ability existed only made "I don't remember" a plausible but WRONG guess. RULING
+r4 inserts exactly ONE new sentence, conditionally phrased ("when they appear in what you are
+given") so it stays TRUE regardless of whether the store actually holds anything for this turn —
+DEC-62's accuracy invariant amended for ACCURACY, never weakened.
+
+This test diffs the CURRENT (imported, live) ``CAPABILITY_CHARTER`` against the PRE-TK-298 text
+(hand-pinned below, byte-identical to the string this ticket found in the repo before editing it)
+at SENTENCE granularity: exactly one sentence was inserted, in the ruled position, and every other
+sentence — including every "cannot"/"never" clause — is byte-identical, untouched (a structural
+assert, not a human eyeball diff).
+"""
+
+from __future__ import annotations
+
+import difflib
+import re
+
+from wombat.persona.capabilities import CAPABILITY_CHARTER
+
+# The charter exactly as it stood before TK-298 (verified against the repo pre-change, lines
+# 15-22 of src/wombat/persona/capabilities.py) — the diff oracle below measures the CURRENT
+# (live, imported) charter against this fixed baseline. Never edited by this ticket; it is the
+# "before" snapshot the diff is taken against.
+_PREVIOUS_CHARTER = (
+    "Your abilities are fixed and known. You can converse and answer from what you are given, "
+    "deliver the morning brief from read-only Calendar and Gmail, draft Gmail replies that the "
+    "user must approve, and read web pages when asked. You cannot set alarms, timers, or "
+    "reminders, cannot send email or modify the calendar, and cannot perform any other action on "
+    "any device or service. If the user asks for something outside these abilities, say plainly "
+    "that you can't do that - never say an action was done, is being done, or is scheduled."
+)
+
+# RULING r4 (v2.168): the ONE sentence TK-298 inserts, conditionally phrased so it is TRUE
+# regardless of store contents.
+_INSERTED_SENTENCE = (
+    "You remember personal details the user has shared in earlier conversations when they "
+    "appear in what you are given."
+)
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<=\. )")
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in _SENTENCE_BOUNDARY.split(text) if s.strip()]
+
+
+def test_previous_charter_splits_into_the_expected_four_sentences() -> None:
+    # Sanity-checks the sentence splitter against the known baseline before trusting it as a diff
+    # oracle below.
+    sentences = _sentences(_PREVIOUS_CHARTER)
+    assert len(sentences) == 4
+    assert sentences[0] == "Your abilities are fixed and known."
+    assert sentences[1].startswith("You can converse")
+    assert sentences[2].startswith("You cannot set alarms")
+    assert sentences[3].startswith("If the user asks")
+
+
+def test_charter_diff_inserts_exactly_one_sentence_and_touches_nothing_else() -> None:
+    old_sentences = _sentences(_PREVIOUS_CHARTER)
+    new_sentences = _sentences(CAPABILITY_CHARTER)
+
+    matcher = difflib.SequenceMatcher(None, old_sentences, new_sentences, autojunk=False)
+    opcodes = matcher.get_opcodes()
+
+    inserts = [op for op in opcodes if op[0] == "insert"]
+    non_equal = [op for op in opcodes if op[0] != "equal"]
+
+    # Exactly one contiguous insertion, and every other opcode is 'equal' — no replace/delete
+    # anywhere, i.e. every pre-existing sentence is byte-identical, in the same order.
+    assert non_equal == inserts
+    assert len(inserts) == 1
+
+    _tag, i1, i2, j1, j2 = inserts[0]
+    assert i1 == i2  # nothing from the old text was consumed/replaced by this opcode
+    assert new_sentences[j1:j2] == [_INSERTED_SENTENCE]
+
+    # The insertion lands after "...read web pages when asked." and before "You cannot set
+    # alarms..." (RULING r4's ruled position) — i.e. right after old_sentences[1].
+    assert i1 == 2
+
+
+def test_no_cannot_or_never_clause_was_touched() -> None:
+    old_sentences = _sentences(_PREVIOUS_CHARTER)
+    new_sentences = _sentences(CAPABILITY_CHARTER)
+
+    old_guard_clauses = [
+        s for s in old_sentences if "cannot" in s.lower() or "never" in s.lower()
+    ]
+    assert old_guard_clauses  # sanity: the baseline really does contain guard clauses
+    for clause in old_guard_clauses:
+        assert clause in new_sentences
+
+
+def test_inserted_sentence_is_conditionally_phrased_true_regardless_of_store_contents() -> None:
+    # RULING r4: phrased "when they appear in what you are given" — never an unconditional claim
+    # that memory always contains something, so it stays TRUE even on an empty
+    # known_user_context.
+    assert "when they appear in what you are given" in _INSERTED_SENTENCE
+    assert "cannot" not in _INSERTED_SENTENCE.lower()
+    assert "never" not in _INSERTED_SENTENCE.lower()
+    assert _INSERTED_SENTENCE in CAPABILITY_CHARTER
