@@ -7326,6 +7326,276 @@ nodes:
       - TK-290
     files_in_scope:
       - tests/integration/test_voice_conversation_context_e2e.py
+  - id: TK-292
+    kind: ticket
+    parent: EP-33
+    title: "The FIFTH mouth - Mouth.CHAT with a companion-register base role (assistant_name + user_name slots), policy axes granted, guard suffix = 'No preamble. ' + CAPABILITY_CHARTER, and the new wombat_user_name app-editable config field (DEC-65a/c)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-65(a)+(c). persona/builder.py - Mouth gains CHAT ('chat'); NEW _chat_base(assistant_name, user_display) returning EXACTLY: 'You are {assistant_name}, {user_display}'s personal assistant and companion, chatting with {user_display}. Reply naturally and conversationally in a warm, familiar voice - match the user's tone, and roll with jokes, banter, and playfulness when the user brings them. Casual conversation is welcome for its own sake; do not steer the chat back to schedules, email, or duties unless asked. Ground anything factual in what you are given, and keep replies short and human - a sentence or two unless more is clearly wanted.' ClauseAlgebraStrategy gains OPTIONAL field user_name: str | None = None (construction-held, the assistant_name ruling precedent - names are boot-static config, never Cues); user_display = user_name if truthy else 'the user'; ONLY the CHAT base role ever renders it - COMPOSE/BRIEF/DRAFT/REFLECTION stay byte-identical at every matrix for every user_name value. instruction_for gains optional user_name kwarg (default None) so every existing call site is byte-unaffected. persona/expression.py - _GUARD_SUFFIX gains 'chat': 'No preamble. ' + CAPABILITY_CHARTER (the DEC-62 charter joins the CHAT mouth at the SAME strip-proof seam - chat is exactly where the fabrication risk lives). persona/policy.py + persona_policy.yaml - mouth_axes gains chat: [brevity, warmth, directness, humor] (all four prompt axes; existing clause texts reused verbatim, NO new clause strings); the loader's mouth-key validation extends to the five-mouth closed set. persona/live.py - LivePersona ctor gains user_name (default None) passed through to instruction_for. config.py - wombat_user_name: str = '' joins WombatConfig AND APP_EDITABLE_FIELDS (settings-table tier, restart-to-apply like wombat_assistant_name); settings_app/api.py adds it to the SettingsUpdate vocabulary so the settings app can expose it. bootstrap.assemble_runtime passes config.wombat_user_name into LivePersona. NOTE - the companion register lives in the BASE ROLE, so chat is personable at DEFAULT_MATRIX (Jim's directive); the matrix axes modulate ON TOP; the four original mouths' DEFAULT byte-identity oracles are re-asserted, not weakened."
+    complexity_budget: "One new enum member, one new base-role builder with a pinned exact string, one guard-suffix entry, one policy key + loader relaxation, one optional field/kwarg threaded through strategy/instruction_for/LivePersona, one config field + API vocab entry. NO new clause texts, NO matrix/axis/level changes (humor stays none|dry - DEC-37 closed set stands), NO compose/stage edits (TK-293 owns selection), NO app/ changes."
+    acceptance_criteria:
+      - given: "instruction_for(Mouth.CHAT, DEFAULT_MATRIX, 'Steward', user_name='Jim')"
+        when: "rendered"
+        then: "the instruction is EXACTLY the pinned chat base role (with Jim interpolated) + ' No preamble. ' + CAPABILITY_CHARTER; with user_name None/'' the same text renders with 'the user' in both slots."
+      - given: "the four existing mouths at DEFAULT_MATRIX and at every non-default level, with user_name set and unset"
+        when: "rendered through instruction_for and through a LivePersona constructed with user_name"
+        then: "every output is byte-identical to today's - user_name never leaks into COMPOSE/BRIEF/DRAFT/REFLECTION."
+      - given: "the shipped persona_policy.yaml"
+        when: "loaded"
+        then: "mouth_axes['chat'] grants exactly brevity/warmth/directness/humor; each non-default level's existing clause text applies to a CHAT render (spot-check humor=dry appends the existing dry clause); proactivity in mouth_axes or clauses still REJECTS at load."
+      - given: "a hostile strategy or any matrix value for the CHAT mouth"
+        when: "render_expression runs"
+        then: "the output ends with the charter (the guard suffix is seam-appended, strip-proof - the DEC-62 posture extends to chat)."
+      - given: "WombatConfig + the settings API"
+        when: "wombat_user_name is round-tripped through the settings table and PUT /settings"
+        then: "the field loads/saves as an app-editable non-secret; absent row = '' default; load_config and existing settings tests stay green."
+    non_goals:
+      - "No new humor level and no matrix change - 'playful' stays struck (DEC-37); the companion register is base-role text, not an axis."
+      - "No mouth selection wiring - TK-293 owns ComposeStage."
+      - "No app/ UI exposure - the settings-page-v2 track owns that; the API vocabulary entry is the enabling seam only."
+    depends_on:
+      - TK-219
+      - TK-220
+      - TK-209
+      - TK-194
+    files_in_scope:
+      - src/wombat/persona/builder.py
+      - src/wombat/persona/expression.py
+      - src/wombat/persona/policy.py
+      - src/wombat/persona/persona_policy.yaml
+      - src/wombat/persona/live.py
+      - src/wombat/config.py
+      - src/wombat/settings_app/api.py
+      - src/wombat/bootstrap.py
+      - tests/persona/test_builder.py
+      - tests/persona/test_expression.py
+      - tests/persona/test_policy.py
+      - tests/persona/test_live.py
+      - tests/unit/test_config.py
+      - tests/settings_app/test_api.py
+      - tests/unit/test_bootstrap.py
+  - id: TK-293
+    kind: ticket
+    parent: EP-33
+    title: "ComposeStage selects the mouth by item_kind - CHAT turns (typed AND voice, DEC-57/60) render Mouth.CHAT, everything else keeps Mouth.COMPOSE byte-identically; the frozen fallback grows a chat variant (DEC-65b)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-65(b). stages/compose.py run() already holds item_kind before building messages: when item_kind is ItemKind.CHAT the system instruction becomes live_persona.instruction(Mouth.CHAT) (hot-apply path) or a NEW frozen fallback _chat_system_instruction(config.wombat_assistant_name, config.wombat_user_name) built once at __init__ and kept byte-equivalent to instruction_for(Mouth.CHAT, DEFAULT_MATRIX, name, user_name=...) (the existing _system_instruction/TK-284 equivalence discipline); every other item_kind keeps today's Mouth.COMPOSE read/fallback byte-identically. This is INSTRUCTION SELECTION only - the user message stays exactly f'item_kind: ...\\n{format_payload_fields(payload)}' (Q-50 untouched; DEC-64's compose-side-injection rejection is honored - no prompt-content channel opens here). Degrade path unchanged - TemplateComposer's deterministic terse line stands for chat too (the DEC-37e honest-asymmetry precedent: personality is model-path-only)."
+    complexity_budget: "One branch on item_kind at the instruction-selection point, one frozen chat fallback constant builder, tests. NO new ctor params beyond reading the existing config, NO payload/artifact/wire changes, NO template changes, NO router/gate edits."
+    acceptance_criteria:
+      - given: "a ComposeStage with a LivePersona wired and a FakeModel spy"
+        when: "a chat turn (typed shape) and a voice turn (voice_turn=True) each compose"
+        then: "the captured system message is instruction_for(Mouth.CHAT, ...) for BOTH, ending with the capability charter; a gmail/gcal/generic item captures today's Mouth.COMPOSE instruction byte-identically."
+      - given: "a ComposeStage with live_persona None"
+        when: "a chat turn composes"
+        then: "the frozen chat fallback is used and equals instruction_for(Mouth.CHAT, DEFAULT_MATRIX, config names) byte-for-byte (equivalence pinned by test)."
+      - given: "the existing compose suite (non-chat item_kinds, degrade paths, ceiling gate, held_chat/voice_turn threading)"
+        when: "run on the landed diff"
+        then: "all pass unmodified except tests that pin the chat-turn instruction itself."
+      - given: "a chat turn that degrades (model failure/ceiling)"
+        when: "composed"
+        then: "TemplateComposer's deterministic line renders exactly as today - no chat-specific degrade variant."
+    non_goals:
+      - "No prompt-content injection and no new payload fields - selection only (Q-50/DEC-64 stand)."
+      - "No brief/draft/reflection changes - those mouths never route through ComposeStage's selection."
+    depends_on:
+      - TK-292
+    files_in_scope:
+      - src/wombat/stages/compose.py
+      - tests/unit/test_compose_stage.py
+  - id: TK-294
+    kind: ticket
+    parent: EP-36
+    title: "wombat_user_facts - the durable what-wombat-knows-about-the-user table (migration 011, TENTH ensure_all_schemas entry) + UserFactsStore upsert/list/delete seams with a hard 200-row evict-oldest cap (DEC-65d)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-65(d) substrate, wiring-free (the TK-244/TK-247 sibling shape exactly). NEW src/wombat/migrations/011_user_facts.sql - wombat_user_facts(fact_key TEXT PRIMARY KEY, fact TEXT NOT NULL, source TEXT NOT NULL, first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()); one idempotent CREATE-IF-NOT-EXISTS (NG-3). NEW src/wombat/user_facts.py - lazy dsn-injected UserFactsStore (the ScratchpadStore sibling): upsert_fact(fact_key, fact, source) (re-upsert updates fact+updated_at, first_seen_at write-once; fact_key = caller-supplied stable key - TK-297 derives it deterministically from normalized fact text), list_facts(limit) ordered updated_at DESC, delete_fact(fact_key), count(). HARD CAP - a pinned _MAX_FACTS = 200 module constant (DEC-63 no-knob precedent): an upsert that would exceed it evicts the oldest-updated row(s) first, loudly logged. DURABLE - no purge-on-boot, ever (this is the point: knowing the user accumulates; the scratchpad's 14-day purge is exactly why DEC-46's surface was NOT reused). schema_preflight gains the TENTH entry. CON-6 custody note in the module docstring - rows hold what the user SAID/does, never inferred motive; TK-297 owns the enforcement at the only organic write path."
+    complexity_budget: "One migration, one store module mirroring scratchpad.py, one preflight entry, pg-gated tests on throwaway WOMBAT_TEST_PG_DSN only. NO wiring into runtime/bootstrap (TK-296/TK-297 own reads/writes), NO settings/app surface, NO purge job."
+    acceptance_criteria:
+      - given: "a throwaway pg (WOMBAT_TEST_PG_DSN)"
+        when: "ensure_all_schemas runs twice"
+        then: "wombat_user_facts exists, idempotently, as the tenth preflight entry."
+      - given: "an empty store"
+        when: "upsert_fact/list_facts/delete_fact/count round-trip, including a re-upsert of the same fact_key"
+        then: "list is updated_at DESC; re-upsert updates fact and updated_at while first_seen_at is unchanged; delete removes; count matches."
+      - given: "a store at _MAX_FACTS rows"
+        when: "one more NEW fact_key is upserted"
+        then: "the oldest-updated row is evicted (one WARNING), count stays at the cap, and the new fact is present."
+      - given: "no DSN configured / store constructed lazily"
+        when: "the module is imported and the store constructed"
+        then: "zero IO at construction (Q-46 conventions); the module imports nothing from wombat.bootstrap or wombat.runtime."
+    non_goals:
+      - "No scratchpad reuse - wombat_scratchpad is purge-on-boot working memory with a NOT-list; user facts are durable (recorded DEC-65 rationale)."
+      - "No LLM anywhere in this module and no extraction - TK-297."
+      - "No prompt rendering - TK-296."
+    depends_on:
+      - TK-247
+    files_in_scope:
+      - src/wombat/migrations/011_user_facts.sql
+      - src/wombat/user_facts.py
+      - src/wombat/schema_preflight.py
+      - tests/unit/test_user_facts.py
+  - id: TK-295
+    kind: ticket
+    parent: EP-36
+    title: "wombat_chat_turns - a 7-day rolling ledger of the user's chat/voice utterances (migration 012, ELEVENTH ensure_all_schemas entry) written at the registry-sink seam, the dream extractor's ONLY input; never prompt history (DEC-65e)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-65(e). The queue DELETEs on ack, so no durable record of what the user said exists - organic getting-to-know needs one. NEW src/wombat/migrations/012_chat_turns.sql - wombat_chat_turns(id BIGSERIAL PRIMARY KEY, text TEXT NOT NULL, voice BOOLEAN NOT NULL, captured_at TIMESTAMPTZ NOT NULL) + index on captured_at; NEW src/wombat/chat_turns.py - lazy dsn-injected ChatTurnStore: record_turn(text, voice, captured_at), turns_since(cutoff) ascending, purge_older_than(days). schema_preflight gains the ELEVENTH entry. WRITE SEAM - sources/bootstrap.py's registry sink layer (the TK-245 external-items sink precedent): events whose payload item_kind == 'chat' record (payload['text'] or payload['transcript'], voice_turn flag, captured_at/received_at) - ONE seam covers typed ChatSource AND voice ASRSource; a store failure = ONE WARNING, the event flows unblocked (CON-3-adjacent additive posture). bootstrap wires the store and runs purge_older_than(7) once at boot (the scratchpad purge-on-boot precedent; _RETENTION_DAYS = 7 pinned constant, no knob). NOT-list (recorded, DEC-64's multi-turn-history rejection STANDS): never rendered into any prompt, never a conversation-history window, never a gate/scoring input - dream-extraction input ONLY (TK-297)."
+    complexity_budget: "One migration, one small store module, one preflight entry, one sink tap in sources/bootstrap.py, one purge call at boot. NO prompt/payload/compose changes, NO reply-side logging (user utterances only), NO app surface."
+    acceptance_criteria:
+      - given: "a throwaway pg"
+        when: "ensure_all_schemas runs twice"
+        then: "wombat_chat_turns exists idempotently as the eleventh preflight entry; record_turn/turns_since/purge_older_than round-trip with ascending order and cutoff semantics."
+      - given: "a registry wired with the sink and both a typed chat event and a voice-turn event plus a gmail/gcal event"
+        when: "polled through"
+        then: "exactly the two chat turns are recorded with the right text/voice/captured_at; the gmail/gcal events record NOTHING; enqueue behavior is byte-identical throughout."
+      - given: "a ChatTurnStore whose record raises"
+        when: "a chat event flows"
+        then: "one WARNING, the event still enqueues - the ledger can never block a turn."
+      - given: "rows older and newer than 7 days"
+        when: "the boot purge runs"
+        then: "only the older rows are gone; the purge fires once per boot from assemble_runtime."
+    non_goals:
+      - "No assistant-reply logging and no correlation ids - the user's own words only, CON-1/CON-6 clean."
+      - "No prompt rendering of turns EVER - DEC-64's multi-turn-history rejection is restated, not reopened."
+    depends_on:
+      - TK-245
+      - TK-247
+    files_in_scope:
+      - src/wombat/migrations/012_chat_turns.sql
+      - src/wombat/chat_turns.py
+      - src/wombat/schema_preflight.py
+      - src/wombat/sources/bootstrap.py
+      - src/wombat/bootstrap.py
+      - tests/unit/test_chat_turns.py
+      - tests/sources/test_bootstrap.py
+      - tests/unit/test_bootstrap.py
+  - id: TK-296
+    kind: ticket
+    parent: EP-32
+    title: "Typed-chat context parity + the known_user_context stamp - ChatSource gains the ASRSource-lineage context_hook; ONE composition-root closure now stamps replying_to + grounding bundle + a bounded user-facts block onto BOTH chat surfaces' payloads, zero compose diff (DEC-65f; closes DEC-64's recorded typed-chat follow-up)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-65(f), the DEC-64 delivery mechanism reused verbatim - context is PAYLOAD, stamped source-side (compose-side injection stays rejected). (1) voice/context_prefetch.py gains build_user_facts_context(store) -> at most {'known_user_context': <one-fact-per-line block>} reading UserFactsStore.list_facts under pinned caps _MAX_FACTS_LINES = 15 / _MAX_FACTS_CHARS = 900 (DEC-63 no-knob); zero rows = NO key; store None = {} silently; a raise = {} + ONE WARNING (the build_voice_context degrade shape exactly). (2) sources/chat_source.py (+ the payload-build seam in chat/surface.py) gains an optional context_hook in the TK-289 ASRSource shape - called once at payload-build time, its mapping merged UNDER the built-in fields (item_kind/text/received_at unoverridable; raise = ONE WARNING + unstamped turn, the never-raises posture). (3) bootstrap.assemble_runtime builds ONE shared closure - {replying_to from the TK-288 register when fresh} + build_voice_context(...) + build_user_facts_context(...) merged - and wires it into BOTH the ASRSource context_hook (extending the TK-289/TK-290 closure in place) and the new ChatSource hook: typed turns gain the calendar/gmail grounding DEC-64 recorded as a follow-up AND both surfaces gain the facts block in one stroke. format_payload_fields delivers everything to the mouth on the existing Q-50 wire - compose.py's prompt-assembly is untouched by construction (TK-293's selection branch is the only compose diff in this arc)."
+    complexity_budget: "One new render function beside build_voice_context, one optional hook param on the typed chat path mirroring TK-289, one closure extension at the composition root. NO compose prompt-assembly edits, NO new tables, NO history window, NO per-turn model calls, caps pinned as module constants."
+    acceptance_criteria:
+      - given: "a UserFactsStore seeded with facts (and separately: empty, None, raising)"
+        when: "build_user_facts_context runs"
+        then: "seeded -> one known_user_context key, one fact per line, truncated at 15 lines/900 chars deterministically; empty/None -> no key; raising -> no key + exactly one WARNING."
+      - given: "a ChatSource with the hook wired and a typed message"
+        when: "the SourceEvent is built"
+        then: "the payload carries the closure's keys (known_user_context, context_calendar_today/context_recent_email when the store has rows, replying_to when the register is fresh) UNDER the unoverridable built-ins; hook None = today's payload byte-identical; hook raising = one WARNING + unstamped."
+      - given: "the real assemble_runtime wiring with seeded facts/external stores and a fresh register"
+        when: "a typed chat turn AND a voice turn each reach a ComposeStage FakeModel spy"
+        then: "BOTH captured user messages contain the known_user_context facts; the voice turn also carries replying_to; a gmail/gcal/brief surface carries NONE of these keys."
+      - given: "the existing chat surface/broker/asr suites"
+        when: "run on the landed diff"
+        then: "green unmodified except construction-site tests - the hook defaults keep every existing path byte-identical."
+    non_goals:
+      - "No compose.py prompt-assembly change - the payload wire IS the mechanism (Q-50/DEC-64 upheld)."
+      - "No facts WRITING anywhere here - read-only rendering; TK-297 owns writes."
+      - "No conversation history - facts are distilled durable knowledge, not transcript."
+    depends_on:
+      - TK-293
+      - TK-294
+      - TK-289
+      - TK-290
+    files_in_scope:
+      - src/wombat/voice/context_prefetch.py
+      - src/wombat/sources/chat_source.py
+      - src/wombat/chat/surface.py
+      - src/wombat/sources/bootstrap.py
+      - src/wombat/bootstrap.py
+      - tests/voice/test_context_prefetch.py
+      - tests/sources/test_chat_source.py
+      - tests/chat/test_surface.py
+      - tests/unit/test_bootstrap.py
+  - id: TK-297
+    kind: ticket
+    parent: EP-13
+    title: "dream_facts - the nightly off-path getting-to-know pass: ONE budget-guarded consolidation-model call distills the day's chat turns into at most 5 clamped, deduped, motive-free user facts, journaled human-readably (DEC-65g; DEC-23 admission, RatingTuner-pattern custody)"
+    status: todo
+    priority: P1
+    estimate: M
+    engineering_level: mvp
+    intent: "DEC-65(g). NEW src/wombat/behavior/stages/dream_facts.py - DreamFactsStage slotted into the dream graph between dream_persona and dream_behavior_log (dream_pathway.py wiring; the TK-214 insertion precedent). Reads ChatTurnStore.turns_since(now - 36h); ZERO turns = no model call, transitions on. ONE call to the injected consolidation model (the TK-54 substrate - already budget-guarded; DEC-23 admits off-path S1 inference here) with a STRICT extraction instruction: extract only durable facts the user STATED about themselves, their people, preferences, and running jokes, each as one short third-person line; NEVER infer motive, emotional state, or psychology and NEVER use clinical/diagnostic language (CON-6 - the reflection-mouth bar verbatim). DETERMINISTIC POST-FILTER (the custody, model output is a PROPOSAL only): parse one-fact-per-line; drop lines over 200 chars; cap at _MAX_NEW_FACTS_PER_NIGHT = 5 (pinned constant); fact_key = a stable hash of casefolded/whitespace-collapsed fact text; skip keys already in the store (dedupe); a deterministic forbidden-lexicon screen (the reflection clinical-terms list) drops violating lines loudly. Each accepted fact -> UserFactsStore.upsert_fact(key, fact, source='dream') + ONE human-readable journal line per fact (CON-4). Any failure (model/store/parse) is caught, logged LOUD, and the stage still transitions - a bad night never blocks dream_run (the dream_tune posture). Emits a small dream_facts_report artifact (counts only)."
+    complexity_budget: "One new stage module + one graph insertion + substrate injection at the dream composition root. ONE model call per night max, NO new egress class (the existing budgeted consolidation model), NO retrieval/embeddings, NO persona-matrix writes (DEF-8 untouched), NO facts deletion logic beyond the store's own cap."
+    acceptance_criteria:
+      - given: "a seeded ChatTurnStore and a fake consolidation model returning a mixed proposal (valid facts, an over-long line, a motive/clinical line, a duplicate of an existing store fact, and 7 valid candidates)"
+        when: "the stage runs"
+        then: "at most 5 NEW facts land in UserFactsStore with source='dream' and stable deterministic keys; the over-long, forbidden-lexicon, and duplicate lines are dropped (each loudly logged); one journal line per accepted fact."
+      - given: "zero chat turns in the window"
+        when: "the stage runs"
+        then: "NO model call is made and the graph transitions to dream_behavior_log unchanged."
+      - given: "a raising model, a raising ChatTurnStore, and a raising UserFactsStore (each case separately)"
+        when: "the stage runs"
+        then: "loud log, zero partial corruption beyond already-upserted facts, and the dream run still completes to dream_run."
+      - given: "the existing dream pathway suite"
+        when: "run on the landed graph"
+        then: "green - dream_consolidate -> dream_outcome -> dream_tune -> dream_persona -> dream_facts -> dream_behavior_log -> dream_window -> dream_pattern -> dream_run; every neighboring stage byte-untouched."
+      - given: "the stage's rendered extraction instruction"
+        when: "inspected by test"
+        then: "it contains the CON-6 never-motive/never-clinical bar verbatim and requests one-fact-per-line third-person output."
+    non_goals:
+      - "No persona-axis movement from facts - DEF-8 stands; facts never touch the matrix, the gate, or any rating."
+      - "No in-path (per-turn) extraction - CON-1; the mouth never writes."
+      - "No second model call, no retry loop, no embeddings/RAG."
+    depends_on:
+      - TK-294
+      - TK-295
+      - TK-214
+      - TK-54
+    files_in_scope:
+      - src/wombat/behavior/stages/dream_facts.py
+      - src/wombat/pathways/dream_pathway.py
+      - src/wombat/bootstrap.py
+      - tests/behavior/test_dream_facts.py
+      - tests/pathways/test_dream_pathway.py
+  - id: TK-298
+    kind: ticket
+    parent: EP-33
+    title: "Charter memory-accuracy sentence + the companion-arc proof - CAPABILITY_CHARTER stays honest about remembering (every cannot-clause byte-retained), and one integration module proves the whole DEC-65 arc end-to-end with every neighbor pinned (DEC-65h, proof ticket)"
+    status: todo
+    priority: P1
+    estimate: S
+    engineering_level: mvp
+    intent: "DEC-65(h). (1) persona/capabilities.py - ONE sentence inserted before the 'You cannot' sentence: 'You remember personal details the user has shared in earlier conversations when they appear in what you are given.' - conditionally phrased so it is TRUE regardless of store contents; every existing sentence, including every cannot/never clause, is byte-retained (DEC-62 amended for ACCURACY, never weakened - the charter's job is truth in both directions, and post-TK-296 the old text would deny a real capability); every charter-pinning test updates to the new constant ONCE (they pin the imported constant, not scattered copies). (2) NEW tests/integration/test_companion_chat_e2e.py (pg-gated, throwaway DSN) driving the real seams with fakes at the edges (the TK-291 module shape): real ChatSource/ASRSource -> registry (chat-turn sink recording) -> queue -> real Gate -> real ComposeStage with FakeModel spy under a LivePersona(user_name='Jim') - asserting (a) a typed chat turn composes under the Mouth.CHAT companion instruction (companion base role substring, 'Jim' present, charter terminating) with known_user_context facts in the user message; (b) a voice turn gets the same plus replying_to inside TTL; (c) a gmail-kind surfaced item composes under the UNCHANGED Mouth.COMPOSE instruction with zero DEC-65 payload keys; (d) the dropped turns landed in wombat_chat_turns; (e) a DreamFactsStage run over those turns with a fake model writes capped deduped facts that the NEXT chat turn's prompt then carries - the full getting-to-know loop closed in one module. (3) The DEC-57/DEC-60/DEC-63/DEC-64 pinned suites and the brief/draft/reflection instruction pins all pass unmodified in the same run."
+    complexity_budget: "One sentence in one constant + its pin updates, one integration test module. NO other src changes - everything else must already work; a needed fix belongs to the owning ticket, not here."
+    acceptance_criteria:
+      - given: "the amended CAPABILITY_CHARTER"
+        when: "diffed against the previous text"
+        then: "exactly one inserted sentence (the conditional memory sentence); every pre-existing sentence byte-identical; compose AND chat guard suffixes both carry the full amended charter at every matrix value."
+      - given: "the integration module on a throwaway pg"
+        when: "run"
+        then: "assertions (a)-(e) of the intent all hold in one module run."
+      - given: "the DEC-57/DEC-60/DEC-63/DEC-64 suites and the brief/draft/reflection instruction pins"
+        when: "the full suite runs on the landed arc"
+        then: "green unmodified - the only pin edits in this ticket are the charter-constant pins named in scope."
+    non_goals:
+      - "No live model calls - the live personability ear-check is the operator's."
+      - "No charter weakening - zero cannot/never clauses touched, structurally asserted."
+    depends_on:
+      - TK-296
+      - TK-297
+      - TK-284
+    files_in_scope:
+      - src/wombat/persona/capabilities.py
+      - tests/persona/test_expression.py
+      - tests/unit/test_compose_stage.py
+      - tests/capabilities/test_capability_charter.py
+      - tests/integration/test_companion_chat_e2e.py
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -8337,6 +8607,18 @@ governance:
   - { id: DEF-11, type: deferral, status: deferred, scope: EP-29, date_raised: "2026-07-21", date_updated: "2026-07-21", title: "Defer the auto-listen window / VAD after the Steward speaks - Jim ruled PTT-only walkie-talkie replies for v1, explicitly leaving room for VAD if pressing the button every time gets annoying; the DEC-64 on_spoken seam + LastSpokenRegister are the PINNED future attachment point - a listen-window consumer subscribes to the same hook and opens a bounded VAD capture into the SAME drop-dir pipeline, with zero rework of the conversation plumbing (register, context_hook, replying_to stamp all reused as-is); Q-97's push-to-activate/no-wake-word/no-continuous-listening ruling stands untouched until that day; revisit trigger - Jim reports the button annoying",
       revisit_trigger: "Jim reports that pressing the PTT button for every reply is annoying - then a listen-window ticket attaches a bounded VAD capture to the DEC-64 on_spoken seam; until then Q-97 governs.",
       links: ["DEC-64","ISS-28","Q-97","TK-288","EP-29"] }
+  - { id: ISS-29, type: issue, status: resolved, scope: EP-33, date_raised: "2026-07-30", date_updated: "2026-07-30", title: "Jim-reported - the agent feels too STIFF. Jim verbatim: 'the agent feels too stiff. I was trying to joke around with it and it didnt really understand. It needs to be more personable. I should be able to chat with it and it not always be about something it cares about for its role. Getting to know me is important too.' Source-diagnosed as THREE structural gaps, not tuning: (1) every chat turn renders under the ONE Mouth.COMPOSE instruction - 'quiet steward... one terse, calm line' (builder.py:96, compose.py:88) - there is no conversational register anywhere in the system for the model to use; (2) nothing about the USER exists in any prompt - no user name (the recorded 'Hello, wombat' mis-address), no accumulated knowledge, no durable record of anything Jim has ever said (the queue DELETEs on ack, queue.py:229); (3) the persona matrix cannot fix it - humor tops out at 'dry' clause text bolted onto the same terse-steward base role, and DEFAULT byte-identity pins the stiffness in",
+      resolution: "Converted to DEC-65 - the companion arc: a FIFTH Mouth.CHAT with a personable companion base role (assistant_name + user_name slots) selected by item_kind at ComposeStage; durable wombat_user_facts + a 7-day wombat_chat_turns ledger; nightly off-path dream_facts extraction (DEC-23 admission, deterministic custody); facts delivered to BOTH chat surfaces via the DEC-64 source-side payload-stamp mechanism (which also closes DEC-64's recorded typed-chat grounding follow-up); one charter accuracy sentence. Explicit remember/forget commands deferred as DEF-12. TK-292..TK-298 minted.",
+      links: ["DEC-65","DEF-12","TK-292","TK-293","TK-294","TK-295","TK-296","TK-297","TK-298","DEC-62","DEC-64","DEC-37","EP-33","EP-36","EP-13","EP-32"] }
+  - { id: DEC-65, type: decision, status: accepted, scope: EP-33, date_raised: "2026-07-30", converted_from: "ISS-29", title: "The Steward becomes a COMPANION in chat (JIM DIRECTIVE recorded - more personable, humor understood, chat need not be about its role, 'Getting to know me is important too'; architect rules the delegated hows) - (a) a FIFTH mouth Mouth.CHAT with a pinned companion-register base role (warm, matches the user's tone, rolls with jokes/banter, casual conversation first-class - never steered back to duties unless asked) carrying assistant_name AND the new wombat_user_name; guard suffix = 'No preamble. ' + the FULL capability charter at the same strip-proof seam; (b) ComposeStage selects Mouth.CHAT iff item_kind == CHAT (typed + voice, DEC-57/60) - instruction SELECTION only, never prompt-content injection (DEC-64's compose-side rejection honored); the four original mouths and every non-chat prompt stay byte-identical (the DEC-33/DEC-37 DEFAULT byte-identity claim is SCOPED to the original four mouths, superseded-in-part for the new fifth); (c) speaker identity - wombat_user_name (app-editable, restart-to-apply) threads into the chat base role so it knows WHO it is talking to; (d)+(e) two durable local-pg surfaces - wombat_user_facts (migration 011, 200-row evict-oldest cap, NEVER purged - which is exactly why DEC-46's 14-day-purge scratchpad was NOT reused) and wombat_chat_turns (migration 012, user utterances only, 7-day rolling, dream-input ONLY - DEC-64's multi-turn-prompt-history rejection STANDS); (f) facts reach the mouth as PAYLOAD via the DEC-64 source-side context-hook mechanism, extended to a shared closure on BOTH ASRSource and a new ChatSource context_hook (bounded 15-line/900-char known_user_context; also delivers the calendar/gmail grounding bundle to typed chat, closing DEC-64's recorded follow-up); (g) getting-to-know is ORGANIC and off-path - a nightly dream_facts stage (DEC-23 admission, one budget-guarded consolidation-model call, RatingTuner-pattern deterministic custody: max 5 facts/night, 200-char clamp, dedupe, motive/clinical lexicon screen, journaled per CON-4; CON-6 - facts are what the user SAID, never inferred motive); (h) ONE conditional accuracy sentence joins the capability charter ('You remember personal details the user has shared in earlier conversations when they appear in what you are given.') - DEC-62 amended for TRUTH, never weakened: every cannot/never clause byte-retained",
+      context: "ISS-29 (Jim verbatim feedback) + source diagnosis. Whole-project fit: the gate keeps FULL custody of whether/when (chat turns already always compose, DEC-57; nothing here touches surfacing, scoring, or the loop) - stiffness and not-knowing-Jim are both WHAT-THE-MOUTH-IS-GIVEN questions: the register is system-instruction content (the persona machinery's own seam, extended with a fifth mouth instead of bypassed) and user knowledge is payload content (the DEC-64 delivery mechanism reused verbatim). The only LLM inference added is off-path consolidation-time extraction, the exact class DEC-23 already admits in the dream pathway, under the same deterministic-custody pattern as RatingTuner/dream_persona. No new egress (the consolidation model is the existing budgeted DeepSeek seam); all new storage is local pg (CON-7).",
+      decision: "TK-292 Mouth.CHAT + companion base role + policy/guard/config (user_name never renders in the original four mouths - byte-identity pinned); TK-293 item_kind selection at ComposeStage + frozen chat fallback (degrade stays the deterministic template - DEC-37e honest asymmetry); TK-294 UserFactsStore (migration 011, tenth preflight, pinned 200 cap); TK-295 ChatTurnStore + registry-sink tap (migration 012, eleventh preflight, 7-day boot purge, never-blocks posture); TK-296 shared context closure -> known_user_context on BOTH surfaces + typed-chat grounding parity, zero compose diff; TK-297 DreamFactsStage between dream_persona and dream_behavior_log (zero turns = zero model calls; every model output is a PROPOSAL clamped by deterministic filters); TK-298 charter sentence + end-to-end proof with the DEC-57/DEC-60/DEC-62/DEC-63/DEC-64 + brief/draft/reflection pins. Batch order TK-292 -> TK-293 -> TK-294 -> TK-295 -> TK-296 -> TK-297 -> TK-298.",
+      consequences: "(+) Chat/voice turns get a genuinely personable register at DEFAULT while briefs/drafts/reflection and all gate/loop behavior stay byte-identical - Jim's directive lands without touching the quiet-thesis spine. (+) The mouth knows it is talking to Jim and accumulates durable, user-stated knowledge organically - conversations build on each other via the nightly pass. (+) Typed chat reaches grounding parity with voice for free (the DEC-64 follow-up closes). (-) The chat register is personable-by-default REGARDLESS of the matrix; axes modulate on top - a recorded asymmetry with the DEFAULT-steward story, scoped to the new mouth only. (-) Chat-mouth axis effects are NOT re-run through the TK-210 live eval harness in this arc - recorded honest gap, harness remains available. (-) Raw user utterances persist 7 days and distilled facts indefinitely in LOCAL pg - CON-7 posture, accepted; facts ride chat payloads into queue/journal rows under pinned caps (the DEC-64 accepted class). (-) Facts extracted tonight appear in tomorrow's chat - overnight latency accepted for v1 (DEF-12 holds the immediate-recall alternative). (-) A model-fabricated 'fact' can only enter via the dream pass and is clamped/deduped/screened + journaled per CON-4 - auditable, and bounded at 5/night.",
+      alternatives: ["Loosen the existing Mouth.COMPOSE register for everything (rejected - briefs/urgent surfaced lines MUST stay terse; the steward register is correct on-duty)", "Re-add a 'playful' humor level to the matrix (rejected - DEC-37's closed none|dry set stands; the register belongs in the base role, not an axis, and reopening the matrix reopens exhaustive pins + eval bar for a worse fit)", "Compose-side facts provider on ComposeStage (rejected - DEC-64 already rejected compose-side injection; the source-side payload stamp needs no Q-50 re-ruling)", "Multi-turn conversation history in the prompt (stands REJECTED per DEC-64 - wombat_chat_turns is dream-input only, structurally never rendered)", "Reuse wombat_scratchpad for facts (rejected - purge-on-boot 14d working memory with a NOT-list; user knowledge is durable-forever, the opposite lifecycle)", "In-path per-turn LLM fact extraction (rejected - CON-1, the mouth never writes; DEC-23 admits exactly the off-path consolidation slot used here)", "Explicit deterministic 'remember ...' command (DEFERRED as DEF-12 - prefix matching breaks the Q-109(b) exact-equality grammar discipline and needs new ack plumbing on the typed surface; the organic pass catches stated 'remember that...' utterances anyway, one night later)"],
+      links: ["ISS-29","DEF-12","TK-292","TK-293","TK-294","TK-295","TK-296","TK-297","TK-298","DEC-23","DEC-33","DEC-37","DEC-38","DEC-45","DEC-46","DEC-57","DEC-60","DEC-62","DEC-63","DEC-64","DEF-8","Q-50","Q-109","CON-1","CON-4","CON-6","CON-7","EP-33","EP-36","EP-13","EP-32"] }
+  - { id: DEF-12, type: deferral, status: deferred, scope: EP-33, date_raised: "2026-07-30", date_updated: "2026-07-30", title: "Defer the explicit deterministic 'remember .../forget ...' capture command - v1 getting-to-know is the organic nightly dream_facts pass only (DEC-65g); an explicit command needs PREFIX matching (against the Q-109(b) exact-whole-utterance grammar discipline) plus immediate-ack plumbing on the typed chat surface (the broker resolves only composed replies today), neither worth building until the overnight latency actually chafes; the organic pass already catches 'remember that ...' utterances verbatim as high-signal candidate facts one night later; the UserFactsStore upsert/delete seams (TK-294) are the pinned attachment point - a command consumer writes through them with zero store rework",
+      revisit_trigger: "Jim asks for immediate recall ('remember this NOW') or reports the overnight fact latency as a gap - then one ticket adds the deterministic capture command at both surfaces through the TK-294 seams.",
+      links: ["DEC-65","ISS-29","TK-294","Q-109","EP-33"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -8697,3 +8979,4 @@ changelog:
   - { date: "2026-07-21", version: "2.153", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-289 DONE (board 206/208) - DEC-64 gap A half 2 lands exactly per the mint, diff confined to six of the eight files_in_scope (tests/sources/test_asr.py needed no edit - its suite ran green as the no-regression pin). ASRSource gains the FOURTH optional ctor hook context_hook returning a str-to-str mapping, evaluated in _process_one strictly AFTER the command_hook early-return and at payload-build time, the hook's mapping merged UNDER the four built-ins (extra fields spread first, built-ins after - item_kind/voice_turn/transcript/captured_at structurally unoverridable, AC5 hostile-hook pin); UNLIKE the command/feedback/turn lineage THIS call IS guarded - a raise = ONE WARNING with exc_info and the turn proceeds unstamped, the file still moving to processed/ (AC4). sources/bootstrap.py threads context_hook through _maybe_register_asr and build_source_registry verbatim in the TK-280 turn_hook pass-through shape (defaults None = today's ASRSource byte-identical, AC3 zero-diff pin). assemble_runtime builds the unconditional asr_context_hook closure over the SAME shared TK-288 last_spoken_register - current() fresh stamps replying_to with the exact spoken text, stale/None yields an ABSENT key (never empty string) - and passes it into build_source_registry (AC1/AC2 pinned both at ASRSource level with a fake clock and at the real assemble_runtime wiring in tests/unit/test_bootstrap.py). ONE CLOSEOUT RULING (within authority - AC-check homing, not a decision or scope change) - AC6's FakeModel-spy prompt clause is CARRIED BY TK-291 AC1/AC2, the identical assertion in its STRONGER end-to-end form (real Gate + real ComposeStage + spy asserting replying_to with the spoken text in the captured user message), later in this SAME dispatched batch, while TK-289's own diff proves the structural half NOW - compose.py absent from git status (the clean-diff clause), and the render-by-construction chain re-verified in source - artifacts.py:207 returns the payload verbatim, stages/compose.py:158 renders it via format_payload_fields, templates.py:26-35 iterates sorted payload items with NO key filtering, and the pre-existing generic pin (tests/unit/test_compose_stage.py:96-102) already asserts arbitrary payload values reach user_msg.content. REOPEN CONDITION recorded - if TK-291 does not land in this batch, TK-289 reopens for its own AC6 spy check. Builder self-ran the full bar green - targeted asr/bootstrap suites 91 passed / 1 pg-gated skip; full suite 1771 passed / 100 pg-gated skips / 0 failed; ruff clean; mypy strict Success 341 files; app/ untouched per the DEC-64 guard. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - one Opus review audits the whole four-ticket DEC-64 diff after TK-290/TK-291 land. NEXT - TK-290 (build_voice_context grounding prefetch)." }
   - { date: "2026-07-21", version: "2.154", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-290 DONE (board 207/208) - DEC-64 gap B lands exactly per the mint plus the v2.151 field-pin ruling, diff confined to the four files_in_scope. NEW src/wombat/voice/context_prefetch.py - build_voice_context(store, tz, clock) returns AT MOST {context_calendar_today, context_recent_email}: gcal via store.get_window('gcal', ...) over the tz-local day 00.00.00 through 23.59.59.999999 as AWARE datetimes (the DEC-21 wombat_today discipline, computed at call time; get_window's inclusive SQL filter does the window exclusion, NO renderer-side re-filtering per the v2.151 ruling), gmail via store.get_recent('gmail', 5); compact deterministic one-per-line rendering under the pinned module-constant caps 10 items/800 chars (gcal) and 5 items/400 chars (gmail) - DEC-63 no-knob precedent, not operator-tunable. Zero rows = NO key (never empty string); store None = {} with no call and no warning; ANY raise from either store call (ONE guarded block) = {} plus exactly ONE WARNING and the turn proceeds with transcript and replying_to unaffected (CON-3 - grounding strictly additive). DEC-26 held by construction AND pinned structurally - the renderer reads ONLY the v2.151-verified projection fields (gcal event_id/title/start/end/all_day, gmail message_id/subject/sender/received_at/priority_band, the DEC-45 five-field whitelist; email lines read sender/received_at, no 'from' key); no body/body_text token exists anywhere in the module (grep + unit test pin). A VoiceContextStore Protocol mirrors the TokenStore convention so test fakes never import ExternalItemStore. WIRING - merged into the SAME asr_context_hook closure TK-289 minted (voice-only by construction, the hook lives on ASRSource): ExternalItemStore construction MOVED EARLIER in assemble_runtime so the closure captures it (still always-constructed/fully-lazy per the v2.68 r5 ruling, comment updated in place), replying_to spread first then the bundle merged in, ASRSource's four built-ins unoverridable above both. Compose byte-untouched - the daily token ceiling stands as the spend guard, prompt growth bounded by the caps. All five ACs pinned by runnable checks - determinism/caps/window on fake store plus pg-gated WOMBAT_TEST_PG_DSN cases in tests/voice/test_context_prefetch.py, real assemble_runtime closure merge + degrade cases in tests/unit/test_bootstrap.py, and the no-context-keys pin on typed ChatSource/gmail/gcal/brief surfaces. Builder self-ran the full bar green - targeted 37 passed/1 skipped without the DSN, 50 passed with a throwaway postgres:16 on 5437 (stopped after); full suite 1905 passed / 13 skipped / 0 failed with the DSN set; ruff clean; app/ untouched per the DEC-64 guard. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - one Opus review audits the whole four-ticket DEC-64 diff after TK-291 lands. NEXT - TK-291 (the end-to-end walkie-talkie proof, the last open ticket of the arc)." }
   - { date: "2026-07-21", version: "2.155", by: "architect (closeout on builder self-run bar; batch-verify pending)", change: "TK-291 DONE (board 208/208, BOARD CLOSED - the DEC-64 walkie-talkie arc complete, TK-288 through TK-291 all landed). The proof ticket lands exactly per the mint - ONE new pg-gated integration module tests/integration/test_voice_conversation_context_e2e.py with ZERO src changes (git status confirms the only code diff is the new test file, so the AC3 byte-untouched clause holds by construction AND by the full suite passing unmodified). The module drives the REAL seams with fakes only at the edges - real ASRSource (fake keyed Transcriber, tmp drop dir) via the real SourceRegistry onto a real WombatQueue (throwaway WOMBAT_TEST_PG_DSN, module-level skip without it - never the live wombat DB); the real production Gate (make_gate_evaluator over Gate with CeilingLedger/FlushDayLatch/PendingSet/UserModel, mirroring test_drain_pathway_e2e.py own _build_real_gate_stack); real ComposeStage/ChatReplyStage/SpeechShapeStage/SpeakSink with a FakeModel spy; the TK-288 LastSpokenRegister on its OWN steppable clock plus the TK-289/TK-290 combined asr_context_hook closure wired verbatim as assemble_runtime wires them (replying_to spread first, build_voice_context merged on top). AC1 - note_spoken seeded + today-gcal/recent-gmail store rows + a file dropped inside the TTL - the captured compose user message carries the replying_to key with the EXACT spoken text AND both context_calendar_today/context_recent_email substrings (asserted as substrings per the v2.151 format_payload_fields sorted one-line ruling), and the reply flows the full DEC-60 voice path - voice_turn true on the composed artifact, a real non-degraded speech_shape call, the TTS adapter actually spoken, the chat broker future resolved with the composed text (pane echo). AC2 - the register clock advanced past LAST_SPOKEN_TTL_SECONDS - the second turn captured prompt has NO replying_to while both context keys persist (store still seeded across turns). AC3 - the DEC-62/DEC-57/DEC-60 + brief/draft/reflection pinned suites all pass unmodified in the same full-suite run; no pin edits beyond those TK-288/TK-289/TK-290 declared in scope. The v2.153 reopen condition on TK-289 (its AC6 spy clause homed here) is DISCHARGED - TK-291 landed in the same batch carrying the stronger end-to-end assertion. Builder self-ran the full bar green - ruff clean; mypy Success 344 files; the module 1 passed on a throwaway docker postgres:16 (port 5437, stopped after); full suite 1906 passed / 13 skipped / 0 failed with the DSN wired. Architect re-ran uv run pytest -q pre-commit. BATCH-VERIFY PENDING per the v2 cadence - ONE Opus review now audits the whole four-ticket DEC-64 diff (TK-288..TK-291). NEXT - the Opus batch review, then the operator runtime relaunch + live walkie-talkie ear-check picks up DEC-64." }
+  - { date: "2026-07-30", version: "2.156", by: "architect (Jim directive recorded + ISS intake -> decision + tickets)", change: "JIM FEEDBACK RECORDED on the too-stiff Steward + ISS-29 -> DEC-65 ACCEPTED + DEF-12 + TK-292..TK-298 MINTED (board reopens 208/215). Jim verbatim - too stiff, jokes not understood, needs to be more personable, chat should not always be about its role, 'Getting to know me is important too'. Source-diagnosed as structural (one terse-steward instruction for every chat turn; zero user knowledge in any prompt; queue DELETEs on ack so nothing Jim says survives). THE COMPANION ARC, all delegated hows ruled within the locked frame: TK-292 (EP-33) FIFTH mouth Mouth.CHAT - pinned companion base role with assistant_name + NEW wombat_user_name config field (app-editable), policy grants brevity/warmth/directness/humor, guard suffix = 'No preamble. ' + the FULL DEC-62 charter at the same strip-proof expression seam, four original mouths byte-identity re-pinned; TK-293 (EP-33) ComposeStage selects Mouth.CHAT iff item_kind CHAT (typed + voice per DEC-57/DEC-60) - instruction SELECTION only, the DEC-64 compose-side-injection rejection honored, degrade template unchanged; TK-294 (EP-36) wombat_user_facts migration 011 + UserFactsStore (200-row evict-oldest pinned cap, durable forever - DEC-46 scratchpad NOT reused, its 14d purge is the opposite lifecycle); TK-295 (EP-36) wombat_chat_turns migration 012 + registry-sink tap (user utterances only, 7-day boot purge, dream-input ONLY - the DEC-64 multi-turn-history rejection restated); TK-296 (EP-32) ChatSource gains the TK-289-lineage context_hook + ONE shared closure stamps known_user_context (15/900 caps) AND the calendar/gmail bundle onto BOTH surfaces' payloads - the DEC-64 recorded typed-chat grounding follow-up CLOSES, zero compose diff; TK-297 (EP-13) DreamFactsStage between dream_persona and dream_behavior_log - one budget-guarded consolidation call (DEC-23 admission, no new egress), deterministic custody (max 5/night, 200-char clamp, dedupe, motive/clinical screen per CON-6, journaled per CON-4), zero turns = zero calls; TK-298 (EP-33) one conditional charter accuracy sentence (every cannot/never clause byte-retained - DEC-62 amended for truth, never weakened) + the end-to-end proof module with DEC-57/60/62/63/64 + brief/draft/reflection pins. Rejected alternatives recorded on DEC-65 - loosen-everything, matrix 'playful' level (DEC-37 closed set stands), compose-side provider, prompt history, scratchpad reuse, in-path extraction, explicit remember command (DEF-12 with revisit trigger). DEF-8 untouched - facts never move persona axes. Batch order TK-292 -> TK-293 -> TK-294 -> TK-295 -> TK-296 -> TK-297 -> TK-298. validate + gate_check analyze run post-edit." }
