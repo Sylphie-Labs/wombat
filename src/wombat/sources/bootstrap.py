@@ -415,9 +415,11 @@ def build_chat_turn_sink(
         (voice) — whichever key is present, parsed via ``datetime.fromisoformat``; ``clock()`` if
         somehow neither key is present (defensive — never reached by either real payload shape).
 
-    A ``store.record_turn`` raise is caught PER EVENT and logged as ONE WARNING naming the source
-    id — the ledger can never block a turn (CON-3-adjacent additive posture): the event still
-    enqueues via the registry's own separate enqueue arm, byte-unaffected by this tap.
+    A raise from field projection (e.g. a malformed ``captured_at``/``received_at`` that fails
+    ``datetime.fromisoformat``) OR from ``store.record_turn`` is caught PER EVENT and logged as
+    ONE WARNING naming the source id — the ledger can never block a turn (CON-3-adjacent additive
+    posture), and a bad event can never stall the rest of the batch: the event still enqueues via
+    the registry's own separate enqueue arm, byte-unaffected by this tap.
     """
 
     def sink(source_id: str, events: list[SourceEvent]) -> None:
@@ -428,12 +430,12 @@ def build_chat_turn_sink(
             text = payload.get("text") or payload.get("transcript")
             if not text:
                 continue
-            voice = "voice_turn" in payload
-            captured_raw = payload.get("received_at") or payload.get("captured_at")
-            captured_at = (
-                datetime.fromisoformat(captured_raw) if captured_raw else clock()
-            )
             try:
+                voice = "voice_turn" in payload
+                captured_raw = payload.get("received_at") or payload.get("captured_at")
+                captured_at = (
+                    datetime.fromisoformat(captured_raw) if captured_raw else clock()
+                )
                 store.record_turn(str(text), voice, captured_at)
             except Exception:
                 logger.warning(

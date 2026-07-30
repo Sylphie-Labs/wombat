@@ -1072,6 +1072,19 @@ class _RaisingChatTurnStore(ChatTurnStore):
         raise RuntimeError("boom")
 
 
+class _InMemoryChatTurnStore(ChatTurnStore):
+    """A real ``ChatTurnStore`` subclass (never opens a connection — ``record_turn`` is fully
+    overridden to record in-memory) mirroring ``_RaisingChatTurnStore`` above; used to observe
+    which turns actually reach the store."""
+
+    def __init__(self) -> None:
+        super().__init__("postgresql://fake-host/fake-db")
+        self.recorded: list[tuple[str, bool, datetime]] = []
+
+    def record_turn(self, text: str, voice: bool, captured_at: datetime) -> None:
+        self.recorded.append((text, voice, captured_at))
+
+
 @dataclass
 class _OneShotChatSource:
     """A minimal ``InputSource`` that yields ONE chat ``SourceEvent`` on its first ``poll()``,
@@ -1205,6 +1218,43 @@ def test_ac2_composed_sink_records_exactly_the_two_chat_turns_and_skips_gmail_gc
     finally:
         chat_store.close()
         external_store.close()
+
+
+def test_tk308_malformed_captured_at_on_one_event_still_records_the_next_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """TK-308: event 1 is chat with a garbage ``received_at`` -- ``datetime.fromisoformat`` raises
+    INSIDE the per-event try, so it can no longer escape the sink and starve the rest of the
+    batch. Exactly ONE WARNING for event 1, no exception escapes, and event 2 (well-formed chat)
+    still reaches ``record_turn``."""
+    store = _InMemoryChatTurnStore()
+    sink = build_chat_turn_sink(store, clock=_utc_now)
+
+    bad_event = SourceEvent(
+        event_key="chat-bad",
+        payload={"item_kind": "chat", "text": "garbled", "received_at": "not-a-timestamp"},
+    )
+    good_event = SourceEvent(
+        event_key="chat-good",
+        payload={
+            "item_kind": "chat",
+            "text": "hello",
+            "received_at": "2026-07-29T12:00:00+00:00",
+        },
+    )
+
+    caplog.set_level(logging.WARNING, logger="wombat.sources.bootstrap")
+    sink("chat", [bad_event, good_event])  # must not raise
+
+    assert [t[0] for t in store.recorded] == ["hello"]
+
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "ChatTurnStore.record_turn raised" in r.message
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].args == ("chat",)
 
 
 async def test_ac3_raising_chat_turn_store_logs_one_warning_and_event_still_enqueues(
