@@ -47,6 +47,18 @@ turn instead, so a hot-applied persona matrix change lands on the NEXT rendered 
 
 TK-279 (DEC-60b): ``voice_turn`` threads through identically to ``held_chat`` — read off the
 compose-request wire and re-stamped onto the composed-output wire, unchanged otherwise.
+
+TK-293 (DEC-65b): a chat turn (``item_kind is ItemKind.CHAT`` — typed AND voice both carry this
+kind, DEC-57/DEC-60) composes under ``Mouth.CHAT`` instead of ``Mouth.COMPOSE``, selected at the
+SAME render-time branch point ``run()`` already used for the live/frozen split (TK-209): with a
+``live_persona`` wired, ``live_persona.instruction(Mouth.CHAT)`` is read fresh every turn (the
+live persona already threads ``user_name`` through unconditionally — TK-292); with none wired, a
+NEW frozen ``self._chat_system_instruction`` (built once in ``__init__`` from
+``config.wombat_assistant_name``/``config.wombat_user_name``, pinned byte-equivalent to
+``instruction_for(Mouth.CHAT, DEFAULT_MATRIX, name, user_name=...)``) stands in for the frozen
+``self._system_instruction`` above. Every other ``item_kind`` is completely unaffected — same
+selection, same instruction, byte-identical. The degrade path (``TemplateComposer``) is untouched
+for chat too (DEC-37e's honest asymmetry — personality is model-path-only).
 """
 
 from __future__ import annotations
@@ -62,6 +74,7 @@ from cogworx.model.base import ChatMessage
 from wombat.compose.templates import TemplateComposer, format_payload_fields
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.cost.daily_spend_ledger import DailySpendLedger
+from wombat.gate.models import ItemKind
 from wombat.persona.builder import Mouth
 from wombat.persona.capabilities import CAPABILITY_CHARTER
 from wombat.persona.live import LivePersona
@@ -87,6 +100,26 @@ def _system_instruction(name: str = "Steward") -> str:
     return (
         f"You are {name}, a quiet steward. Phrase this one item for the user in one terse, "
         "calm line. No preamble. " + CAPABILITY_CHARTER
+    )
+
+
+# TK-293, DEC-65b: the frozen Mouth.CHAT fallback (live_persona is None) — mirrors
+# _system_instruction's role above but for chat turns. Pinned byte-equivalent to
+# instruction_for(Mouth.CHAT, DEFAULT_MATRIX, assistant_name, user_name=user_name): at
+# DEFAULT_MATRIX every persona_policy.yaml clause for chat renders the empty string (same
+# invariant _system_instruction relies on for compose), so the base role plus the chat guard
+# suffix (the same COMPOSE capability charter, DEC-65a/c) is the whole string. user_display
+# falls back to "the user" exactly like ClauseAlgebraStrategy.render's special case for CHAT.
+def _chat_system_instruction(assistant_name: str, user_name: str) -> str:
+    user_display = user_name if user_name else "the user"
+    return (
+        f"You are {assistant_name}, {user_display}'s personal assistant and companion, chatting "
+        f"with {user_display}. Reply naturally and conversationally in a warm, familiar voice - "
+        "match the user's tone, and roll with jokes, banter, and playfulness when the user "
+        "brings them. Casual conversation is welcome for its own sake; do not steer the chat "
+        "back to schedules, email, or duties unless asked. Ground anything factual in what you "
+        "are given, and keep replies short and human - a sentence or two unless more is clearly "
+        "wanted. No preamble. " + CAPABILITY_CHARTER
     )
 
 
@@ -128,6 +161,12 @@ class ComposeStage:
         # TK-194: built ONCE from config.wombat_assistant_name — display/persona only. Stands as
         # the frozen fallback when live_persona is None (TK-209).
         self._system_instruction = _system_instruction(config.wombat_assistant_name)
+        # TK-293 (DEC-65b): the chat-mouth counterpart, built ONCE from the same config object —
+        # no new ctor params. Stands as the frozen fallback for chat turns when live_persona is
+        # None, mirroring self._system_instruction above.
+        self._chat_system_instruction = _chat_system_instruction(
+            config.wombat_assistant_name, config.wombat_user_name
+        )
         # TK-209 (EP-33): OPTIONAL — None preserves the frozen-at-__init__ instruction above
         # (every existing caller/test stands unchanged); when provided, run() reads
         # live_persona.instruction(Mouth.COMPOSE) fresh EVERY turn instead (hot-apply, no
@@ -145,10 +184,15 @@ class ComposeStage:
 
         # TK-209: render-time read when a LivePersona is wired — a matrix change applies on the
         # NEXT rendered turn, no restart. None -> the frozen-at-__init__ instruction (unchanged).
+        # TK-293 (DEC-65b): a chat turn selects Mouth.CHAT / self._chat_system_instruction at this
+        # SAME branch point instead — every other item_kind is byte-identical to before.
+        is_chat = item_kind is ItemKind.CHAT
+        mouth = Mouth.CHAT if is_chat else Mouth.COMPOSE
+        frozen_fallback = self._chat_system_instruction if is_chat else self._system_instruction
         system_instruction = (
-            self._live_persona.instruction(Mouth.COMPOSE)
+            self._live_persona.instruction(mouth)
             if self._live_persona is not None
-            else self._system_instruction
+            else frozen_fallback
         )
 
         messages = [

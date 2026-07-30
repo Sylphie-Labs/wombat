@@ -22,6 +22,7 @@ from tests.support.stage_context_fake import FakeModel, StageContextFake
 from wombat.compose.templates import TemplateComposer
 from wombat.config import ConfigurationError, WombatConfig
 from wombat.gate.models import ItemKind
+from wombat.persona.builder import Mouth, instruction_for
 from wombat.persona.capabilities import CAPABILITY_CHARTER
 from wombat.persona.live import LivePersona
 from wombat.persona.matrix import DEFAULT_MATRIX, Humor, PersonaMatrix
@@ -64,6 +65,28 @@ def _ctx(model: FakeModel) -> StageContextFake:
     return StageContextFake(
         now_fn=lambda: _FIXED_NOW,
         last_output_map={"compose_dispatch": _compose_request_artifact()},
+        model_fake=model,
+    )
+
+
+# --- TK-293 (DEC-65b) helpers: a chat-kind compose_dispatch artifact, typed or voice --------------
+
+
+def _chat_compose_request_artifact(*, voice_turn: bool = False) -> Artifact:
+    return Artifact(
+        kind=COMPOSE_REQUEST,
+        produced_by="compose_dispatch",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=compose_request_to_artifact_data(
+            _ITEM_ID, ItemKind.CHAT, _PAYLOAD, voice_turn=voice_turn
+        ),
+    )
+
+
+def _ctx_with(model: FakeModel, artifact: Artifact) -> StageContextFake:
+    return StageContextFake(
+        now_fn=lambda: _FIXED_NOW,
+        last_output_map={"compose_dispatch": artifact},
         model_fake=model,
     )
 
@@ -353,6 +376,106 @@ async def test_tk209_live_persona_renders_at_run_time_and_hot_applies_between_tu
     )
     # The SECOND turn, rendered AFTER set(), picks up the new matrix with zero restart.
     assert second_system_msg.content != first_system_msg.content
+
+
+# --- TK-293 (DEC-65b): ComposeStage selects Mouth.CHAT by item_kind -------------------------------
+
+
+async def test_ac1_chat_turn_typed_and_voice_with_live_persona_uses_mouth_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", user_name="Jim")
+    stage = ComposeStage(
+        config=_config(), template_composer=TemplateComposer(), live_persona=live_persona
+    )
+    expected = instruction_for(Mouth.CHAT, DEFAULT_MATRIX, "Steward", user_name="Jim")
+    assert expected.endswith(CAPABILITY_CHARTER)
+
+    typed_model = FakeModel(
+        response=ModelResponse(text="hey!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx_with(typed_model, _chat_compose_request_artifact()))
+    typed_system_msg, _ = typed_model.calls[0]
+    assert typed_system_msg.content == expected
+
+    voice_model = FakeModel(
+        response=ModelResponse(text="hey!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx_with(voice_model, _chat_compose_request_artifact(voice_turn=True)))
+    voice_system_msg, _ = voice_model.calls[0]
+    assert voice_system_msg.content == expected
+
+
+async def test_ac1_non_chat_turn_with_live_persona_still_uses_mouth_compose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    live_persona = LivePersona(DEFAULT_MATRIX, "Steward", user_name="Jim")
+    stage = ComposeStage(
+        config=_config(), template_composer=TemplateComposer(), live_persona=live_persona
+    )
+    expected = instruction_for(Mouth.COMPOSE, DEFAULT_MATRIX, "Steward")
+
+    model = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx(model))  # a generic (non-chat) compose_dispatch artifact
+
+    system_msg, _ = model.calls[0]
+    assert system_msg.content == expected
+
+
+async def test_ac2_chat_turn_without_live_persona_uses_frozen_chat_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_assistant_name="Marvin",
+        wombat_user_name="Jim",
+    )
+    stage = ComposeStage(config=config, template_composer=TemplateComposer())
+    expected = instruction_for(Mouth.CHAT, DEFAULT_MATRIX, "Marvin", user_name="Jim")
+
+    model = FakeModel(
+        response=ModelResponse(text="hey!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx_with(model, _chat_compose_request_artifact()))
+
+    system_msg, _ = model.calls[0]
+    assert system_msg.content == expected
+
+
+async def test_ac2_chat_turn_without_live_persona_or_configured_user_name_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # TK-202 hermeticity: no real .env can leak an override in
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    expected = instruction_for(Mouth.CHAT, DEFAULT_MATRIX, "Steward")
+
+    model = FakeModel(
+        response=ModelResponse(text="hey!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    await stage.run(_ctx_with(model, _chat_compose_request_artifact()))
+
+    system_msg, _ = model.calls[0]
+    assert system_msg.content == expected
+    assert "the user" in system_msg.content
+
+
+async def test_ac4_chat_turn_degrade_renders_template_line_exactly_as_today() -> None:
+    model = FakeModel(raises=ConnectionError("503 Service Unavailable"))
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+
+    result = await stage.run(_ctx_with(model, _chat_compose_request_artifact()))
+
+    assert isinstance(result, Transition)
+    text, _item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
+    assert degraded is True
+    assert item_kind is ItemKind.CHAT
+    assert text == TemplateComposer().render(ItemKind.CHAT, _PAYLOAD)
 
 
 # --- wire round-trips: json.dumps + inverse must be lossless (Q-49 regressions) -------------------
