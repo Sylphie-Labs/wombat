@@ -59,6 +59,18 @@ NEW frozen ``self._chat_system_instruction`` (built once in ``__init__`` from
 ``self._system_instruction`` above. Every other ``item_kind`` is completely unaffected — same
 selection, same instruction, byte-identical. The degrade path (``TemplateComposer``) is untouched
 for chat too (DEC-37e's honest asymmetry — personality is model-path-only).
+
+REPAIR (batch review, TK-293 x TK-296 cross-ticket): TK-289/TK-290/TK-296's ``context_hook``
+(``bootstrap.py``'s ``asr_context_hook``) stamps grounding-only fields — ``replying_to``,
+``known_user_context``, ``context_calendar_today``, ``context_recent_email`` — onto a chat item's
+payload for the MODEL prompt's benefit only; they were never part of the item's own user-facing
+content. A degrade must never dump them verbatim: voice is shielded downstream by
+``SpeechShapeStage``'s DEC-55c never-verbatim bar, but ``ChatReplyStage`` resolves this stage's
+degrade text straight to the typed chat pane unshaped. ``run()`` therefore strips
+``_GROUNDING_ONLY_KEYS`` from the payload handed to ``TemplateComposer.render`` ONLY on the
+degrade branch below — the model-facing prompt above still sees every grounding field
+unfiltered, and non-chat item kinds are unaffected in practice (these keys are never stamped on
+them).
 """
 
 from __future__ import annotations
@@ -125,6 +137,20 @@ def _chat_system_instruction(assistant_name: str, user_name: str) -> str:
 
 # AC-FIXED (Q-50) — not a TK-13 tunable.
 _DEFAULT_TIMEOUT_SECONDS = 2.0
+
+# REPAIR (batch review, TK-293 x TK-296): the exact key names ``context_hook`` may stamp onto a
+# chat payload — ``replying_to`` (bootstrap.py's asr_context_hook, TK-289), and
+# ``known_user_context``/``context_calendar_today``/``context_recent_email``
+# (voice/context_prefetch.py, TK-290/TK-296). Prompt-only grounding, never echoed verbatim by the
+# degrade template — see the module docstring.
+_GROUNDING_ONLY_KEYS = frozenset(
+    {
+        "replying_to",
+        "known_user_context",
+        "context_calendar_today",
+        "context_recent_email",
+    }
+)
 
 
 class ComposeStage:
@@ -266,7 +292,13 @@ class ComposeStage:
                     )
 
         if degraded:
-            text = self._template_composer.render(item_kind, payload)
+            # REPAIR (batch review, TK-293 x TK-296): strip grounding-only keys before the
+            # template renders — those fields grounded the model prompt above, never the user's
+            # own item content, so a degrade must not dump them verbatim (see module docstring).
+            degrade_payload = {
+                key: value for key, value in payload.items() if key not in _GROUNDING_ONLY_KEYS
+            }
+            text = self._template_composer.render(item_kind, degrade_payload)
             tokens_spent = None
 
         assert text is not None  # either the model's text or the template's render, always a str

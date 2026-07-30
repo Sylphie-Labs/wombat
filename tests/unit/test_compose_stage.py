@@ -478,6 +478,58 @@ async def test_ac4_chat_turn_degrade_renders_template_line_exactly_as_today() ->
     assert text == TemplateComposer().render(ItemKind.CHAT, _PAYLOAD)
 
 
+# --- REPAIR (batch review, TK-293 x TK-296): a chat degrade must not leak the grounding-only
+# fields context_hook stamps (known_user_context/context_calendar_today/context_recent_email/
+# replying_to) verbatim to the user, even though the model-facing prompt still needs to see them
+# (voice is shielded downstream by SpeechShapeStage's DEC-55c never-verbatim; typed chat is not —
+# ChatReplyStage resolves this stage's degrade text straight to the chat pane, unshaped). --------
+
+_GROUNDED_CHAT_PAYLOAD: dict[str, Any] = {
+    "text": "hey",
+    "known_user_context": "Jim is allergic to shellfish",
+    "context_calendar_today": "09:00 Therapy appointment",
+    "context_recent_email": "Re: divorce paperwork - lawyer@example.com",
+    "replying_to": "sure, want me to book it?",
+}
+
+
+def _grounded_chat_compose_request_artifact() -> Artifact:
+    return Artifact(
+        kind=COMPOSE_REQUEST,
+        produced_by="compose_dispatch",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=compose_request_to_artifact_data(_ITEM_ID, ItemKind.CHAT, _GROUNDED_CHAT_PAYLOAD),
+    )
+
+
+async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_them() -> None:
+    model = FakeModel(raises=ConnectionError("503 Service Unavailable"))
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+
+    result = await stage.run(_ctx_with(model, _grounded_chat_compose_request_artifact()))
+    assert isinstance(result, Transition)
+
+    # the model still SAW every grounding field in its prompt — the call was attempted (and
+    # failed) before degrading, so the prompt-building path above is completely unaffected.
+    _system_msg, user_msg = model.calls[0]
+    assert "known_user_context: Jim is allergic to shellfish" in user_msg.content
+    assert "context_calendar_today: 09:00 Therapy appointment" in user_msg.content
+    assert "context_recent_email: Re: divorce paperwork - lawyer@example.com" in user_msg.content
+    assert "replying_to: sure, want me to book it?" in user_msg.content
+
+    # but the DEGRADED reply text — what ChatReplyStage resolves verbatim to the typed chat pane
+    # — never echoes any grounding field back.
+    text, _item_id, item_kind, degraded = composed_output_from_artifact_data(result.output.data)
+    assert degraded is True
+    assert item_kind is ItemKind.CHAT
+    assert "Jim is allergic to shellfish" not in text
+    assert "Therapy appointment" not in text
+    assert "divorce paperwork" not in text
+    assert "sure, want me to book it?" not in text
+    # the item's own genuine content still renders — the fix isn't a black hole, just a filter.
+    assert text == TemplateComposer().render(ItemKind.CHAT, {"text": "hey"})
+
+
 # --- wire round-trips: json.dumps + inverse must be lossless (Q-49 regressions) -------------------
 
 
