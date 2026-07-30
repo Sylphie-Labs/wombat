@@ -317,6 +317,49 @@ describe("App (TK-300 AC6: widened Brevity/Warmth/Humor selects)", () => {
   });
 });
 
+describe("App (TK-301 AC3: eager proactivity option)", () => {
+  it("offers eager as a fourth Proactivity option alongside minimal/balanced/forward", async () => {
+    installFakeApi();
+    render(<App />);
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
+
+    const optionTexts = (select: HTMLSelectElement): string[] =>
+      Array.from(select.options).map((option) => option.value);
+
+    expect(optionTexts(screen.getByLabelText("Proactivity") as HTMLSelectElement)).toEqual([
+      "minimal",
+      "balanced",
+      "forward",
+      "eager",
+    ]);
+  });
+
+  it("saves eager via the existing patch path as a hot-apply persona change, not a restart", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoPersona();
+    await screen.findByDisplayValue("Wombat");
+
+    fireEvent.change(screen.getByLabelText("Proactivity"), { target: { value: "eager" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.method === "PUT" && call.url.endsWith("/settings"))).toBe(
+        true,
+      );
+    });
+
+    const settingsPut = calls.find(
+      (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+    );
+    expect(settingsPut?.body).toEqual({ wombat_persona_proactivity: "eager" });
+
+    expect(await screen.findByText("Persona changes apply on the next turn.")).toBeTruthy();
+    expect(screen.queryByText("Restart Wombat to apply these changes.")).toBeNull();
+  });
+});
+
 describe("App (TK-249 shell AC1: header/rail/chat dock/Today landing)", () => {
   it("renders the header mark+wordmark, Today as the default landing view, and every nav category", async () => {
     installFakeApi();

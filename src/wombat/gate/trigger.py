@@ -52,13 +52,15 @@ def effective_urgency_threshold(
 
     Weak monotonicity by construction: MINIMAL's offset is documented >= 0 (raises the
     threshold, lowers willingness), FORWARD's is documented <= 0 (lowers the threshold, raises
-    willingness), so ``eff(MINIMAL) >= eff(BALANCED) >= eff(FORWARD)`` before clamping; the
-    shared floor/cap clamp can only narrow, never invert, that ordering.
+    willingness), EAGER's (TK-301, DEC-67(c)) is documented <= FORWARD's (lowers it further
+    still), so ``eff(MINIMAL) >= eff(BALANCED) >= eff(FORWARD) >= eff(EAGER)`` before clamping;
+    the shared floor/cap clamp can only narrow, never invert, that ordering.
     """
     offset = {
         Proactivity.MINIMAL: band.minimal,
         Proactivity.BALANCED: band.balanced,
         Proactivity.FORWARD: band.forward,
+        Proactivity.EAGER: band.eager,
     }[proactivity]
     return max(band.floor, min(band.cap, base + offset))
 

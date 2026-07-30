@@ -237,11 +237,12 @@ class WombatConfig(BaseSettings):
     # fails ``load_config`` loudly, naming the offending variable (e.g. ``WOMBAT_PERSONA_HUMOR``).
     # TK-300 (DEC-67b/c): brevity/warmth/humor widened — see wombat.persona.matrix for the
     # closed-set rationale.
+    # TK-301 (DEC-67c): proactivity widened with a fourth "eager" level.
     wombat_persona_brevity: Literal["terse", "balanced", "expansive", "exhaustive"] = "terse"
     wombat_persona_warmth: Literal["reserved", "neutral", "warm", "affectionate"] = "reserved"
     wombat_persona_directness: Literal["gentle", "plain", "blunt"] = "plain"
     wombat_persona_humor: Literal["none", "dry", "playful", "comedian"] = "none"
-    wombat_persona_proactivity: Literal["minimal", "balanced", "forward"] = "balanced"
+    wombat_persona_proactivity: Literal["minimal", "balanced", "forward", "eager"] = "balanced"
 
     # OPTIONAL (TK-222, EP-32, Q-110(d)): the runtime chat surface's handshake-file path — an
     # operator .env-tier setting, deliberately NOT in APP_EDITABLE_FIELDS (this is a launch-time

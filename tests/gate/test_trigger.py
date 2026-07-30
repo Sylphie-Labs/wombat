@@ -308,18 +308,34 @@ async def test_capacity_eviction_from_a_held_add_routes_through_on_event() -> No
 
 def test_effective_urgency_threshold_balanced_is_a_zero_offset() -> None:
     """BALANCED's offset is 0.0 -- effective == base exactly (DEC-37(a): today's gate)."""
-    band = PersonalityBand(minimal=0.10, balanced=0.00, forward=-0.10, floor=0.0, cap=1.0)
+    band = PersonalityBand(
+        minimal=0.10, balanced=0.00, forward=-0.10, eager=-0.20, floor=0.0, cap=1.0
+    )
 
     assert effective_urgency_threshold(0.75, Proactivity.BALANCED, band) == 0.75
 
 
 def test_effective_urgency_threshold_clamps_to_the_band_floor_and_cap() -> None:
-    band = PersonalityBand(minimal=0.10, balanced=0.00, forward=-0.10, floor=0.60, cap=0.95)
+    band = PersonalityBand(
+        minimal=0.10, balanced=0.00, forward=-0.10, eager=-0.20, floor=0.60, cap=0.95
+    )
 
     # base + minimal offset (0.90 + 0.10 = 1.00) would exceed cap -> clamped to cap.
     assert effective_urgency_threshold(0.90, Proactivity.MINIMAL, band) == 0.95
     # base + forward offset (0.65 - 0.10 = 0.55) would drop below floor -> clamped to floor.
     assert effective_urgency_threshold(0.65, Proactivity.FORWARD, band) == 0.60
+
+
+def test_ac1_effective_urgency_threshold_at_base_075_over_the_shipped_band() -> None:
+    """TK-301 (DEC-67c) AC1: base=0.75 over the shipped band gives minimal 0.85 / balanced 0.75
+    / forward 0.65 / eager 0.60 (clamped at floor — boundary proven, since 0.75-0.20=0.55 < 0.60
+    floor)."""
+    band = load_operating_params().personality_band
+
+    assert effective_urgency_threshold(0.75, Proactivity.MINIMAL, band) == 0.85
+    assert effective_urgency_threshold(0.75, Proactivity.BALANCED, band) == 0.75
+    assert effective_urgency_threshold(0.75, Proactivity.FORWARD, band) == 0.65
+    assert effective_urgency_threshold(0.75, Proactivity.EAGER, band) == 0.60
 
 
 # --- AC2: BALANCED reproduces the zero-config (threshold_fn=None) gate exactly ----------------
@@ -381,9 +397,11 @@ async def test_ac2_balanced_threshold_fn_matches_the_zero_config_gate_exactly() 
 _AC3_BASE_THRESHOLDS = (-0.5, 0.0, 0.3, 0.6, 0.75, 0.9, 1.0, 1.5)
 
 _AC3_BAND_SWEEP = (
-    PersonalityBand(minimal=0.10, balanced=0.00, forward=-0.10, floor=0.60, cap=0.95),  # shipped
-    PersonalityBand(minimal=0.05, balanced=0.00, forward=-0.05, floor=0.0, cap=1.0),
-    PersonalityBand(minimal=0.20, balanced=0.00, forward=-0.20, floor=0.4, cap=0.6),
+    PersonalityBand(
+        minimal=0.10, balanced=0.00, forward=-0.10, eager=-0.20, floor=0.60, cap=0.95
+    ),  # shipped
+    PersonalityBand(minimal=0.05, balanced=0.00, forward=-0.05, eager=-0.08, floor=0.0, cap=1.0),
+    PersonalityBand(minimal=0.20, balanced=0.00, forward=-0.20, eager=-0.30, floor=0.4, cap=0.6),
 )
 
 
@@ -397,11 +415,12 @@ def test_ac3_effective_threshold_stays_bounded_and_weakly_monotone() -> None:
             minimal = effective_urgency_threshold(base, Proactivity.MINIMAL, band)
             balanced = effective_urgency_threshold(base, Proactivity.BALANCED, band)
             forward = effective_urgency_threshold(base, Proactivity.FORWARD, band)
+            eager = effective_urgency_threshold(base, Proactivity.EAGER, band)
 
-            for value in (minimal, balanced, forward):
+            for value in (minimal, balanced, forward, eager):
                 assert band.floor <= value <= band.cap
 
-            assert minimal >= balanced >= forward
+            assert minimal >= balanced >= forward >= eager
 
 
 def test_ac3_shipped_caps_and_ceilings_are_byte_untouched_by_this_ticket() -> None:

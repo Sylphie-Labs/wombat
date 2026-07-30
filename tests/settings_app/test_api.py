@@ -23,6 +23,10 @@ AC3 (structural): ``test_importing_api_never_imports_bootstrap_or_runtime``,
 Lock-step drift test: ``test_mirror_model_field_set_matches_app_editable_fields``,
     ``test_mirror_model_literal_vocab_matches_wombat_config``.
 
+TK-301 (DEC-67c) AC3: ``test_put_settings_tk301_eager_proactivity_is_200_and_persists``,
+    ``test_put_settings_proactivity_out_of_vocab_value_is_422`` (the widened Literal vocabulary
+    itself is covered by the mirror lock-step tests above, the loud path).
+
 TK-246 (DEC-45(e)): GET /external/calendar + GET /external/gmail — AC1
     ``test_ac1_external_routes_windowed_ordered_and_tokened_over_real_pg`` (pg-gated); AC2
     ``test_get_external_calendar_no_store_returns_empty_items_with_flag``,
@@ -453,6 +457,37 @@ def test_put_settings_persona_out_of_vocab_value_is_422(field: str, value: str) 
     client = _client()
 
     response = client.put("/settings", json={field: value}, headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 422
+
+
+def test_put_settings_tk301_eager_proactivity_is_200_and_persists() -> None:
+    """AC3 (TK-301, DEC-67c): the newly-admitted "eager" proactivity level PUTs 200 and
+    round-trips on GET — the same mirror-lock-step vocabulary the live-persona poll (TK-208/
+    TK-215) reads on the next scoring pass."""
+    client = _client()
+
+    response = client.put(
+        "/settings",
+        json={"wombat_persona_proactivity": "eager"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_persona_proactivity"] == "eager"
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_persona_proactivity"] == "eager"
+
+
+def test_put_settings_proactivity_out_of_vocab_value_is_422() -> None:
+    """AC3 (TK-301): an out-of-vocab proactivity value still 422s, closed-set discipline."""
+    client = _client()
+
+    response = client.put(
+        "/settings",
+        json={"wombat_persona_proactivity": "aggressive"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
 
     assert response.status_code == 422
 

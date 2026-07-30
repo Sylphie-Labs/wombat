@@ -17,7 +17,7 @@
 #   CHOSEN-HERE — audit-gap value with no spike; a sensible default fixed here, revisable.
 
 # Bump this whenever any value below changes (AC5 — auditability).
-version: 8
+version: 9
 
 # --- Gate trigger thresholds (TK-26 spike, RISK-1/2 NOT retired) -----------------------
 # PROVISIONAL: fixture-confirmed on the TK-22 day fixture only. A later relabel pass may
@@ -95,10 +95,15 @@ rating_tuner:
 # effective threshold (lowers willingness to surface); "forward" lowers it (raises willingness);
 # "balanced" is 0.0 -- today's gate behavior exactly. floor/cap clamp the result so no level can
 # push the effective threshold outside this bounded band.
+# "eager" (DEC-67(c), TK-301): a fourth, more-forward-than-"forward" level -- lowers the
+# effective threshold further (raises willingness to surface more). floor/cap REMAIN the safety
+# bound: eager's offset is clamped exactly like every other level, so it can never push the
+# effective threshold below floor regardless of base.
 personality_band:
   minimal: 0.10
   balanced: 0.00
   forward: -0.10
+  eager: -0.20
   floor: 0.60
   cap: 0.95
 

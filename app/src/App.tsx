@@ -122,10 +122,12 @@ const HUMOR_OPTIONS: SelectOption[] = [
   { value: "playful", label: "Playful" },
   { value: "comedian", label: "Comedian (jokes all the time)" },
 ];
+// TK-301 (DEC-67c): proactivity gains a fourth, more-forward-than-forward level.
 const PROACTIVITY_OPTIONS: SelectOption[] = [
   { value: "minimal", label: "Minimal" },
   { value: "balanced", label: "Balanced" },
   { value: "forward", label: "Forward" },
+  { value: "eager", label: "Eager (very forward)" },
 ];
 
 const KEY_PROVIDER_LABELS: Record<KeyProvider, string> = {

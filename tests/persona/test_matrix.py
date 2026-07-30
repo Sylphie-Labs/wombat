@@ -1,12 +1,13 @@
 """TK-206 — PersonaMatrix domain type acceptance criteria (EP-33, DEC-33/DEC-37, widened by
-TK-300's DEC-67b/c).
+TK-300's DEC-67b/c and TK-301's DEC-67c).
 
   AC1 each axis has EXACTLY the DEC-33/DEC-37/DEC-67 levels (checked against the enum member
       list); ``PersonaMatrix`` is frozen + hashable (``hash()`` works; ``FrozenInstanceError`` on
       attribute set); ``DEFAULT_MATRIX`` == (terse, reserved, plain, none, balanced).
-  AC2 round-trip: for every matrix in the full 4*4*3*4*3=576 space (TK-300: brevity/warmth/
-      humor each widened), ``from_strings(to_strings(m)) == m``; parsing a dict with an invalid
-      axis value raises ``ValueError`` whose message names both the axis and the offending value.
+  AC2 round-trip: for every matrix in the full 4*4*3*4*4=768 space (TK-300: brevity/warmth/
+      humor each widened; TK-301: proactivity widened), ``from_strings(to_strings(m)) == m``;
+      parsing a dict with an invalid axis value raises ``ValueError`` whose message names both
+      the axis and the offending value.
   AC3 the module docstring names all six constitution-excluded axes and their ids
       (CON-2, CON-3, CON-6, CON-1, CON-5, NG-2, NG-3).
 """
@@ -61,7 +62,14 @@ def test_humor_levels_exactly_four() -> None:
 
 
 def test_proactivity_levels() -> None:
-    assert list(Proactivity) == [Proactivity.MINIMAL, Proactivity.BALANCED, Proactivity.FORWARD]
+    """TK-301 (DEC-67c): supersedes-in-part DEC-33's three-level closure — the set widens to
+    four but stays closed."""
+    assert list(Proactivity) == [
+        Proactivity.MINIMAL,
+        Proactivity.BALANCED,
+        Proactivity.FORWARD,
+        Proactivity.EAGER,
+    ]
 
 
 def test_persona_matrix_is_frozen_and_hashable() -> None:
@@ -91,10 +99,10 @@ def _all_matrices() -> list[PersonaMatrix]:
     ]
 
 
-def test_full_space_is_576() -> None:
-    """TK-300 (DEC-67b/c): brevity/warmth/humor each widened from 3/3/2 to 4/4/4 levels, so the
-    full space is 4*4*3*4*3 = 576."""
-    assert len(_all_matrices()) == 4 * 4 * 3 * 4 * 3 == 576
+def test_full_space_is_768() -> None:
+    """TK-300 (DEC-67b/c): brevity/warmth/humor each widened from 3/3/2 to 4/4/4 levels. TK-301
+    (DEC-67c): proactivity widened from 3 to 4 levels. Full space is 4*4*3*4*4 = 768."""
+    assert len(_all_matrices()) == 4 * 4 * 3 * 4 * 4 == 768
 
 
 def test_round_trip_full_space() -> None:

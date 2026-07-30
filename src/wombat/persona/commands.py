@@ -144,6 +144,7 @@ GRAMMAR: tuple[tuple[str, PersonaCommand], ...] = (
     ("set proactivity to minimal", _set("proactivity", Proactivity.MINIMAL.value)),
     ("set proactivity to balanced", _set("proactivity", Proactivity.BALANCED.value)),
     ("set proactivity to forward", _set("proactivity", Proactivity.FORWARD.value)),
+    ("set proactivity to eager", _set("proactivity", Proactivity.EAGER.value)),
     # whole-matrix reset
     ("reset persona", _RESET),
 )

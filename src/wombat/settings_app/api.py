@@ -104,11 +104,12 @@ class SettingsUpdate(BaseModel):
     # TK-292 (DEC-65a/c): mirrors WombatConfig.wombat_user_name — a plain str, not a Literal.
     wombat_user_name: str | None = None
     # TK-300 (DEC-67b/c): mirrors WombatConfig's widened brevity/warmth/humor vocabularies.
+    # TK-301 (DEC-67c): mirrors WombatConfig's widened proactivity vocabulary (adds "eager").
     wombat_persona_brevity: Literal["terse", "balanced", "expansive", "exhaustive"] | None = None
     wombat_persona_warmth: Literal["reserved", "neutral", "warm", "affectionate"] | None = None
     wombat_persona_directness: Literal["gentle", "plain", "blunt"] | None = None
     wombat_persona_humor: Literal["none", "dry", "playful", "comedian"] | None = None
-    wombat_persona_proactivity: Literal["minimal", "balanced", "forward"] | None = None
+    wombat_persona_proactivity: Literal["minimal", "balanced", "forward", "eager"] | None = None
     # TK-224 (EP-32, Q-111(b)): mirrors WombatConfig.wombat_voice_enabled, newly admitted to
     # APP_EDITABLE_FIELDS — a bool, not a Literal, so it is exempt from the mirror test's
     # vocabulary check (there is no vocabulary to drift).

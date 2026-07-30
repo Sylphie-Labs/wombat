@@ -25,7 +25,11 @@ per TK-300):
       mouth originates humor unprompted: ``none`` never initiates a joke; ``dry`` allows one
       understated aside; ``playful`` jokes when it comes naturally; ``comedian`` always works in
       a joke, pun, or comic riff.
-    - ``Proactivity``: minimal | balanced | forward
+    - ``Proactivity``: minimal | balanced | forward | eager. DEC-67(c) supersedes DEC-33 IN
+      PART — widening the closed set from three to four levels by adding ``eager``, while the
+      set stays CLOSED (still no arbitrary/free-form proactivity). ``Proactivity`` remains the
+      ONE persona axis with gate-side actuation (TK-215/DEC-37(a)); ``eager`` is a bounded
+      deterministic ``urgency_threshold`` offset like its siblings, not a new mechanism.
 
 ``DEFAULT_MATRIX`` = (terse, reserved, plain, none, balanced). Proactivity's default is
 BALANCED — zero gate ``urgency_threshold`` offset, i.e. today's gate behavior exactly — per
@@ -92,11 +96,13 @@ class Humor(StrEnum):
 
 
 class Proactivity(StrEnum):
-    """Closed enum — EXACTLY three levels (DEC-33). No other value is valid."""
+    """Closed enum — EXACTLY four levels (DEC-33, widened to four by DEC-67(c) supersession-in-
+    part). No other value is valid."""
 
     MINIMAL = "minimal"
     BALANCED = "balanced"
     FORWARD = "forward"
+    EAGER = "eager"
 
 
 @dataclass(frozen=True, slots=True)

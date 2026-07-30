@@ -170,7 +170,7 @@ def test_saturation_at_high_end_for_every_axis() -> None:
         warmth=Warmth.AFFECTIONATE,
         directness=Directness.BLUNT,
         humor=Humor.COMEDIAN,
-        proactivity=Proactivity.FORWARD,
+        proactivity=Proactivity.EAGER,
     )
     for _utterance, command in GRAMMAR:
         if command.step == 1:

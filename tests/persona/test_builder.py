@@ -4,13 +4,13 @@ widened by TK-300's DEC-67b/c).
   AC1 byte-identity at DEFAULT_MATRIX: COMPOSE/BRIEF/DRAFT match their live TK-194 builder output
       for the same name (>=2 names each); REFLECTION matches ``_SYSTEM_INSTRUCTION`` verbatim for
       every tested name (it has no name slot).
-  AC2 exhaustive property over all 576 matrix combinations (TK-300: brevity/warmth/humor each
-      widened), per mouth: guard_suffix is always a verbatim substring; rendering is
-      deterministic; each non-default level of brevity/warmth/directness changes the output of
-      ALL FOUR mouths relative to DEFAULT; each non-default humor level (including the two new
-      ones, playful/comedian) changes COMPOSE/BRIEF but the humor clause text never appears in
-      DRAFT/REFLECTION output at any level; proactivity changes nothing (equality across its
-      three levels, other axes fixed).
+  AC2 exhaustive property over all 768 matrix combinations (TK-300: brevity/warmth/humor each
+      widened; proactivity widened to four levels), per mouth: guard_suffix is always a verbatim
+      substring; rendering is deterministic; each non-default level of brevity/warmth/directness
+      changes the output of ALL FOUR mouths relative to DEFAULT; each non-default humor level
+      (including the two new ones, playful/comedian) changes COMPOSE/BRIEF but the humor clause
+      text never appears in DRAFT/REFLECTION output at any level; proactivity changes nothing
+      (equality across its four levels, other axes fixed).
   AC3 purity: builder.py imports nothing beyond stdlib enum/dataclasses/typing plus
       wombat.persona.matrix and wombat.persona.expression (the TK-219 seam types).
 
@@ -110,10 +110,10 @@ def _all_matrices() -> list[PersonaMatrix]:
     ]
 
 
-def test_full_matrix_space_is_576() -> None:
-    """TK-300 (DEC-67b/c): brevity/warmth/humor each widened from 3/3/2 to 4/4/4 levels, so the
-    full space is 4*4*3*4*3 = 576."""
-    assert len(_all_matrices()) == 576
+def test_full_matrix_space_is_768() -> None:
+    """TK-300 (DEC-67b/c): brevity/warmth/humor each widened from 3/3/2 to 4/4/4 levels; DEC-67c
+    further widened proactivity from 3 to 4 levels, so the full space is 4*4*3*4*4 = 768."""
+    assert len(_all_matrices()) == 768
 
 
 @pytest.mark.parametrize("mouth", _ALL_MOUTHS)
