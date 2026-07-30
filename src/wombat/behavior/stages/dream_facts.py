@@ -84,7 +84,10 @@ _MAX_FACT_LINE_CHARS = 200
 
 # The reflection mouth's own clinical/motive-inference term screen (persona/expression.py's
 # _GUARD_SUFFIX["reflection"] text), restated here as a deterministic casefold-substring drop —
-# CON-6 custody at the ONE organic write path into UserFactsStore.
+# CON-6 custody at the ONE organic write path into UserFactsStore. This stage's own extraction
+# instruction demands THIRD-PERSON output (unlike the reflection mouth, which speaks directly to
+# the user), so both the second-person source phrasing AND its third-person conjugation are
+# screened — a model honoring the third-person instruction still gets caught.
 _FORBIDDEN_FACT_TOKENS: frozenset[str] = frozenset(
     {
         "clinical",
@@ -92,10 +95,15 @@ _FORBIDDEN_FACT_TOKENS: frozenset[str] = frozenset(
         "disorder",
         "symptom",
         "therapy",
+        "indicates a pattern",
         "you seem to",
+        "seems to",
         "you tend to",
+        "tends to",
         "because you",
+        "because they",
         "due to your",
+        "due to their",
     }
 )
 

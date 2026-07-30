@@ -34,7 +34,7 @@ from cogworx.loop.result import Transition
 from cogworx.model.base import ModelResponse
 
 from tests.support.stage_context_fake import FakeModel, StageContextFake
-from wombat.behavior.stages.dream_facts import DreamFactsStage, _fact_key
+from wombat.behavior.stages.dream_facts import DreamFactsStage, _fact_key, _parse_candidates
 from wombat.chat_turns import ChatTurnStore
 from wombat.persona.builder import Mouth
 from wombat.persona.expression import guard_suffix
@@ -155,8 +155,23 @@ async def test_ac1_mixed_proposal_lands_at_most_five_new_facts_dropping_the_rest
 
 
 # ================================================================================================
-# AC2: zero turns — NO model call, graph transitions unchanged
+# AC1 (CON-6 regression): the forbidden-token screen must catch THIRD-PERSON motive/pattern
+# phrasing too — the extraction instruction demands third person, so a screen restricted to the
+# reflection mouth's second-person wording ("you tend to", "because you", ...) would let a
+# model that honors the instruction slip motive-inference facts straight into the durable store.
 # ================================================================================================
+
+
+def test_ac1_forbidden_token_screen_catches_third_person_motive_and_pattern_phrasing() -> None:
+    third_person_motive_lines = [
+        "The user tends to skip breakfast because they are stressed about work.",
+        "The user's low mood on Mondays indicates a pattern of burnout.",
+        "The user seems to avoid conflict with their sister.",
+        "The user is quiet on calls due to their anxiety.",
+    ]
+    raw_text = "\n".join(third_person_motive_lines)
+
+    assert _parse_candidates(raw_text) == []
 
 
 async def test_ac2_zero_turns_makes_no_model_call_and_transitions_unchanged(
