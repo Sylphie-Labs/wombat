@@ -54,6 +54,10 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     "wombat_tts_voice_id",
     "wombat_stt_model",
     "wombat_assistant_name",
+    # TK-292 (DEC-65a/c): the CHAT mouth's second name slot (the user's own name/what to call
+    # them) — settings-table tier, same as wombat_assistant_name; "" means unset, rendering
+    # falls back to "the user".
+    "wombat_user_name",
     # TK-208 (EP-33, DEC-37(g)): the persona matrix tier — app-editable so a settings UI can
     # hot-apply persona changes without an env var/restart.
     "wombat_persona_brevity",
@@ -219,6 +223,9 @@ class WombatConfig(BaseSettings):
     wombat_deepgram_api_key: SecretStr | None = None
     wombat_fish_api_key: SecretStr | None = None
     wombat_assistant_name: str = "Steward"
+    # TK-292 (DEC-65a/c): the CHAT mouth's second name slot — "" (the default) means unset;
+    # ClauseAlgebraStrategy/LivePersona fall back to "the user" when rendering CHAT.
+    wombat_user_name: str = ""
 
     # OPTIONAL (TK-208, EP-33, DEC-33/DEC-37): the five-axis persona matrix config surface
     # (``wombat.persona.matrix.PersonaMatrix``). Deliberately NOT in REQUIRED_ENV — the drain

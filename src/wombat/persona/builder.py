@@ -22,6 +22,12 @@ builders this module is measured against byte-for-byte at ``DEFAULT_MATRIX``:
       CONSTANT, no name slot — ``instruction_for`` never renders ``assistant_name`` for this
       mouth, for ANY input, matching the live text exactly)
 
+TK-292 (DEC-65a/c) adds a FIFTH mouth, CHAT — the warm companion register, with NO live oracle
+to match (it is new, not a byte-identity port). It is the only mouth with a SECOND name slot
+(``user_name``, construction-held on ``ClauseAlgebraStrategy`` exactly like ``assistant_name`` —
+never a Cue), so its base-role dispatch is special-cased in ``render`` rather than living in the
+one-arg ``_BASE_ROLE_BUILDERS`` dict the other four mouths share.
+
 COMPOSITION: ``ClauseAlgebraStrategy.render`` returns ``body = base_role + clauses`` — the guard
 suffix is NOT part of the strategy's output (Q-108(a) ruling: strategies never emit guard text;
 the seam in ``expression.py`` appends it unconditionally, outside the strategy). Every DEFAULT-level
@@ -74,13 +80,16 @@ from wombat.persona.policy import PersonaPolicy, default_policy
 
 
 class Mouth(StrEnum):
-    """Closed enum — the four mouths this builder renders for (Q-106(a)). No other value is
-    valid."""
+    """Closed enum — the FIVE mouths this builder renders for. No other value is valid.
+
+    TK-292 (DEC-65a/c) adds CHAT, the companion register: a warm, conversational voice at
+    DEFAULT_MATRIX, distinct from the four original stewardly mouths (Q-106(a))."""
 
     COMPOSE = "compose"
     BRIEF = "brief"
     DRAFT = "draft"
     REFLECTION = "reflection"
+    CHAT = "chat"
 
 
 # --------------------------------------------------------------------------------------------
@@ -110,6 +119,20 @@ def _draft_base(name: str) -> str:
     return (
         f"You are {name}, a quiet steward drafting a reply on the user's behalf. Phrase one "
         "terse, calm reply body responding to the quoted excerpt."
+    )
+
+
+def _chat_base(assistant_name: str, user_display: str) -> str:
+    """CHAT's base role (TK-292, DEC-65a/c) — the ONLY mouth with a SECOND name slot
+    (``user_display``), so it does not fit the one-arg ``_BASE_ROLE_BUILDERS`` dict shape and is
+    dispatched via a special case in ``ClauseAlgebraStrategy.render`` instead."""
+    return (
+        f"You are {assistant_name}, {user_display}'s personal assistant and companion, chatting "
+        f"with {user_display}. Reply naturally and conversationally in a warm, familiar voice - "
+        "match the user's tone, and roll with jokes, banter, and playfulness when the user brings "
+        "them. Casual conversation is welcome for its own sake; do not steer the chat back to "
+        "schedules, email, or duties unless asked. Ground anything factual in what you are given, "
+        "and keep replies short and human - a sentence or two unless more is clearly wanted."
     )
 
 
@@ -170,6 +193,11 @@ class ClauseAlgebraStrategy:
 
     assistant_name: str
     policy: PersonaPolicy = field(default_factory=default_policy)
+    # TK-292 (DEC-65a/c): the CHAT mouth's second name slot — construction-held, like
+    # assistant_name, never a Cue (same DEC-38 rationale: boot-static config, not a per-render
+    # cue). Only CHAT ever reads this field; ``user_display`` falls back to "the user" when this
+    # is None or blank.
+    user_name: str | None = None
 
     def render(self, mouth: Mouth, matrix: PersonaMatrix, cues: Cues) -> Expression:
         """Render ``mouth``'s BODY from ``matrix`` and ``self.policy`` (TK-207, made
@@ -200,6 +228,11 @@ class ClauseAlgebraStrategy:
 
         if mouth is Mouth.REFLECTION:
             base = _REFLECTION_BASE
+        elif mouth is Mouth.CHAT:
+            # CHAT is the only mouth with a second name slot (the user's) — it does not fit the
+            # one-arg _BASE_ROLE_BUILDERS dict shape, so it is special-cased here (TK-292).
+            user_display = self.user_name if self.user_name else "the user"
+            base = _chat_base(self.assistant_name, user_display)
         else:
             base = _BASE_ROLE_BUILDERS[mouth](self.assistant_name)
 
@@ -214,7 +247,9 @@ class ClauseAlgebraStrategy:
         return Expression(instruction=" ".join([base, *non_empty_clauses]))
 
 
-def instruction_for(mouth: Mouth, matrix: PersonaMatrix, assistant_name: str) -> str:
+def instruction_for(
+    mouth: Mouth, matrix: PersonaMatrix, assistant_name: str, user_name: str | None = None
+) -> str:
     """Thin TK-219 compatibility delegate (Q-108(a)): build a ``ClauseAlgebraStrategy`` bound to
     ``assistant_name`` (its ``policy`` field resolves to
     ``wombat.persona.policy.default_policy()`` — TK-220's lazily-loaded default) and route it
@@ -222,7 +257,11 @@ def instruction_for(mouth: Mouth, matrix: PersonaMatrix, assistant_name: str) ->
     resulting ``Expression.instruction``. Every existing call site and test is byte-unaffected —
     see ``ClauseAlgebraStrategy.render`` and the module docstring for the composition rules this
     reproduces exactly.
+
+    ``user_name`` (TK-292, DEC-65a/c) is optional and defaults to ``None`` — every existing call
+    site stays byte-unaffected; only ``Mouth.CHAT`` ever reads it (via ``ClauseAlgebraStrategy``'s
+    same-named field).
     """
 
-    strategy = ClauseAlgebraStrategy(assistant_name)
+    strategy = ClauseAlgebraStrategy(assistant_name, user_name=user_name)
     return render_expression(strategy, mouth, matrix, EMPTY_CUES).instruction

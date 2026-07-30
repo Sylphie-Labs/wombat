@@ -34,6 +34,7 @@ from wombat.persona.builder import (
     instruction_for,
 )
 from wombat.persona.capabilities import CAPABILITY_CHARTER
+from wombat.persona.live import LivePersona
 from wombat.persona.matrix import (
     DEFAULT_MATRIX,
     Brevity,
@@ -208,6 +209,71 @@ def test_proactivity_changes_nothing(mouth: Mouth) -> None:
 
 
 # --------------------------------------------------------------------------------------- AC3
+
+
+# --------------------------------------------------------------------------------------- TK-292
+# (DEC-65a/c) — Mouth.CHAT: the companion register.
+
+
+def _chat_pinned(assistant_name: str, user_display: str) -> str:
+    """The pinned CHAT base-role sentence, name slots interpolated — mirrors ``_chat_base`` in
+    ``wombat.persona.builder`` verbatim (this is the ticket's own oracle, there is no live
+    hand-written mouth to byte-match against)."""
+    return (
+        f"You are {assistant_name}, {user_display}'s personal assistant and companion, chatting "
+        f"with {user_display}. Reply naturally and conversationally in a warm, familiar voice - "
+        "match the user's tone, and roll with jokes, banter, and playfulness when the user brings "
+        "them. Casual conversation is welcome for its own sake; do not steer the chat back to "
+        "schedules, email, or duties unless asked. Ground anything factual in what you are given, "
+        "and keep replies short and human - a sentence or two unless more is clearly wanted."
+    )
+
+
+_CHAT_GUARD = "No preamble. " + CAPABILITY_CHARTER
+
+
+def test_chat_default_matches_pinned_string_with_user_name() -> None:
+    result = instruction_for(Mouth.CHAT, DEFAULT_MATRIX, "Steward", user_name="Jim")
+    assert result == _chat_pinned("Steward", "Jim") + " " + _CHAT_GUARD
+
+
+@pytest.mark.parametrize("user_name", (None, ""))
+def test_chat_blank_user_name_renders_the_user_in_both_slots(user_name: str | None) -> None:
+    result = instruction_for(Mouth.CHAT, DEFAULT_MATRIX, "Steward", user_name=user_name)
+    assert result == _chat_pinned("Steward", "the user") + " " + _CHAT_GUARD
+
+
+def test_chat_guard_is_the_capability_charter() -> None:
+    result = instruction_for(Mouth.CHAT, DEFAULT_MATRIX, "Steward", user_name="Jim")
+    assert result.endswith(_CHAT_GUARD)
+
+
+# ------------------------------------------------------------------------------ TK-292 AC2 oracle
+
+
+@pytest.mark.parametrize("mouth", _ALL_MOUTHS)
+@pytest.mark.parametrize("user_name", (None, "", "Jim"))
+def test_original_four_mouths_byte_identical_to_instruction_for_regardless_of_user_name(
+    mouth: Mouth, user_name: str | None
+) -> None:
+    """AC2: the four original mouths never read user_name — every level of every matrix renders
+    identically whether user_name is set or unset, so today's pinned strings (proven by AC1's
+    byte-identity tests above) are unaffected."""
+    for matrix in _all_matrices():
+        without = instruction_for(mouth, matrix, "Steward")
+        with_user_name = instruction_for(mouth, matrix, "Steward", user_name=user_name)
+        assert without == with_user_name
+
+
+@pytest.mark.parametrize("mouth", _ALL_MOUTHS)
+def test_original_four_mouths_byte_identical_via_live_persona_regardless_of_user_name(
+    mouth: Mouth,
+) -> None:
+    """AC2, the LivePersona half: a store-less LivePersona constructed with vs. without
+    user_name renders the SAME instruction for every original mouth at DEFAULT_MATRIX."""
+    without = LivePersona(DEFAULT_MATRIX, "Steward").instruction(mouth)
+    with_user_name = LivePersona(DEFAULT_MATRIX, "Steward", user_name="Jim").instruction(mouth)
+    assert without == with_user_name
 
 
 def test_builder_module_has_no_disallowed_imports() -> None:

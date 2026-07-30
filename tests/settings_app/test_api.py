@@ -469,6 +469,27 @@ def test_get_settings_wombat_ptt_binding_defaults_to_null_when_unset() -> None:
     assert response.json()["settings"]["wombat_ptt_binding"] is None
 
 
+def test_put_settings_wombat_user_name_round_trips() -> None:
+    """AC5 (TK-292, DEC-65a/c): the newly-admitted str field writes and reads back."""
+    client = _client()
+    response = client.put(
+        "/settings", json={"wombat_user_name": "Jim"}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_user_name"] == "Jim"
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_user_name"] == "Jim"
+
+
+def test_get_settings_wombat_user_name_defaults_to_null_when_unset() -> None:
+    """AC5: unset means "" at the WombatConfig layer, but the settings-table view (before any
+    PUT) shows null like every other unset admitted field."""
+    client = _client()
+    response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert response.json()["settings"]["wombat_user_name"] is None
+
+
 def test_put_key_unknown_provider_is_404_or_422() -> None:
     client = _client()
     response = client.put(

@@ -775,7 +775,12 @@ def assemble_runtime(
     # LivePersona touches it not at all until its first poll), so this stays safe on the
     # replay_pending=False/connection-free posture too.
     live_persona = LivePersona(
-        matrix_from_config(config), config.wombat_assistant_name, store=SettingsStore(dsn)
+        matrix_from_config(config),
+        config.wombat_assistant_name,
+        store=SettingsStore(dsn),
+        # TK-292 (DEC-65a/c): the CHAT mouth's second name slot — "" -> None, so LivePersona/
+        # instruction_for fall back to "the user" exactly like the field's own default renders.
+        user_name=config.wombat_user_name or None,
     )
 
     # The v1 cold-boot substrate (Q-36/TK-14): in-memory journal/graph/latent + a FRESH

@@ -99,10 +99,14 @@ class LivePersona:
         initial_matrix: PersonaMatrix,
         assistant_name: str,
         store: SettingsStore | None = None,
+        user_name: str | None = None,
     ) -> None:
         self._matrix = initial_matrix
         self._assistant_name = assistant_name
         self._store = store
+        # TK-292 (DEC-65a/c): the CHAT mouth's second name slot, threaded through to
+        # instruction_for unchanged — every other mouth ignores it.
+        self._user_name = user_name
         # TK-243: pins are NOT loaded here (fully lazy construction) — they hydrate on the first
         # poll_settings() beat, same as the matrix's persisted axes.
         self._pins: dict[str, str] = {}
@@ -124,8 +128,12 @@ class LivePersona:
 
     def instruction(self, mouth: Mouth) -> str:
         """Render ``mouth``'s system instruction from the CURRENT matrix (TK-207's pure builder,
-        evaluated fresh on every call) — the render-time read the four mouth call sites use."""
-        return instruction_for(mouth, self._matrix, self._assistant_name)
+        evaluated fresh on every call) — the render-time read the mouth call sites use.
+        ``user_name`` (TK-292) is threaded through unconditionally; only ``Mouth.CHAT`` reads
+        it."""
+        return instruction_for(
+            mouth, self._matrix, self._assistant_name, user_name=self._user_name
+        )
 
     def set(self, matrix: PersonaMatrix, *, explicit: bool = True) -> None:
         """Swap the in-memory matrix, then best-effort persist it. See module docstring.

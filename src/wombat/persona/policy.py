@@ -11,10 +11,10 @@ non_goal for this ticket).
 
 CLOSED VOCABULARIES enforced at load, each failing LOUD (a dedicated ``PersonaPolicyError``
 naming the offense) rather than silently falling back to built-in text:
-    - mouths — exactly the four ``wombat.persona.builder.Mouth`` values (compose/brief/draft/
-      reflection), Q-106(a). Duplicated here as plain strings rather than importing ``Mouth``
-      — ``builder.py`` imports THIS module for ``ClauseAlgebraStrategy``'s default policy, so
-      importing ``Mouth`` back here would cycle.
+    - mouths — exactly the five ``wombat.persona.builder.Mouth`` values (compose/brief/draft/
+      reflection/chat — chat added by TK-292, DEC-65a/c), Q-106(a). Duplicated here as plain
+      strings rather than importing ``Mouth`` — ``builder.py`` imports THIS module for
+      ``ClauseAlgebraStrategy``'s default policy, so importing ``Mouth`` back here would cycle.
     - axes — exactly the FOUR prompt axes: brevity, warmth, directness, humor. Proactivity is
       NOT a policy axis (TK-215 owns its gate-side actuation as a designed prompt-layer
       no-op) — the loader REJECTS ``proactivity`` appearing anywhere in ``mouth_axes`` or
@@ -53,13 +53,15 @@ from wombat.persona.matrix import DEFAULT_MATRIX, Brevity, Directness, Humor, Wa
 # Bump in lock-step with persona_policy.yaml's `version` field whenever a mouth, axis, or
 # level is added, removed, or renamed, so a persisted file can be reconciled against the
 # code's expectation (wombat.params.OPERATING_PARAMS_VERSION precedent).
-PERSONA_POLICY_VERSION = 1
+# v2 (TK-292, DEC-65a/c): the chat mouth was added to mouth_axes.
+PERSONA_POLICY_VERSION = 2
 
 _POLICY_FILENAME = "persona_policy.yaml"
 
-# The four mouths (Q-106(a)) — duplicated from wombat.persona.builder.Mouth as plain strings;
-# see the module docstring for why this module does not import Mouth.
-_MOUTHS: tuple[str, ...] = ("compose", "brief", "draft", "reflection")
+# The five mouths (Q-106(a), extended to include CHAT by TK-292/DEC-65a/c) — duplicated from
+# wombat.persona.builder.Mouth as plain strings; see the module docstring for why this module
+# does not import Mouth.
+_MOUTHS: tuple[str, ...] = ("compose", "brief", "draft", "reflection", "chat")
 
 # The four policy-governed prompt axes (DEC-38(1)) and their closed level vocabularies, taken
 # from wombat.persona.matrix's enums. Proactivity is deliberately absent — TK-215 owns it,

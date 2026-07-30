@@ -509,6 +509,37 @@ def test_load_config_table_accepts_ptt_binding_str(
     assert "wombat_ptt_binding" in APP_EDITABLE_FIELDS
 
 
+# --- TK-292 (DEC-65a/c): wombat_user_name joins the app-editable tier ------------------------
+
+
+def test_wombat_user_name_defaults_to_empty_string() -> None:
+    """AC5: absent row = "" — the CHAT mouth's user-name slot is unset by default."""
+    config = WombatConfig(deepseek_api_key="k", deepseek_base_url="https://example.invalid")
+    assert config.wombat_user_name == ""
+    assert "wombat_user_name" in APP_EDITABLE_FIELDS
+
+
+@_requires_pg
+def test_load_config_table_accepts_user_name_str(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC5: wombat_user_name round-trips through the settings table (app-editable tier)."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_user_name": "Jim"})
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_user_name == "Jim"
+    assert "wombat_user_name" in APP_EDITABLE_FIELDS
+
+
 # --- AC4: the identical out-of-vocab value via the ENV tier still fails loud, naming the var
 # --- (TK-187 behavior pinned unchanged — only the app-file tier grew tolerant) --------------
 

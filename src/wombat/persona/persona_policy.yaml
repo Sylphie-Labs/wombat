@@ -20,7 +20,7 @@
 #     DEC-38(5) byte-identity invariant, enforced structurally by the loader — not just by
 #     convention — so DEFAULT_MATRIX always renders zero added bytes from clauses.
 
-version: 1
+version: 2
 
 # mouth_axes: per-mouth list of the prompt axes that RENDER for that mouth (DEC-38(1) unbars
 # per-mouth placement structurally, superseding-in-part DEC-37(c)'s code walls — this SHIPPED
@@ -40,6 +40,9 @@ mouth_axes:
   # clinical-register guard (never diagnose, never infer motive); humor is withheld by
   # default so a joke can never read as minimizing or clinical-adjacent commentary.
   reflection: [brevity, warmth, directness]
+  # chat (TK-292, DEC-65a/c): the companion register — humor is squarely in-bounds here, same
+  # as compose/brief.
+  chat: [brevity, warmth, directness, humor]
 
 # clauses: axis -> level -> fixed additive sentence, single-space-joined onto the mouth's
 # base role by builder.py. A FAITHFUL transcription of the pre-TK-220

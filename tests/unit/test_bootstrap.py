@@ -46,6 +46,7 @@ from wombat.external_store import (
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
+from wombat.persona.builder import Mouth
 from wombat.scratchpad import ScratchpadStore
 from wombat.sources.chat_source import ChatSource
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
@@ -292,6 +293,25 @@ def test_assemble_runtime_still_succeeds_at_current_batch_size_of_one() -> None:
         tz=ZoneInfo("UTC"),
     )
     assert bundle.drain_pathway_id == bootstrap.DRAIN_PATHWAY_ID
+
+
+def test_assemble_runtime_threads_wombat_user_name_into_live_persona() -> None:
+    """TK-292 (DEC-65a/c), build step 9: config.wombat_user_name reaches the LivePersona
+    constructed at assemble_runtime, and renders in the CHAT mouth's second name slot."""
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_user_name="Jim",
+    )
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert "Jim" in bundle.live_persona.instruction(Mouth.CHAT)
 
 
 # --- TK-166 (CR-1, Q-83): replay_pending is the ONE eager-read boot-replay flag -----------------

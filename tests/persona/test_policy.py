@@ -45,6 +45,8 @@ def _valid_policy_dict() -> dict[str, Any]:
             "brief": ["brevity", "warmth", "directness", "humor"],
             "draft": ["brevity", "warmth", "directness"],
             "reflection": ["brevity", "warmth", "directness"],
+            # TK-292 (DEC-65a/c): the companion register — humor in-bounds, same as compose/brief.
+            "chat": ["brevity", "warmth", "directness", "humor"],
         },
         "clauses": {
             "brevity": {
@@ -123,8 +125,38 @@ def test_default_policy_loads_shipped_yaml() -> None:
 
     policy = default_policy()
     assert policy.version == PERSONA_POLICY_VERSION
-    assert set(policy.mouth_axes) == {"compose", "brief", "draft", "reflection"}
+    assert set(policy.mouth_axes) == {"compose", "brief", "draft", "reflection", "chat"}
     assert set(policy.clauses) == {"brevity", "warmth", "directness", "humor"}
+
+
+def test_default_policy_chat_mouth_axes_is_exactly_the_four_axes() -> None:
+    """AC3 (TK-292): the shipped yaml's mouth_axes['chat'] is exactly brevity/warmth/
+    directness/humor — the same four axes compose/brief render, reusing existing clause text."""
+
+    assert set(default_policy().mouth_axes["chat"]) == {
+        "brevity",
+        "warmth",
+        "directness",
+        "humor",
+    }
+
+
+def test_chat_humor_dry_appends_the_existing_dry_clause() -> None:
+    """AC3 (TK-292): humor=dry on a CHAT render appends the SAME dry clause text compose/brief
+    already use — no new clause string was added."""
+
+    policy = default_policy()
+    matrix = PersonaMatrix(
+        brevity=DEFAULT_MATRIX.brevity,
+        warmth=DEFAULT_MATRIX.warmth,
+        directness=DEFAULT_MATRIX.directness,
+        humor=Humor.DRY,
+        proactivity=DEFAULT_MATRIX.proactivity,
+    )
+    strategy = ClauseAlgebraStrategy("Steward", policy=policy)
+    result = render_expression(strategy, Mouth.CHAT, matrix, EMPTY_CUES)
+
+    assert policy.clauses["humor"][Humor.DRY.value] in result.instruction
 
 
 def test_default_policy_is_cached_singleton() -> None:

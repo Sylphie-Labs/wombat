@@ -101,6 +101,8 @@ class SettingsUpdate(BaseModel):
     wombat_tts_voice_id: str | None = None
     wombat_stt_model: str | None = None
     wombat_assistant_name: str | None = None
+    # TK-292 (DEC-65a/c): mirrors WombatConfig.wombat_user_name — a plain str, not a Literal.
+    wombat_user_name: str | None = None
     wombat_persona_brevity: Literal["terse", "balanced", "expansive"] | None = None
     wombat_persona_warmth: Literal["reserved", "neutral", "warm"] | None = None
     wombat_persona_directness: Literal["gentle", "plain", "blunt"] | None = None
