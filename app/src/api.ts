@@ -89,6 +89,10 @@ export interface SettingsFields {
   wombat_observe_screen: boolean | null;
   wombat_observe_webcam: boolean | null;
   wombat_observe_mic: boolean | null;
+  // TK-319 (DEC-70(c)): the fourth ambient-observability channel - Screenpipe capture consent,
+  // same shape as the TK-309 trio above. wombat_screenpipe_url is deliberately NOT exposed here
+  // (operator .env-tier, not app-editable).
+  wombat_observe_screenpipe: boolean | null;
 }
 
 // TK-306 (RULING v2.172 r4, `wombat.settings_app.api._timezone_view`, verbatim): the read-only

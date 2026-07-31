@@ -932,6 +932,60 @@ def test_load_config_env_wins_over_true_pg_row_for_observe_screen(
     assert config.wombat_observe_screen is False
 
 
+# --- TK-319 (DEC-70(c)): wombat_observe_screenpipe joins the app-editable tier; ----------------
+# --- wombat_screenpipe_url is an operator .env-tier field, not app-editable --------------------
+
+
+def test_wombat_observe_screenpipe_defaults_to_false_and_url_defaults() -> None:
+    """AC(a): fresh install (no env, no pg) -> observe_screenpipe False, url pinned exactly."""
+    config = WombatConfig(deepseek_api_key="k", deepseek_base_url="https://example.invalid")
+    assert config.wombat_observe_screenpipe is False
+    assert config.wombat_screenpipe_url == "http://127.0.0.1:3030"
+    assert "wombat_observe_screenpipe" in APP_EDITABLE_FIELDS
+    assert "wombat_screenpipe_url" not in APP_EDITABLE_FIELDS
+
+
+@_requires_pg
+def test_load_config_table_accepts_observe_screenpipe(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC(b): a pg row true + env unset -> True (table-sourced)."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_observe_screenpipe": True})
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_observe_screenpipe is True
+
+
+@_requires_pg
+def test_load_config_env_wins_over_true_pg_row_for_observe_screenpipe(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC(b): DEC-43 precedence pinned — env 'false' wins over a true pg row."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_observe_screenpipe": True})
+    finally:
+        store.close()
+    monkeypatch.setenv("WOMBAT_OBSERVE_SCREENPIPE", "false")
+
+    config = load_config()
+
+    assert config.wombat_observe_screenpipe is False
+
+
 # --- TK-318 (DEC-69b): wombat_speak_full_replies joins the app-editable tier ------------------
 
 

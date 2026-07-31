@@ -18,12 +18,17 @@ from pathlib import Path
 import pytest
 import yaml
 
+from wombat.gate.models import GateItem, ItemKind, ScoredItem
+from wombat.gate.scoring import urgency
+from wombat.gate.trigger import is_surfacing_worthy
 from wombat.params import PARAMS_APP_EDITABLE, OperatingParamsError, load_operating_params
 from wombat.rating.params import (
     RATING_PARAMS_VERSION,
     EventClass,
     RatingParams,
     default_params_for,
+    params_from_claim_payload,
+    to_claim_payload,
 )
 
 
@@ -105,6 +110,54 @@ def test_ac2_every_default_is_inside_the_tuner_clamp_band_and_preserves_ordinal_
     assert urgency_base[EventClass.REFLECTION] == min(urgency_base.values())
     assert load_base[EventClass.DRAFT_REPLY] == max(load_base.values())
     assert load_base[EventClass.MORNING_BRIEF] == min(load_base.values())
+
+
+# --- TK-321 (DEC-70e): SCREEN_ACTIVITY vocabulary addition, default-hold proven -----------
+
+
+def test_screen_activity_is_absent_from_defaults_and_reads_neutral_baseline() -> None:
+    # DEC-70(e): deliberately no seeded default for the new class - it reads the neutral
+    # RatingParams() baseline via default_params_for, same as any other unseeded class.
+    params = default_params_for(EventClass.SCREEN_ACTIVITY)
+    assert params == RatingParams()
+
+
+def test_screen_activity_default_hold_at_the_real_gate() -> None:
+    # AC(b): a TK-322-shaped screen-activity item, scored through the real
+    # scoring.urgency()/trigger.is_surfacing_worthy() gate path with neutral RatingParams and the
+    # shipped urgency_threshold, decides HOLD (Jim's "wombat MAY not say something on each event"
+    # pin, made a runnable check).
+    item = GateItem(
+        item_id="screen-1",
+        item_kind=ItemKind.GENERIC,
+        created_at=0.0,
+        payload={
+            "event": "context_switch",
+            "app": "chrome",
+            "title": "some window title",
+            "started_at": 1_800_000_000.0,
+            "duration_s": 12.0,
+            "screenpipe_ref": "ref-1",
+            "event_class": "screen_activity",
+        },
+    )
+    params = default_params_for(EventClass.SCREEN_ACTIVITY)
+    scored_urgency = urgency(item, params)
+    scored = ScoredItem(
+        item_id=item.item_id, item_kind=item.item_kind, urgency=scored_urgency, load=0.0
+    )
+    urgency_threshold = load_operating_params().urgency_threshold
+
+    assert not is_surfacing_worthy(scored, urgency_threshold)
+
+
+def test_screen_activity_claim_payload_round_trips_the_existing_wire_helpers() -> None:
+    # AC(c): the new class's RatingParams round-trips through the SAME wire helpers as every
+    # other class - no tuner/store code change is needed for the new class (DEC-70e).
+    params = default_params_for(EventClass.SCREEN_ACTIVITY).with_updates(urgency_base=0.55)
+    payload = to_claim_payload(params)
+    restored = params_from_claim_payload(payload)
+    assert restored == params
 
 
 # --- TK-301 (DEC-67c) AC2 — personality_band.eager lock-step -----------------------------

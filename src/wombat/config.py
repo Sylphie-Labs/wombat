@@ -102,6 +102,9 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     "wombat_observe_screen",
     "wombat_observe_webcam",
     "wombat_observe_mic",
+    # TK-319 (DEC-70(c)): the fourth ambient-observability channel — Screenpipe capture consent,
+    # False by default (opt-in, never assumed) and app-editable like its three siblings above.
+    "wombat_observe_screenpipe",
 )
 
 
@@ -350,6 +353,18 @@ class WombatConfig(BaseSettings):
     wombat_observe_screen: bool = False
     wombat_observe_webcam: bool = False
     wombat_observe_mic: bool = False
+
+    # OPTIONAL (TK-319, DEC-70(c)): the fourth ambient-observability channel — Screenpipe capture
+    # consent, False by default (opt-in, never assumed), app-editable like the TK-309 trio above.
+    # Restart-tier (no hot-apply); left unwired until TK-320/TK-322 wire an actual collector.
+    wombat_observe_screenpipe: bool = False
+
+    # OPTIONAL (TK-319, DEC-70(c)): the Screenpipe HTTP endpoint — an operator .env-tier field,
+    # deliberately NOT in APP_EDITABLE_FIELDS (the ``wombat_asr_drop_dir``/``wombat_timezone``
+    # precedent: endpoint custody is a launch-time process-wiring concern, not a settings-UI
+    # preference). TK-320's loopback guard is the structural backstop against a non-local URL;
+    # nothing reads this field yet — TK-320/TK-322 own wiring an actual collector to it.
+    wombat_screenpipe_url: str = "http://127.0.0.1:3030"
 
     @classmethod
     def settings_customise_sources(

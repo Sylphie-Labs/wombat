@@ -87,6 +87,9 @@ interface FormState {
   wombat_observe_screen: boolean;
   wombat_observe_webcam: boolean;
   wombat_observe_mic: boolean;
+  // TK-319 (DEC-70(c)): the fourth ambient-observability channel - Screenpipe capture consent,
+  // same real-bool pattern as the TK-309 trio above.
+  wombat_observe_screenpipe: boolean;
 }
 
 type FormField = keyof FormState;
@@ -152,6 +155,8 @@ const DEFAULTS: FormState = {
   wombat_observe_screen: false,
   wombat_observe_webcam: false,
   wombat_observe_mic: false,
+  // TK-319 (DEC-70(c)): false, mirroring WombatConfig's own field default.
+  wombat_observe_screenpipe: false,
 };
 
 const PERSONA_FIELDS: readonly FormField[] = [
@@ -190,6 +195,8 @@ const RESTART_FIELDS: readonly FormField[] = [
   "wombat_observe_screen",
   "wombat_observe_webcam",
   "wombat_observe_mic",
+  // TK-319 (DEC-70(c)): restart-to-apply, no hot-apply.
+  "wombat_observe_screenpipe",
 ];
 
 // wombat.settings_app.api.SettingsUpdate's provider Literal, verbatim.
@@ -327,6 +334,8 @@ function toFormState(settings: SettingsFields): FormState {
     wombat_observe_screen: settings.wombat_observe_screen ?? DEFAULTS.wombat_observe_screen,
     wombat_observe_webcam: settings.wombat_observe_webcam ?? DEFAULTS.wombat_observe_webcam,
     wombat_observe_mic: settings.wombat_observe_mic ?? DEFAULTS.wombat_observe_mic,
+    wombat_observe_screenpipe:
+      settings.wombat_observe_screenpipe ?? DEFAULTS.wombat_observe_screenpipe,
   };
 }
 
@@ -439,6 +448,9 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
   }
   if (touched.has("wombat_observe_mic")) {
     patch.wombat_observe_mic = formState.wombat_observe_mic;
+  }
+  if (touched.has("wombat_observe_screenpipe")) {
+    patch.wombat_observe_screenpipe = formState.wombat_observe_screenpipe;
   }
   return patch;
 }
@@ -932,6 +944,15 @@ export function App() {
                         value={formState.wombat_observe_mic ? "on" : "off"}
                         onChange={(e) =>
                           updateField("wombat_observe_mic", e.target.value === "on")
+                        }
+                      />
+                      <Select
+                        id="observe-screenpipe"
+                        label="Screenpipe"
+                        options={ON_OFF_OPTIONS}
+                        value={formState.wombat_observe_screenpipe ? "on" : "off"}
+                        onChange={(e) =>
+                          updateField("wombat_observe_screenpipe", e.target.value === "on")
                         }
                       />
                     </Panel>

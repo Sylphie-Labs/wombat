@@ -172,6 +172,10 @@ class SettingsUpdate(BaseModel):
     wombat_observe_screen: bool | None = None
     wombat_observe_webcam: bool | None = None
     wombat_observe_mic: bool | None = None
+    # TK-319 (DEC-70(c)): mirrors WombatConfig.wombat_observe_screenpipe — same shape as the
+    # TK-309 trio above. wombat_screenpipe_url is deliberately NOT mirrored (operator .env-tier;
+    # not in APP_EDITABLE_FIELDS).
+    wombat_observe_screenpipe: bool | None = None
 
     @field_validator("wombat_quiet_start", "wombat_quiet_end")
     @classmethod

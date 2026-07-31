@@ -557,6 +557,51 @@ def test_put_settings_observe_fields_non_bool_is_422(field: str) -> None:
     assert response.status_code == 422
 
 
+def test_put_settings_wombat_observe_screenpipe_round_trips() -> None:
+    """TK-319 (DEC-70c): the newly-admitted bool field writes true, writes false, and reads
+    back — GET round-trips the latest value."""
+    client = _client()
+    response = client.put(
+        "/settings", json={"wombat_observe_screenpipe": True}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_observe_screenpipe"] is True
+
+    response = client.put(
+        "/settings", json={"wombat_observe_screenpipe": False}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_observe_screenpipe"] is False
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_observe_screenpipe"] is False
+
+
+def test_put_settings_wombat_observe_screenpipe_non_bool_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_observe_screenpipe": ["not", "a", "bool"]},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_wombat_screenpipe_url_is_not_app_editable_and_not_put_able() -> None:
+    """TK-319 (DEC-70c): endpoint custody stays operator .env-tier — absent from
+    APP_EDITABLE_FIELDS, and a PUT naming it 422s exactly like any other unknown key."""
+    assert "wombat_screenpipe_url" not in APP_EDITABLE_FIELDS
+    assert "wombat_screenpipe_url" not in SettingsUpdate.model_fields
+
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_screenpipe_url": "http://evil.example/"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
 def test_put_settings_wombat_speak_full_replies_round_trips() -> None:
     """TK-318 (DEC-69b): the newly-admitted bool field writes true, writes false, and reads back."""
     client = _client()

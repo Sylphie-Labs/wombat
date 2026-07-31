@@ -33,6 +33,10 @@ class EventClass(Enum):
     REFLECTION = "reflection"
     DRAFT_REPLY = "draft_reply"
     GENERIC = "generic"
+    # TK-321 (DEC-70(e)): screen-activity events (TK-322's screenpipe-sourced context-switch
+    # items) get their own vocabulary slot. Deliberately NO seeded entry in ``_DEFAULTS`` below —
+    # it reads the neutral baseline via ``default_params_for`` (default-hold, no version bump).
+    SCREEN_ACTIVITY = "screen_activity"
 
 
 @dataclass(frozen=True, slots=True)

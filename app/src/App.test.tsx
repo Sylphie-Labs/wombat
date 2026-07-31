@@ -52,6 +52,7 @@ function baseSettings(): SettingsShape {
     wombat_observe_screen: null,
     wombat_observe_webcam: null,
     wombat_observe_mic: null,
+    wombat_observe_screenpipe: null,
   };
 }
 
@@ -697,6 +698,7 @@ describe("App (TK-306 AC4: storage-unavailable GET degrade)", () => {
       wombat_observe_screen: null,
       wombat_observe_webcam: null,
       wombat_observe_mic: null,
+      wombat_observe_screenpipe: null,
     };
     installFakeApi(nullSettings, { elevenlabs: false, deepgram: false, fish: false });
     render(<App />);
@@ -724,6 +726,8 @@ describe("App (TK-309 AC4: system view gains the Observation panel)", () => {
     expect((screen.getByLabelText("Screen") as HTMLSelectElement).value).toBe("off");
     expect((screen.getByLabelText("Webcam") as HTMLSelectElement).value).toBe("off");
     expect((screen.getByLabelText("Microphone") as HTMLSelectElement).value).toBe("off");
+    // TK-319 (DEC-70c): a fourth Off/On row for the Screenpipe channel.
+    expect((screen.getByLabelText("Screenpipe") as HTMLSelectElement).value).toBe("off");
 
     // The other System panels stay byte-unchanged (pin).
     expect(screen.getByRole("heading", { name: "Runtime" })).toBeTruthy();
@@ -745,6 +749,26 @@ describe("App (TK-309 AC4: system view gains the Observation panel)", () => {
       );
       expect(settingsPuts.length).toBe(1);
       expect(settingsPuts[0].body).toEqual({ wombat_observe_webcam: true });
+    });
+
+    expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+  });
+
+  it("TK-319 (DEC-70c): PUTs only the touched Screenpipe channel and shows the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoSystem();
+    await screen.findByLabelText("Brief time");
+
+    fireEvent.change(screen.getByLabelText("Screenpipe"), { target: { value: "on" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({ wombat_observe_screenpipe: true });
     });
 
     expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();

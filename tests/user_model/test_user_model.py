@@ -132,6 +132,16 @@ def test_resolve_event_class_uses_payload_key_when_present() -> None:
     assert model.resolve_event_class(item) is EventClass.CALENDAR_CONFLICT
 
 
+def test_resolve_event_class_uses_payload_key_for_screen_activity() -> None:
+    # TK-321 (DEC-70e): a TK-322-shaped screen-activity item resolves via the SAME payload
+    # 'event_class' override path once the EventClass member exists - zero user_model.py
+    # code change, the total _ITEM_KIND_FALLBACK map for payloads without the key is untouched.
+    model = UserModel(entity_kg=AsyncMock(), user_id="alice")
+    item = _make_item(item_kind=ItemKind.GENERIC, event_class="screen_activity")
+
+    assert model.resolve_event_class(item) is EventClass.SCREEN_ACTIVITY
+
+
 @pytest.mark.parametrize(
     ("item_kind", "expected"),
     [
