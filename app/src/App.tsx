@@ -32,6 +32,7 @@ import {
   type Provider,
   type SettingsFields,
   type SettingsPatch,
+  type TimezoneInfo,
   type Warmth,
 } from "./api";
 
@@ -61,9 +62,50 @@ interface FormState {
   wombat_persona_directness: Directness;
   wombat_persona_humor: Humor;
   wombat_persona_proactivity: Proactivity;
+  // TK-306 (DEC-67i second half): the System view's "Briefs & interruptions" / "Limits" panels.
+  // Every field here is a plain string, "" meaning unset - unlike the rest of this form, an
+  // unset wombat_param_* override renders BLANK with a pinned-default placeholder (AC1), never
+  // pre-filled with the default itself (contrast the DEFAULTS-fallback fields above). HH:MM
+  // fields hold the renderer's "HH:MM" shape; wombat_param_decay_ttl_hours is a UI-only field
+  // (the bridge stores wombat_param_decay_ttl_seconds - x3600 to/from at the buildPatch/
+  // toFormState edges, per the ticket's recorded time convention).
+  wombat_param_morning_brief_time: string;
+  wombat_param_nightly_dream_time: string;
+  wombat_param_urgency_threshold: string;
+  wombat_param_per_class_daily_ceiling: string;
+  wombat_param_decay_ttl_hours: string;
+  wombat_quiet_start: string;
+  wombat_quiet_end: string;
+  wombat_param_mouth_model_timeout_seconds: string;
+  wombat_param_mouth_daily_token_ceiling: string;
+  wombat_param_mouth_max_usd_per_drive: string;
 }
 
 type FormField = keyof FormState;
+
+// TK-306: the wombat_params.yaml v9 shipped defaults (src/wombat/wombat_params.yaml), shown as
+// placeholder hints when an override is unset - NOT a FormState fallback (which stays "" for
+// these fields; see the FormState docstring above).
+const PARAM_PLACEHOLDERS: Record<
+  | "wombat_param_morning_brief_time"
+  | "wombat_param_nightly_dream_time"
+  | "wombat_param_urgency_threshold"
+  | "wombat_param_per_class_daily_ceiling"
+  | "wombat_param_decay_ttl_hours"
+  | "wombat_param_mouth_model_timeout_seconds"
+  | "wombat_param_mouth_daily_token_ceiling"
+  | "wombat_param_mouth_max_usd_per_drive",
+  string
+> = {
+  wombat_param_morning_brief_time: "07:00",
+  wombat_param_nightly_dream_time: "02:00",
+  wombat_param_urgency_threshold: "0.75",
+  wombat_param_per_class_daily_ceiling: "3",
+  wombat_param_decay_ttl_hours: "24",
+  wombat_param_mouth_model_timeout_seconds: "10",
+  wombat_param_mouth_daily_token_ceiling: "100000",
+  wombat_param_mouth_max_usd_per_drive: "0.50",
+};
 
 // DEFAULT_MATRIX (src/wombat/persona/matrix.py) - the fallback shown when a
 // field is `null` (never customized) in wombat.settings.json.
@@ -86,6 +128,17 @@ const DEFAULTS: FormState = {
   wombat_persona_directness: "plain",
   wombat_persona_humor: "none",
   wombat_persona_proactivity: "balanced",
+  // TK-306: "" (unset/blank) across the board - see the FormState docstring above.
+  wombat_param_morning_brief_time: "",
+  wombat_param_nightly_dream_time: "",
+  wombat_param_urgency_threshold: "",
+  wombat_param_per_class_daily_ceiling: "",
+  wombat_param_decay_ttl_hours: "",
+  wombat_quiet_start: "",
+  wombat_quiet_end: "",
+  wombat_param_mouth_model_timeout_seconds: "",
+  wombat_param_mouth_daily_token_ceiling: "",
+  wombat_param_mouth_max_usd_per_drive: "",
 };
 
 const PERSONA_FIELDS: readonly FormField[] = [
@@ -106,6 +159,18 @@ const RESTART_FIELDS: readonly FormField[] = [
   "wombat_asr_model",
   "wombat_reply_window_seconds",
   "wombat_spoken_reply_max_chars",
+  // TK-306 (DEC-67i second half): all ten new System-view fields are restart-tier - the
+  // briefing's binding ruling, no hot-apply for any of them.
+  "wombat_param_morning_brief_time",
+  "wombat_param_nightly_dream_time",
+  "wombat_param_urgency_threshold",
+  "wombat_param_per_class_daily_ceiling",
+  "wombat_param_decay_ttl_hours",
+  "wombat_quiet_start",
+  "wombat_quiet_end",
+  "wombat_param_mouth_model_timeout_seconds",
+  "wombat_param_mouth_daily_token_ceiling",
+  "wombat_param_mouth_max_usd_per_drive",
 ];
 
 // wombat.settings_app.api.SettingsUpdate's provider Literal, verbatim.
@@ -196,7 +261,47 @@ function toFormState(settings: SettingsFields): FormState {
     wombat_persona_humor: settings.wombat_persona_humor ?? DEFAULTS.wombat_persona_humor,
     wombat_persona_proactivity:
       settings.wombat_persona_proactivity ?? DEFAULTS.wombat_persona_proactivity,
+    // TK-306: null -> "" (blank, placeholder-hinted) rather than a DEFAULTS fallback value -
+    // the two HH:MM:SS time fields are truncated to the renderer's "HH:MM" shape.
+    wombat_param_morning_brief_time: settings.wombat_param_morning_brief_time
+      ? settings.wombat_param_morning_brief_time.slice(0, 5)
+      : "",
+    wombat_param_nightly_dream_time: settings.wombat_param_nightly_dream_time
+      ? settings.wombat_param_nightly_dream_time.slice(0, 5)
+      : "",
+    wombat_param_urgency_threshold:
+      settings.wombat_param_urgency_threshold != null
+        ? String(settings.wombat_param_urgency_threshold)
+        : "",
+    wombat_param_per_class_daily_ceiling:
+      settings.wombat_param_per_class_daily_ceiling != null
+        ? String(settings.wombat_param_per_class_daily_ceiling)
+        : "",
+    wombat_param_decay_ttl_hours:
+      settings.wombat_param_decay_ttl_seconds != null
+        ? String(settings.wombat_param_decay_ttl_seconds / 3600)
+        : "",
+    wombat_quiet_start: settings.wombat_quiet_start ?? "",
+    wombat_quiet_end: settings.wombat_quiet_end ?? "",
+    wombat_param_mouth_model_timeout_seconds:
+      settings.wombat_param_mouth_model_timeout_seconds != null
+        ? String(settings.wombat_param_mouth_model_timeout_seconds)
+        : "",
+    wombat_param_mouth_daily_token_ceiling:
+      settings.wombat_param_mouth_daily_token_ceiling != null
+        ? String(settings.wombat_param_mouth_daily_token_ceiling)
+        : "",
+    wombat_param_mouth_max_usd_per_drive:
+      settings.wombat_param_mouth_max_usd_per_drive != null
+        ? String(settings.wombat_param_mouth_max_usd_per_drive)
+        : "",
   };
+}
+
+/** "" -> "" (still unset, sent verbatim); else "HH:MM" -> "HH:MM:00" (the bridge's stored shape,
+ * per the ticket's recorded time convention). */
+function hhmmToBridgeTime(value: string): string {
+  return value === "" ? "" : `${value}:00`;
 }
 
 /** Only the touched fields go in the PUT body - an untouched field is omitted, not re-sent. */
@@ -244,6 +349,48 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
   if (touched.has("wombat_persona_proactivity")) {
     patch.wombat_persona_proactivity = formState.wombat_persona_proactivity;
   }
+  if (touched.has("wombat_param_morning_brief_time")) {
+    patch.wombat_param_morning_brief_time = hhmmToBridgeTime(
+      formState.wombat_param_morning_brief_time,
+    );
+  }
+  if (touched.has("wombat_param_nightly_dream_time")) {
+    patch.wombat_param_nightly_dream_time = hhmmToBridgeTime(
+      formState.wombat_param_nightly_dream_time,
+    );
+  }
+  if (touched.has("wombat_param_urgency_threshold")) {
+    patch.wombat_param_urgency_threshold = Number(formState.wombat_param_urgency_threshold);
+  }
+  if (touched.has("wombat_param_per_class_daily_ceiling")) {
+    patch.wombat_param_per_class_daily_ceiling = Number(
+      formState.wombat_param_per_class_daily_ceiling,
+    );
+  }
+  if (touched.has("wombat_param_decay_ttl_hours")) {
+    patch.wombat_param_decay_ttl_seconds = Number(formState.wombat_param_decay_ttl_hours) * 3600;
+  }
+  if (touched.has("wombat_quiet_start")) {
+    patch.wombat_quiet_start = formState.wombat_quiet_start;
+  }
+  if (touched.has("wombat_quiet_end")) {
+    patch.wombat_quiet_end = formState.wombat_quiet_end;
+  }
+  if (touched.has("wombat_param_mouth_model_timeout_seconds")) {
+    patch.wombat_param_mouth_model_timeout_seconds = Number(
+      formState.wombat_param_mouth_model_timeout_seconds,
+    );
+  }
+  if (touched.has("wombat_param_mouth_daily_token_ceiling")) {
+    patch.wombat_param_mouth_daily_token_ceiling = Number(
+      formState.wombat_param_mouth_daily_token_ceiling,
+    );
+  }
+  if (touched.has("wombat_param_mouth_max_usd_per_drive")) {
+    patch.wombat_param_mouth_max_usd_per_drive = Number(
+      formState.wombat_param_mouth_max_usd_per_drive,
+    );
+  }
   return patch;
 }
 
@@ -257,6 +404,9 @@ export function App() {
   const [keyInputs, setKeyInputs] = useState<Record<KeyProvider, string>>(EMPTY_KEY_INPUTS);
   const [keysConfigured, setKeysConfigured] =
     useState<Record<KeyProvider, boolean>>(EMPTY_KEYS_CONFIGURED);
+  // TK-306 (RULING v2.172 r4): the read-only GET /settings timezone object - no form field,
+  // no touched/patch involvement, refreshed on load and after every save exactly like keys.
+  const [timezone, setTimezone] = useState<TimezoneInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -271,6 +421,7 @@ export function App() {
         if (cancelled) return;
         setFormState(toFormState(response.settings));
         setKeysConfigured({ ...EMPTY_KEYS_CONFIGURED, ...response.keys });
+        setTimezone(response.timezone);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -318,6 +469,7 @@ export function App() {
       const refreshed = await getSettings();
       setFormState(toFormState(refreshed.settings));
       setKeysConfigured({ ...EMPTY_KEYS_CONFIGURED, ...refreshed.keys });
+      setTimezone(refreshed.timezone);
       setTouched(new Set());
       setKeyInputs(EMPTY_KEY_INPUTS);
     } catch (error) {
@@ -568,7 +720,144 @@ export function App() {
               </>
             )}
 
-            {view === "system" && <RuntimeControls />}
+            {view === "system" && (
+              <>
+                <RuntimeControls />
+                {formState && (
+                  <>
+                    <Panel className="flex flex-col gap-4">
+                      <h2 className="text-sm font-semibold">Briefs & interruptions</h2>
+                      <Field
+                        id="brief-time"
+                        label="Brief time"
+                        type="time"
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_morning_brief_time}`}
+                        value={formState.wombat_param_morning_brief_time}
+                        onChange={(e) =>
+                          updateField("wombat_param_morning_brief_time", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="reflection-time"
+                        label="Reflection time"
+                        type="time"
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_nightly_dream_time}`}
+                        value={formState.wombat_param_nightly_dream_time}
+                        onChange={(e) =>
+                          updateField("wombat_param_nightly_dream_time", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="urgency-threshold"
+                        label="Urgency threshold"
+                        type="number"
+                        min={0.6}
+                        max={0.95}
+                        step={0.01}
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_urgency_threshold}`}
+                        value={formState.wombat_param_urgency_threshold}
+                        onChange={(e) =>
+                          updateField("wombat_param_urgency_threshold", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="per-class-daily-ceiling"
+                        label="Max voice interruptions per sender class per day"
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={1}
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_per_class_daily_ceiling}`}
+                        value={formState.wombat_param_per_class_daily_ceiling}
+                        onChange={(e) =>
+                          updateField("wombat_param_per_class_daily_ceiling", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="item-decay-hours"
+                        label="Item decay (hours)"
+                        type="number"
+                        min={1}
+                        max={168}
+                        step={1}
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_decay_ttl_hours}`}
+                        value={formState.wombat_param_decay_ttl_hours}
+                        onChange={(e) =>
+                          updateField("wombat_param_decay_ttl_hours", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="quiet-start"
+                        label="Quiet hours start"
+                        type="time"
+                        value={formState.wombat_quiet_start}
+                        onChange={(e) => updateField("wombat_quiet_start", e.target.value)}
+                      />
+                      <Field
+                        id="quiet-end"
+                        label="Quiet hours end"
+                        type="time"
+                        value={formState.wombat_quiet_end}
+                        onChange={(e) => updateField("wombat_quiet_end", e.target.value)}
+                      />
+                      <p className={ink.muted}>
+                        Set both start and end to enable quiet hours, or leave both blank to
+                        disable.
+                      </p>
+                    </Panel>
+
+                    <Panel className="flex flex-col gap-4">
+                      <h2 className="text-sm font-semibold">Limits</h2>
+                      <Field
+                        id="mouth-model-timeout-seconds"
+                        label="Model response wait (s)"
+                        type="number"
+                        min={2}
+                        max={60}
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_mouth_model_timeout_seconds}`}
+                        value={formState.wombat_param_mouth_model_timeout_seconds}
+                        onChange={(e) =>
+                          updateField("wombat_param_mouth_model_timeout_seconds", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="mouth-daily-token-ceiling"
+                        label="Daily token ceiling"
+                        type="number"
+                        min={10000}
+                        max={1000000}
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_mouth_daily_token_ceiling}`}
+                        value={formState.wombat_param_mouth_daily_token_ceiling}
+                        onChange={(e) =>
+                          updateField("wombat_param_mouth_daily_token_ceiling", e.target.value)
+                        }
+                      />
+                      <Field
+                        id="mouth-max-usd-per-drive"
+                        label="Per-conversation spend cap (USD)"
+                        type="number"
+                        min={0.05}
+                        max={5.0}
+                        step={0.01}
+                        placeholder={`default ${PARAM_PLACEHOLDERS.wombat_param_mouth_max_usd_per_drive}`}
+                        value={formState.wombat_param_mouth_max_usd_per_drive}
+                        onChange={(e) =>
+                          updateField("wombat_param_mouth_max_usd_per_drive", e.target.value)
+                        }
+                      />
+                    </Panel>
+
+                    {timezone && (
+                      <p className={ink.muted}>
+                        Timezone: {timezone.name ?? "unresolved"} ({timezone.source})
+                      </p>
+                    )}
+
+                    {renderSaveBar()}
+                  </>
+                )}
+              </>
+            )}
           </div>
         </main>
 

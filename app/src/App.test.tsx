@@ -39,7 +39,24 @@ function baseSettings(): SettingsShape {
     wombat_persona_directness: "blunt",
     wombat_persona_humor: "dry",
     wombat_persona_proactivity: "forward",
+    wombat_quiet_start: null,
+    wombat_quiet_end: null,
+    wombat_param_morning_brief_time: null,
+    wombat_param_nightly_dream_time: null,
+    wombat_param_urgency_threshold: null,
+    wombat_param_per_class_daily_ceiling: null,
+    wombat_param_decay_ttl_seconds: null,
+    wombat_param_mouth_model_timeout_seconds: null,
+    wombat_param_mouth_daily_token_ceiling: null,
+    wombat_param_mouth_max_usd_per_drive: null,
   };
+}
+
+// TK-306: the fake GET /settings timezone object - a stand-in for
+// `wombat.settings_app.api._timezone_view`'s shape, unrelated to the settings-store degrade
+// path (it never depends on `store`/`currentSettings`).
+function baseTimezone(): { name: string | null; source: string } {
+  return { name: "America/Chicago", source: "system" };
 }
 
 interface FetchCall {
@@ -51,6 +68,7 @@ interface FetchCall {
 function installFakeApi(
   settings: SettingsShape = baseSettings(),
   keys: Record<string, boolean> = { elevenlabs: true, deepgram: false, fish: false },
+  timezone: { name: string | null; source: string } = baseTimezone(),
 ): { calls: FetchCall[] } {
   (window as unknown as { wombatSettings: { getInfo: () => Promise<unknown> } }).wombatSettings =
     {
@@ -81,7 +99,11 @@ function installFakeApi(
     }
 
     if (method === "GET" && url.endsWith("/settings")) {
-      return Response.json({ settings: { ...currentSettings }, keys: { ...currentKeys } });
+      return Response.json({
+        settings: { ...currentSettings },
+        keys: { ...currentKeys },
+        timezone,
+      });
     }
     if (method === "PUT" && url.endsWith("/settings")) {
       // Mirrors wombat.settings_app.api.SettingsUpdate's Field bounds (TK-303/305) - an
@@ -131,6 +153,9 @@ function gotoVoice(): void {
 }
 function gotoKeys(): void {
   fireEvent.click(screen.getByRole("button", { name: "API Keys" }));
+}
+function gotoSystem(): void {
+  fireEvent.click(screen.getByRole("button", { name: "System" }));
 }
 
 describe("App (TK-200 AC1: load)", () => {
@@ -482,6 +507,139 @@ describe("App (TK-305 AC3: out-of-bounds numeric input 422s and reverts)", () =>
 
     expect(await screen.findByLabelText("Reply window (s)")).toHaveProperty("value", "120");
     expect(screen.getByLabelText("Spoken reply cap (chars)")).toHaveProperty("value", "400");
+  });
+});
+
+describe("App (TK-306 AC1: system view gains Briefs & interruptions / Limits panels)", () => {
+  it("keeps RuntimeControls rendering above the two new panels", async () => {
+    installFakeApi();
+    render(<App />);
+    gotoSystem();
+    await screen.findByLabelText("Brief time");
+
+    expect(screen.getByRole("heading", { name: "Runtime" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Briefs & interruptions" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Limits" })).toBeTruthy();
+
+    const text = document.body.textContent ?? "";
+    expect(text.indexOf("Runtime")).toBeLessThan(text.indexOf("Briefs & interruptions"));
+    expect(text.indexOf("Briefs & interruptions")).toBeLessThan(text.indexOf("Limits"));
+  });
+
+  it("renders unset param overrides blank with a pinned-default placeholder", async () => {
+    installFakeApi();
+    render(<App />);
+    gotoSystem();
+    await screen.findByLabelText("Brief time");
+
+    const briefTime = screen.getByLabelText("Brief time") as HTMLInputElement;
+    expect(briefTime.value).toBe("");
+    expect(briefTime.placeholder).toBe("default 07:00");
+
+    const reflectionTime = screen.getByLabelText("Reflection time") as HTMLInputElement;
+    expect(reflectionTime.value).toBe("");
+    expect(reflectionTime.placeholder).toBe("default 02:00");
+
+    expect(
+      (screen.getByLabelText("Urgency threshold") as HTMLInputElement).placeholder,
+    ).toBe("default 0.75");
+    expect(
+      (screen.getByLabelText("Max voice interruptions per sender class per day") as HTMLInputElement)
+        .placeholder,
+    ).toBe("default 3");
+    expect((screen.getByLabelText("Item decay (hours)") as HTMLInputElement).placeholder).toBe(
+      "default 24",
+    );
+    expect(
+      (screen.getByLabelText("Model response wait (s)") as HTMLInputElement).placeholder,
+    ).toBe("default 10");
+    expect(
+      (screen.getByLabelText("Daily token ceiling") as HTMLInputElement).placeholder,
+    ).toBe("default 100000");
+    expect(
+      (screen.getByLabelText("Per-conversation spend cap (USD)") as HTMLInputElement).placeholder,
+    ).toBe("default 0.50");
+
+    // Quiet hours carry no pinned default - blank means "off", not "unset".
+    expect((screen.getByLabelText("Quiet hours start") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Quiet hours end") as HTMLInputElement).value).toBe("");
+  });
+});
+
+describe("App (TK-306 AC2: brief time + decay save)", () => {
+  it("PUTs the converted HH:MM:00 time and the x3600 decay seconds, and shows the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoSystem();
+    await screen.findByLabelText("Brief time");
+
+    fireEvent.change(screen.getByLabelText("Brief time"), { target: { value: "06:30" } });
+    fireEvent.change(screen.getByLabelText("Item decay (hours)"), { target: { value: "48" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({
+        wombat_param_morning_brief_time: "06:30:00",
+        wombat_param_decay_ttl_seconds: 172800,
+      });
+    });
+
+    expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+  });
+});
+
+describe("App (TK-306 AC3: read-only timezone line)", () => {
+  it("renders the timezone name/source with no control", async () => {
+    installFakeApi(undefined, undefined, { name: "America/Chicago", source: "env" });
+    render(<App />);
+    gotoSystem();
+
+    expect(await screen.findByText("Timezone: America/Chicago (env)")).toBeTruthy();
+    expect(screen.queryByLabelText(/timezone/i)).toBeNull();
+  });
+});
+
+describe("App (TK-306 AC4: storage-unavailable GET degrade)", () => {
+  it("still renders the two new panels, blank with placeholders, when every field is null", async () => {
+    const nullSettings: SettingsShape = {
+      wombat_stt_provider: null,
+      wombat_tts_provider: null,
+      wombat_tts_voice_id: null,
+      wombat_stt_model: null,
+      wombat_assistant_name: null,
+      wombat_user_name: null,
+      wombat_asr_model: null,
+      wombat_reply_window_seconds: null,
+      wombat_spoken_reply_max_chars: null,
+      wombat_persona_brevity: null,
+      wombat_persona_warmth: null,
+      wombat_persona_directness: null,
+      wombat_persona_humor: null,
+      wombat_persona_proactivity: null,
+      wombat_quiet_start: null,
+      wombat_quiet_end: null,
+      wombat_param_morning_brief_time: null,
+      wombat_param_nightly_dream_time: null,
+      wombat_param_urgency_threshold: null,
+      wombat_param_per_class_daily_ceiling: null,
+      wombat_param_decay_ttl_seconds: null,
+      wombat_param_mouth_model_timeout_seconds: null,
+      wombat_param_mouth_daily_token_ceiling: null,
+      wombat_param_mouth_max_usd_per_drive: null,
+    };
+    installFakeApi(nullSettings, { elevenlabs: false, deepgram: false, fish: false });
+    render(<App />);
+    gotoSystem();
+
+    const briefTime = await screen.findByLabelText("Brief time");
+    expect((briefTime as HTMLInputElement).value).toBe("");
+    expect((briefTime as HTMLInputElement).placeholder).toBe("default 07:00");
+    expect(screen.getByRole("heading", { name: "Briefs & interruptions" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Limits" })).toBeTruthy();
   });
 });
 

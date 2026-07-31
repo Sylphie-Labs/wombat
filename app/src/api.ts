@@ -66,6 +66,31 @@ export interface SettingsFields {
   wombat_asr_model: AsrModel | null;
   wombat_reply_window_seconds: number | null;
   wombat_spoken_reply_max_chars: number | null;
+  // TK-306 (DEC-67i second half, mirrors TK-304's quiet-hours fields): "HH:MM" or "" (both-or-
+  // neither honored server-side by SettingsUpdate's pairwise validator).
+  wombat_quiet_start: string | null;
+  wombat_quiet_end: string | null;
+  // TK-306 (DEC-67i second half, mirrors wombat.params.PARAMS_APP_EDITABLE's eight
+  // wombat_param_* overlay keys, verbatim - TK-302 already admits these at the door). The two
+  // time fields carry the bridge's "HH:MM:SS" shape; the renderer normalizes to/from "HH:MM".
+  wombat_param_morning_brief_time: string | null;
+  wombat_param_nightly_dream_time: string | null;
+  wombat_param_urgency_threshold: number | null;
+  wombat_param_per_class_daily_ceiling: number | null;
+  wombat_param_decay_ttl_seconds: number | null;
+  wombat_param_mouth_model_timeout_seconds: number | null;
+  wombat_param_mouth_daily_token_ceiling: number | null;
+  wombat_param_mouth_max_usd_per_drive: number | null;
+}
+
+// TK-306 (RULING v2.172 r4, `wombat.settings_app.api._timezone_view`, verbatim): the read-only
+// GET /settings timezone object - never PUT-able (SettingsUpdate has no such field, extra=
+// "forbid" 422s it at the door).
+export type TimezoneSource = "env" | "system" | "unresolved";
+
+export interface TimezoneInfo {
+  name: string | null;
+  source: TimezoneSource;
 }
 
 export interface SettingsResponse {
@@ -75,6 +100,8 @@ export interface SettingsResponse {
   // only the fields this ticket's form reads/writes.
   settings: SettingsFields & Record<string, unknown>;
   keys: Record<KeyProvider, boolean>;
+  // TK-306 (RULING v2.172 r4): read-only, no PUT counterpart.
+  timezone: TimezoneInfo;
 }
 
 export type SettingsPatch = Partial<SettingsFields>;
