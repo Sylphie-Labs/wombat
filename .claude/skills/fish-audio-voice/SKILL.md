@@ -37,8 +37,14 @@ validator-passed text ever reaches `adapter.speak()`.
   - `prosody: {"speed": 0.5–2.0, "volume": <dB shift>}` — global pace/loudness knobs.
   - `temperature`, `top_p` (0–1) — expressiveness/diversity of the delivery.
   - `chunk_length` (100–300), `latency` (`low|balanced|normal`).
-- Response = audio bytes (chunked streaming). Wombat plays the whole body via
-  `WinsoundPlayer` (needs a full RIFF/WAV image — keep `format: "wav"`).
+- Response = audio bytes (chunked streaming). Legacy path: whole body buffered, played
+  via `WinsoundPlayer` (full RIFF/WAV image, `format: "wav"`). DEC-73 (TK-330..333)
+  moves the fish path to STREAMED playback: `format: "pcm"` + `latency: "low"` +
+  one shared `STREAM_SAMPLE_RATE` constant, chunks written to a sounddevice
+  `StreamingAudioWriter` (`voice/stream_playback.py`) as they arrive — no RIFF bytes
+  on the path (sidesteps Fish's bogus-length WAV header class). Validation always
+  precedes the first streamed byte; heard-partial counts as spoken
+  (`PartialSpeechError` semantics). Buffered path remains the loud fallback.
 
 ## 2. Marker syntax — S1 vs S2
 
