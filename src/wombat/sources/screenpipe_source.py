@@ -41,10 +41,23 @@ screenpipe degrades to ``[]`` after its own one-WARNING-per-streak). ``poll()`` 
 merge/derive logic in a blanket guard so a bug in this module's own bookkeeping can never raise
 into the registry's poll loop either (CRF-4's enqueue guard is a different, downstream layer) —
 belt-and-suspenders, mirroring ``ASRSource``'s scan-level guard.
+
+``client.search`` is synchronous (blocking urllib under its 2.0s timeout) and is therefore
+offloaded via ``asyncio.to_thread`` rather than awaited directly — the same anti-precedent
+``ASRSource`` (``sources/asr.py``) already established: a synchronous call awaited inline would
+freeze the whole shared event loop for up to its timeout on every poll, starving co-tenant
+coroutines (voice/ASR/chat).
+
+The running context is keyed on ``app`` ALONE (not ``(app, title)``): ordinary window-title
+churn (notification counts, unsaved markers, a clock in the tab title) must not reset dwell
+tracking or block ``focus_block_end`` from ever firing. ``title`` is carried as a payload
+attribute of the current run — it is updated to the most recently observed title for the
+same app — never part of the run's identity.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -96,8 +109,9 @@ class _ContextRun:
         self.last_seen_at = started_at
         self.switch_emitted = False
 
-    def key(self) -> tuple[str, str]:
-        return (self.app, self.title)
+    def key(self) -> str:
+        """Identity is ``app`` alone (title churn must never reset dwell tracking)."""
+        return self.app
 
     def dwell_s(self) -> float:
         return (self.last_seen_at - self.started_at).total_seconds()
@@ -143,7 +157,7 @@ class ScreenpipeEventSource:
         start = self._search_from
         self._search_from = now
         try:
-            items = self._client.search(start, now)
+            items = await asyncio.to_thread(self._client.search, start, now)
         except Exception:  # pragma: no cover - client.search is documented to never raise
             logger.warning(
                 "screenpipe source: client.search raised unexpectedly — degrading this poll "
@@ -169,12 +183,12 @@ class ScreenpipeEventSource:
         return events
 
     def _process_one(self, item: ScreenpipeItem, events: list[SourceEvent]) -> None:
-        context_key = (item.app, item.title)
         if self._current is None:
             self._current = _ContextRun(item.app, item.title, item.ref_id, item.captured_at)
             return
-        if self._current.key() == context_key:
+        if self._current.key() == item.app:
             self._current.last_seen_at = item.captured_at
+            self._current.title = item.title
             self._maybe_emit_context_switch(events)
             return
         # A different context has appeared — the run just being tracked has ended.

@@ -203,6 +203,32 @@ async def test_ac_a_title_is_capped_at_160_chars() -> None:
     assert switch["title"] == long_title[:160]
 
 
+async def test_ac_a_title_churn_within_the_same_app_does_not_reset_dwell() -> None:
+    """Regression: the run's identity is ``app`` alone. A title that changes on every sample
+    (notification count, unsaved marker, clock in the tab title) must not prevent
+    ``context_switch``/``focus_block_end`` from firing, and the LATEST title observed is what
+    the payload carries."""
+    clock = _FakeClock(_BASE + timedelta(seconds=-1))
+    churning = [
+        _item("chrome", f"Tab ({n})", f"ref-{n}", offset)
+        for n, offset in enumerate(range(0, 1501, 30))
+    ]
+    items = [*churning, _item("slack", "DMs", "ref-away", 1501)]
+    client = _WindowedFakeClient(items)
+    source = ScreenpipeEventSource(client=client, poll_interval_seconds=30.0, clock=clock)
+
+    clock.set(_BASE + timedelta(seconds=1502))
+    payloads = [e.payload for e in await source.poll()]
+
+    kinds = [p["event"] for p in payloads]
+    assert "context_switch" in kinds
+    assert "focus_block_end" in kinds
+    block_end = next(p for p in payloads if p["event"] == "focus_block_end")
+    assert block_end["app"] == "chrome"
+    assert block_end["title"] == churning[-1].title[:160]
+    assert block_end["duration_s"] == 1500.0
+
+
 # --------------------------------------------------------------------------------------- AC(b)
 
 
@@ -257,7 +283,8 @@ def test_ac_b_replayed_timeline_yields_stable_keys_and_dedupe_re_enqueues_nothin
 
 def _sync_derive_all() -> list[dict[str, object]]:
     """Drive a FRESH ``ScreenpipeEventSource`` over the scripted timeline, synchronously (a
-    thin ``asyncio.run`` wrapper — the source's ``poll()`` does no real awaiting)."""
+    thin ``asyncio.run`` wrapper around ``poll()``, which awaits its client call via
+    ``asyncio.to_thread``)."""
     import asyncio
 
     async def _run() -> list[dict[str, object]]:
