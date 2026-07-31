@@ -57,10 +57,10 @@ import asyncio
 import json
 import logging
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
 from cogworx.claims.provenance import Artifact, Provenance
@@ -400,13 +400,24 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
             beat=_DRAIN_POLL_INTERVAL_SECONDS,
             wake=wake,
         )
-        await asyncio.gather(
+        # TK-310/TK-313 (DEC-68(a)/(c)/(e)): the ambient-observability pollers ride the SAME
+        # gather as the pump/Sweeper — constructed by assemble_runtime ONLY when their own
+        # toggle is on, so a toggle-off boot adds nothing here (structural inertness holds).
+        # Each poller's own run() loop never raises except on cancellation (poll_once/process_
+        # beat are internally guarded — see observe_screen.py/observe_mic.py), so this never
+        # changes the pump/Sweeper's own failure behavior.
+        drivers: list[Coroutine[Any, Any, None]] = [
             pump,
             sweeper.run_forever(
                 interval=timedelta(seconds=params.sweeper_interval_seconds),
                 lease_ttl=timedelta(seconds=params.sweeper_lease_ttl_seconds),
             ),
-        )
+        ]
+        if bundle.screen_collector is not None:
+            drivers.append(bundle.screen_collector.run())
+        if bundle.mic_probe is not None:
+            drivers.append(bundle.mic_probe.run())
+        await asyncio.gather(*drivers)
     finally:
         await bundle.source_registry.stop()
         await _stop_chat_surface(bundle.chat_surface)
@@ -422,6 +433,13 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
         # (WIRE 2/3) is None on a Google-less boot, so this is a no-op there.
         if bundle.action_trail_writer is not None:
             bundle.action_trail_writer.close()
+        # TK-310/TK-313 (DEC-68(a)/(c)/(e)): best-effort close — each poller's own run() already
+        # closes any open segment on its own CancelledError, so this is belt-and-suspenders for
+        # the non-cancellation exit paths (mirrors action_trail_writer's None-safe posture above).
+        if bundle.screen_collector is not None:
+            bundle.screen_collector.close()
+        if bundle.mic_probe is not None:
+            bundle.mic_probe.close()
 
 
 async def serve() -> None:

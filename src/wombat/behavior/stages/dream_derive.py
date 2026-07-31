@@ -78,6 +78,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import StageResult, Transition
@@ -142,10 +143,15 @@ def _round_to_half_hour(hour: int, minute: int) -> tuple[int, int]:
     return divmod(rounded, 60)
 
 
-def _derive_meeting_facts(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+def _derive_meeting_facts(rows: list[dict[str, Any]], tz: ZoneInfo) -> list[tuple[str, str]]:
     """Group non-all-day ``gcal`` rows by (normalized title, weekday, rounded start time) and
     return one ``(fact_key, fact_text)`` per group spanning ``>= _MIN_RECURRENCE_WEEKS`` distinct
-    ISO weeks — sorted by ``fact_key`` for deterministic, stable ordering."""
+    ISO weeks — sorted by ``fact_key`` for deterministic, stable ordering.
+
+    ``start`` is stored UTC by the gcal poller (``integrations/gcal/poller.py``); weekday/time are
+    derived AFTER converting to ``tz`` (mirrors ``voice.context_prefetch``'s sibling renderer,
+    TK-290) so a Monday-evening standup in the user's own timezone is never bucketed onto the
+    following UTC calendar day."""
     groups: dict[tuple[str, int, int, int], dict[str, Any]] = {}
     for row in rows:
         payload = row.get("payload") or {}
@@ -154,7 +160,7 @@ def _derive_meeting_facts(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
         if not title or not start_raw or payload.get("all_day"):
             continue
         try:
-            start_dt = datetime.fromisoformat(start_raw)
+            start_dt = datetime.fromisoformat(start_raw).astimezone(tz)
         except ValueError:
             continue
         normalized_title = " ".join(str(title).split()).casefold()
@@ -231,9 +237,11 @@ class DreamDeriveStage:
         *,
         external_items: ExternalItemStore | None,
         user_facts: UserFactsStore | None,
+        tz: ZoneInfo,
     ) -> None:
         self._external_items = external_items
         self._user_facts = user_facts
+        self._tz = tz
 
     def _read_window(self, source: str, start: datetime, end: datetime) -> list[dict[str, Any]]:
         if self._external_items is None:
@@ -261,7 +269,9 @@ class DreamDeriveStage:
         gcal_rows = self._read_window("gcal", start, now)
         gmail_rows = self._read_window("gmail", start, now)
 
-        candidates = _derive_meeting_facts(gcal_rows) + _derive_correspondent_facts(gmail_rows)
+        candidates = _derive_meeting_facts(gcal_rows, self._tz) + _derive_correspondent_facts(
+            gmail_rows
+        )
         total_candidates = len(candidates)
         if total_candidates > _MAX_DERIVED_FACTS:
             logger.warning(

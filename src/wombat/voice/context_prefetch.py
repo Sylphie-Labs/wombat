@@ -37,10 +37,15 @@ any raise -> ``{}`` plus exactly ONE loud warning (CON-3).
 grounding builder, this one over ``observations.CurrentActivity``'s in-memory single-slot
 now-snapshot rather than a Postgres store: AT MOST ``{"current_activity": "<app> - <title>"}``,
 with `` (in a call)`` appended when ``in_call`` is true, truncated at ``_MAX_ACTIVITY_CHARS`` = 160
-(pinned, DEC-63 no-knob precedent). ``current_activity=None`` (collector absent/toggle off) ->
-``{}`` no read no warning. A stale/absent snapshot (``app`` or ``title`` is ``None`` — the
-collector's own closed-segment state) -> no key. ANY exception reading the snapshot's fields ->
-``{}`` plus exactly ONE loud warning (CON-3 parity with the two builders above).
+(pinned, DEC-63 no-knob precedent). ``current_activity.app`` is ``observe_screen.py``'s raw
+``QueryFullProcessImageNameW`` process image path (e.g. ``C:/Program Files/.../notepad.exe``) —
+this renderer reduces it to the bare executable basename (``_process_basename``, batch-review
+repair) before rendering, so a long install path never eats the ``_MAX_ACTIVITY_CHARS`` budget the
+title needs and no ``C:/Users/<name>`` filesystem path leaks into the prompt. ``current_activity=
+None`` (collector absent/toggle off) -> ``{}`` no read no warning. A stale/absent snapshot (``app``
+or ``title`` is ``None`` — the collector's own closed-segment state) -> no key. ANY exception
+reading the snapshot's fields -> ``{}`` plus exactly ONE loud warning (CON-3 parity with the two
+builders above).
 """
 
 from __future__ import annotations
@@ -185,6 +190,19 @@ def build_user_facts_context(store: UserFactsContextStore | None) -> dict[str, s
     return {"known_user_context": rendered}
 
 
+def _process_basename(path: str) -> str:
+    """The bare executable filename (e.g. ``notepad.exe``) from a full process image path.
+
+    ``observe_screen.py``'s ``QueryFullProcessImageNameW`` reading is a raw Windows filesystem
+    path — often 70+ chars of install directory before the executable name, and frequently a
+    ``C:/Users/<name>`` segment. Splitting on BOTH separators (never just ``os.sep``) since this
+    text always comes from a Windows API regardless of what platform the renderer itself runs on.
+    A trailing-separator or otherwise-empty tail falls back to the original string unchanged
+    (never renders an empty app name)."""
+    tail = path.replace("\\", "/").rsplit("/", 1)[-1]
+    return tail or path
+
+
 def build_current_activity_context(current_activity: ActivitySnapshot | None) -> dict[str, str]:
     """Return AT MOST ``{"current_activity": "<app> - <title>"}`` (TK-311, DEC-68(d)(1)), with
     `` (in a call)`` appended when ``in_call`` is true, truncated at ``_MAX_ACTIVITY_CHARS``.
@@ -193,7 +211,9 @@ def build_current_activity_context(current_activity: ActivitySnapshot | None) ->
     read, no warning. A stale/absent snapshot — ``app`` or ``title`` is ``None``, the collector's
     own closed-segment state — contributes NO key (never an empty string). ANY exception raised
     reading the snapshot's fields degrades to ``{}`` plus exactly ONE loud warning (CON-3 parity
-    with ``build_voice_context``/``build_user_facts_context``).
+    with ``build_voice_context``/``build_user_facts_context``). ``app`` is reduced to its bare
+    executable basename (``_process_basename``, batch-review repair) before rendering — see the
+    module docstring.
     """
     if current_activity is None:
         return {}
@@ -210,7 +230,7 @@ def build_current_activity_context(current_activity: ActivitySnapshot | None) ->
         return {}
     if app is None or title is None:
         return {}
-    line = f"{app} - {title}"
+    line = f"{_process_basename(app)} - {title}"
     if in_call:
         line += " (in a call)"
     return {"current_activity": line[:_MAX_ACTIVITY_CHARS]}

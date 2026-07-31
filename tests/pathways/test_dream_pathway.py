@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from cogworx.claims.provenance import Artifact, Provenance
@@ -87,6 +88,7 @@ async def test_ac4_the_landed_graph_walks_all_ten_stages_in_order_to_completion(
     derive_stage = DreamDeriveStage(
         external_items=None,
         user_facts=UserFactsStore(_UNREACHABLE_DSN),
+        tz=ZoneInfo("UTC"),
     )
 
     dream_graph = build_dream_pathway(

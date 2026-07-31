@@ -67,7 +67,9 @@ from wombat.domain.daily_ledger import DailyLedger
 from wombat.external_store import EXTERNAL_ITEMS_PRUNE_DAYS, ExternalItemStore
 from wombat.gate.pending_journal_pg import PgPendingJournal
 from wombat.integrations.gmail.draft_composer import DraftComposer
-from wombat.observations import ObservationStore
+from wombat.observations import CurrentActivity, ObservationStore
+from wombat.observe_mic import MicInCallProbe
+from wombat.observe_screen import ScreenActivityCollector, ScreenBeat
 from wombat.params import load_operating_params
 from wombat.persona.builder import Mouth
 from wombat.persona.live import LivePersona
@@ -1126,6 +1128,133 @@ async def test_drive_and_serve_wires_the_running_wake_into_chat_source_when_pres
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# --- TK-310/TK-313 (batch-review repair): screen_collector/mic_probe run() loops are actually
+# scheduled by _drive_and_serve, and close()d on shutdown ------------------------------------------
+
+
+class _RecordingObservationSink:
+    """A bare ``ObservationSink``-shaped fake — records every ``append_segment`` call."""
+
+    def __init__(self) -> None:
+        self.segments: list[tuple[str, str, dict[str, Any]]] = []
+
+    def append_segment(
+        self,
+        channel: str,
+        kind: str,
+        started_at: datetime,
+        ended_at: datetime,
+        payload: dict[str, Any],
+        day_key: Any,
+    ) -> None:
+        self.segments.append((channel, kind, payload))
+
+
+async def test_drive_and_serve_schedules_and_closes_screen_collector_and_mic_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-310/TK-313 batch-review finding: ``ScreenActivityCollector.run()``/``MicInCallProbe.
+    run()`` must actually be scheduled alongside the drain pump/Sweeper (previously dead code
+    behind a live toggle) and closed on shutdown. Real collector/probe instances, with each
+    module's pinned poll interval monkeypatched down to 0 so a poll actually lands inside the
+    test's short window and ``current_activity`` observably changes -- proving the loop genuinely
+    ran, not merely that ``close()`` was called."""
+    import wombat.observe_mic as observe_mic_module
+    import wombat.observe_screen as observe_screen_module
+
+    monkeypatch.setattr(observe_screen_module, "_POLL_INTERVAL_S", 0.0)
+    monkeypatch.setattr(observe_mic_module, "_POLL_INTERVAL_S", 0.0)
+
+    journal = InMemoryJournal()
+    pathways = PathwayRegistry()
+    graph = StageGraph([_WaitForeverStage(), _TerminalStage()], entry="only")
+    pathways.register("only", graph)
+
+    models = ModelRegistry()
+    models.register_factory(
+        "deepseek",
+        lambda guard: FakeModel(raises=AssertionError("the mouth must never be called")),
+    )
+    engine = Engine(
+        models=models,
+        journal=journal,
+        graph_store=InMemoryGraphStore(),
+        latent=InMemoryLatentStore(),
+        pathways=pathways,
+        model_profile="deepseek",
+    )
+
+    registry = _RecordingSourceRegistry()
+    queue = _NeverPendingQueue(_FAKE_DSN, max_size=10)
+    daily_ledger = DailyLedger(_FAKE_DSN, tz=ZoneInfo("UTC"))
+    pending_journal = PgPendingJournal(_FAKE_DSN)
+    compose_stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+    entity_kg = InMemoryEntityKG()
+    observation_writer = ObservationWriter(
+        entity_kg=entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
+    )
+
+    current_activity = CurrentActivity()
+    screen_sink = _RecordingObservationSink()
+    mic_sink = _RecordingObservationSink()
+    screen_collector = ScreenActivityCollector(
+        store=screen_sink,
+        current_activity=current_activity,
+        tz=ZoneInfo("UTC"),
+        clock=lambda: datetime.now(UTC),
+        read_beat=lambda: ScreenBeat(app="notepad.exe", title="notes"),
+    )
+    mic_probe = MicInCallProbe(
+        store=mic_sink,
+        current_activity=current_activity,
+        tz=ZoneInfo("UTC"),
+        clock=lambda: datetime.now(UTC),
+        read_beat=lambda: True,
+    )
+
+    bundle = RuntimeBundle(
+        engine=engine,
+        pathways=pathways,
+        journal=journal,
+        drain_pathway_id="only",
+        dream_pathway_id="only",
+        dream_schedule_pathway_id=None,
+        source_registry=registry,
+        pending_journal=pending_journal,
+        queue=queue,
+        daily_ledger=daily_ledger,
+        compose_stage=compose_stage,
+        live_persona=_live_persona(),
+        brief_pathway_id=None,
+        brief_schedule_pathway_id=None,
+        entity_kg=entity_kg,
+        observation_writer=observation_writer,
+        behavior_event_log=BehaviorEventLog(_FAKE_DSN),
+        screen_collector=screen_collector,
+        mic_probe=mic_probe,
+    )
+    op = load_operating_params().model_copy(
+        update={"sweeper_interval_seconds": 0.01, "sweeper_lease_ttl_seconds": 1.0}
+    )
+
+    task: asyncio.Task[None] = asyncio.ensure_future(runtime._drive_and_serve(bundle, params=op))
+    for _ in range(200):
+        await asyncio.sleep(0)
+
+    # The loops actually ran (not dead code): the screen beat flipped current_activity live, and
+    # the mic beat flipped in_call live.
+    assert current_activity.app == "notepad.exe"
+    assert current_activity.in_call is True
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Shutdown closed any open segment on both channels.
+    assert current_activity.app is None
+    assert current_activity.in_call is False
 
 
 # --- TK-97: serve() fires the SECOND initial drive on the schedule pathway when registered -------

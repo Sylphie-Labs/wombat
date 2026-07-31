@@ -1351,6 +1351,21 @@ def test_build_current_activity_context_live_snapshot_renders_one_line_within_ca
     assert len(result["current_activity"]) <= 160
 
 
+def test_build_current_activity_context_reduces_full_process_path_to_basename() -> None:
+    """Batch-review repair: ``current_activity.app`` is QueryFullProcessImageNameW's raw process
+    image path (observe_screen.py), not a bare executable name -- the renderer must strip the
+    install-directory prefix (backslash- or forward-slash-separated) so a long path never eats the
+    title out of the pinned char budget and no filesystem path leaks into the prompt."""
+    activity = CurrentActivity(
+        app=r"C:\Program Files (x86)\Steam\steamapps\common\Enshrouded\enshrouded.exe",
+        title="Enshrouded",
+    )
+    result = build_current_activity_context(activity)
+    assert result == {"current_activity": "enshrouded.exe - Enshrouded"}
+    assert "C:" not in result["current_activity"]
+    assert "Users" not in result["current_activity"]
+
+
 async def test_assemble_runtime_asr_context_hook_omits_current_activity_when_collector_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

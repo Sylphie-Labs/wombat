@@ -306,7 +306,7 @@ def _build_stack_with_raising_dream(
         user_facts=UserFactsStore(_DSN),
     )
     stub_derive_stage = DreamDeriveStage(
-        external_items=None, user_facts=UserFactsStore(_DSN)
+        external_items=None, user_facts=UserFactsStore(_DSN), tz=ZoneInfo("UTC")
     )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"

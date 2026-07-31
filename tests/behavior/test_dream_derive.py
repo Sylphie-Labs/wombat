@@ -31,6 +31,7 @@ import calendar
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from cogworx.loop.result import Transition
@@ -46,6 +47,7 @@ from wombat.external_store import ExternalItemStore
 from wombat.user_facts import UserFactsStore
 
 _NOW = datetime(2026, 7, 30, 3, 0, 0, tzinfo=UTC)
+_TZ = ZoneInfo("UTC")
 _UNREACHABLE_DSN = "postgresql://nonexistent-host-should-never-be-dialed:1/db"
 
 
@@ -180,7 +182,7 @@ async def test_ac1_qualifying_rows_land_exactly_two_facts_scatter_yields_nothing
     )
     user_facts, upsert_calls = _fake_user_facts(monkeypatch)
 
-    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts, tz=_TZ)
     result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
@@ -215,7 +217,7 @@ async def test_ac2_second_night_is_idempotent_no_duplicates_no_repeat_new_fact_l
 
     external_items, _calls = _fake_external_items(monkeypatch, gcal_rows=gcal_rows)
     user_facts, upsert_calls = _fake_user_facts(monkeypatch)
-    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts, tz=_TZ)
 
     with caplog.at_level(logging.INFO, logger="wombat.behavior.stages.dream_derive"):
         first = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -246,7 +248,7 @@ async def test_ac3_empty_store_is_the_ordinary_case_zero_writes_no_error(
 ) -> None:
     external_items, _calls = _fake_external_items(monkeypatch)  # zero rows for both sources
     user_facts, upsert_calls = _fake_user_facts(monkeypatch)
-    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts, tz=_TZ)
 
     with caplog.at_level(logging.ERROR, logger="wombat.behavior.stages.dream_derive"):
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -261,7 +263,9 @@ async def test_ac3_empty_store_is_the_ordinary_case_zero_writes_no_error(
 async def test_ac3_none_external_items_store_is_caught_loud_and_still_transitions(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    stage = DreamDeriveStage(external_items=None, user_facts=UserFactsStore(_UNREACHABLE_DSN))
+    stage = DreamDeriveStage(
+        external_items=None, user_facts=UserFactsStore(_UNREACHABLE_DSN), tz=_TZ
+    )
 
     with caplog.at_level(logging.ERROR, logger="wombat.behavior.stages.dream_derive"):
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -281,7 +285,7 @@ async def test_ac3_raising_get_window_for_both_sources_is_caught_loud_and_still_
         gmail_raises=RuntimeError("simulated gmail get_window failure — AC3"),
     )
     user_facts, upsert_calls = _fake_user_facts(monkeypatch)
-    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts, tz=_TZ)
 
     with caplog.at_level(logging.ERROR, logger="wombat.behavior.stages.dream_derive"):
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -303,7 +307,7 @@ async def test_ac3_none_user_facts_store_skips_all_writes_loud_and_still_transit
         _gcal_row(f"meet-{i}", "Team Standup", base + timedelta(weeks=i)) for i in range(3)
     ]
     external_items, _calls = _fake_external_items(monkeypatch, gcal_rows=gcal_rows)
-    stage = DreamDeriveStage(external_items=external_items, user_facts=None)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=None, tz=_TZ)
 
     with caplog.at_level(logging.ERROR, logger="wombat.behavior.stages.dream_derive"):
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -328,7 +332,7 @@ async def test_ac3_raising_upsert_fact_mid_batch_loses_only_that_one_fact(
         monkeypatch, gcal_rows=gcal_rows, gmail_rows=gmail_rows
     )
     user_facts, upsert_calls = _fake_user_facts(monkeypatch, raises_upsert_on_call=1)
-    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts, tz=_TZ)
 
     with caplog.at_level(logging.ERROR, logger="wombat.behavior.stages.dream_derive"):
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -366,7 +370,7 @@ async def test_ac4_over_cap_seed_stops_at_the_pinned_cap_deterministically(
 
     external_items, _calls = _fake_external_items(monkeypatch, gcal_rows=gcal_rows)
     user_facts, upsert_calls = _fake_user_facts(monkeypatch)
-    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts)
+    stage = DreamDeriveStage(external_items=external_items, user_facts=user_facts, tz=_TZ)
 
     with caplog.at_level(logging.WARNING, logger="wombat.behavior.stages.dream_derive"):
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
@@ -377,7 +381,7 @@ async def test_ac4_over_cap_seed_stops_at_the_pinned_cap_deterministically(
 
     # Deterministic: re-running derivation directly yields the SAME 5 keys, in the SAME order.
     landed_keys = [key for key, _fact, _source in upsert_calls]
-    all_qualifying = _derive_meeting_facts(gcal_rows)
+    all_qualifying = _derive_meeting_facts(gcal_rows, _TZ)
     assert landed_keys == [key for key, _fact in all_qualifying[:_MAX_DERIVED_FACTS]]
 
     warning_messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
@@ -398,7 +402,7 @@ def test_ac5_start_times_within_thirty_minutes_group_together_outside_do_not() -
         _gcal_row("meet-1", "Team Standup", base + timedelta(weeks=1, minutes=10)),
         _gcal_row("meet-2", "Team Standup", base + timedelta(weeks=2, minutes=-10)),
     ]
-    facts = _derive_meeting_facts(rows)
+    facts = _derive_meeting_facts(rows, _TZ)
     assert len(facts) == 1
     _key, text = facts[0]
     assert "around 09:00" in text
@@ -409,5 +413,40 @@ def test_ac5_start_times_within_thirty_minutes_group_together_outside_do_not() -
         *rows,
         _gcal_row("meet-3", "Team Standup", base + timedelta(weeks=3, minutes=45)),
     ]
-    facts_with_outlier = _derive_meeting_facts(rows_with_outlier)
+    facts_with_outlier = _derive_meeting_facts(rows_with_outlier, _TZ)
     assert facts_with_outlier == facts  # the outlier's own bucket never reaches 3 distinct weeks
+
+
+# ================================================================================================
+# AC6 (repair, batch review finding): weekday/time are derived in the injected tz, not the UTC the
+# gcal poller stores ``start`` in — a Monday 18:00 America/Los_Angeles standup must never be
+# bucketed onto "Tuesday ~01:00".
+# ================================================================================================
+
+
+def test_ac6_weekday_and_time_are_derived_in_the_injected_tz_not_stored_utc() -> None:
+    la_tz = ZoneInfo("America/Los_Angeles")
+    # A Monday 18:00 America/Los_Angeles standup is Tuesday 01:00 UTC — payload["start"] is
+    # stored UTC (mirrors integrations/gcal/poller.py's own normalization).
+    monday_18_local = datetime(2026, 6, 1, 18, 0, tzinfo=la_tz)
+    assert monday_18_local.weekday() == 0  # sanity: 2026-06-01 is a Monday in LA
+    rows = [
+        _gcal_row(f"meet-{i}", "Standup", monday_18_local.astimezone(UTC) + timedelta(weeks=i))
+        for i in range(_MIN_RECURRENCE_WEEKS)
+    ]
+
+    utc_facts = _derive_meeting_facts(rows, _TZ)
+    la_facts = _derive_meeting_facts(rows, la_tz)
+
+    assert len(la_facts) == 1
+    _la_key, la_text = la_facts[0]
+    assert "Mondays around 18:00" in la_text
+    assert "tuesday" not in _la_key
+    assert _la_key.endswith(":monday")
+
+    # The UTC read of the SAME rows lands on the wrong day/time — proving the derivation is
+    # actually tz-sensitive rather than coincidentally matching.
+    assert len(utc_facts) == 1
+    _utc_key, utc_text = utc_facts[0]
+    assert "Tuesdays around 01:00" in utc_text
+    assert utc_facts != la_facts

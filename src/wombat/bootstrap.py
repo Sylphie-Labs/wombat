@@ -1375,6 +1375,7 @@ def assemble_runtime(
     dream_derive_stage = DreamDeriveStage(
         external_items=external_item_store,
         user_facts=user_facts_store,
+        tz=tz,
     )
 
     def _record_persona_feedback(
