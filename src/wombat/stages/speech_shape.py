@@ -56,6 +56,29 @@ the SAME composed-output artifact) falls through to the real shaping call exactl
 item would; a held TYPED chat (``voice_turn=False``) stays byte-identical to the pre-TK-279
 quiet pass-through above.
 
+TK-327 (DEC-71b/c/d/e as revised by DEC-72b/c/h/i, further revised by DEC-74): an opt-in,
+default-OFF ``expressive_tags`` flag. False (the default) leaves ``_system_instruction``
+BYTE-IDENTICAL to today's join — a byte pin. True extends the SAME join with
+``voice.expressive.render_expressive_instruction()`` — a definitions block (one line per
+``voice.expressive.TAG_DEFINITIONS`` entry) plus the fixed placement rules, offering ONLY the
+8-tag square-bracket steward subset. ``_shape_speech_text`` gains an ``allowed_tags`` parameter
+(default the empty ``frozenset``): after the existing forbidden-pattern/length checks, ANY
+bracketed ``[...]`` token not EXACTLY in ``allowed_tags`` rejects the WHOLE text to ``None`` (the
+DEC-55f no-placebo posture extended — never a partial strip). The stage passes
+``voice.expressive.ALLOWED_TAGS`` iff ``expressive_tags`` else the empty set, so validate-then-send
+is structural: no code path in this stage ever emits unvalidated text (DEC-72i). Marker chars
+count against the injected ``max_chars`` (DEC-71e, no budget change). The opt-in
+``speak_full_replies``/full-replies path below is untouched by this flag (DEF-18 — tags never
+reach the pane).
+
+DEC-74 (adjacency reject, orchestrator ruling correcting a disproven DEC-72c premise): the
+zero-space markdown-link pattern in ``_FORBIDDEN_PATTERNS`` below never matched the SPACED
+adjacency hazard '[tag] (paren)' — only '[tag](paren)'. Ruling v2.190 r1 homes the fix as a
+widened, whitespace-tolerant variant of that SAME pattern, HERE at the ``_shape_speech_text``
+seam: ``_FORBIDDEN_PATTERNS`` is single-consumer (only ``_shape_speech_text`` reads it, the
+full-reply path strips via its own separate constants), so this is DEC-74's explicit-logic
+custody, not a coincidental reuse of a pattern that never covered the class.
+
 TK-318 (DEC-69b), Jim verbatim: "I am ok with listening to the full response" — an opt-in,
 default-OFF ``speak_full_replies`` flag. When True AND the stage would otherwise shape (voice on,
 adapter present, the existing held-chat/voice-turn pass-through gate above unchanged), ``run()``
@@ -93,6 +116,11 @@ from wombat.stages.artifacts import (
     composed_output_held_chat_from_artifact_data,
     composed_output_voice_turn_from_artifact_data,
     speech_output_to_artifact_data,
+)
+from wombat.voice.expressive import (
+    ALLOWED_TAGS,
+    find_disallowed_token,
+    render_expressive_instruction,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,14 +161,25 @@ _FORBIDDEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<!\*)\*[^*\n]+\*(?!\*)"),  # italic (*text*)
     re.compile(r"^\s*#{1,6}\s", re.MULTILINE),  # heading (# text)
     re.compile(r"`"),  # backtick / code fence
-    re.compile(r"\[[^\]]+\]\([^)]+\)"),  # markdown link ([text](url))
+    # markdown link ([text](url)) — TK-327 (DEC-74, explicit-logic custody homed here, single-
+    # consumer per ruling v2.190 r1): the gap between "]" and "(" is now whitespace-tolerant so
+    # the '[tag] (paren)' adjacency hazard (e.g. '[break] (see below)') trips this SAME pattern
+    # too, the pinned safe direction (reject, never mangle); a bare allowed tag followed by
+    # ordinary prose parentheses elsewhere is unaffected. DEC-72c's original adjacency mechanism
+    # (zero-space only) is superseded in part by this widening — DEC-72c's INTENT (safe-direction
+    # rejection of the whole adjacency class) is what this pattern now actually delivers.
+    re.compile(r"\[[^\]]+\]\s*\([^)]+\)"),
     re.compile(r"https?://\S+", re.IGNORECASE),  # raw URL
     re.compile(r"^\s*[-*+]\s", re.MULTILINE),  # bullet list marker
     re.compile(r"^\s*\d+\.\s", re.MULTILINE),  # numbered list marker
 )
 
 
-def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS) -> str | None:
+def _shape_speech_text(
+    raw_text: str | None,
+    max_chars: int = _MAX_SPEECH_CHARS,
+    allowed_tags: frozenset[str] = frozenset(),
+) -> str | None:
     """DEC-55f no-placebo validator: ``raw_text`` unchanged (trimmed) if it is free of every
     enumerated forbidden token class and within ``max_chars`` (TK-303/DEC-67e: defaults to the
     pinned ``_MAX_SPEECH_CHARS``, injectable so ``SpeechShapeStage`` can carry a configured
@@ -149,7 +188,12 @@ def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS)
 
     TK-317 (DEC-69a): FIRST, an anchored one-shot strip removes a leading "Label: " speaker-label
     prefix (if any) — BEFORE the length check, so the remaining body keeps the full ``max_chars``
-    budget. This is a STRIP, never a reject: a leading label cannot mangle what follows it."""
+    budget. This is a STRIP, never a reject: a leading label cannot mangle what follows it.
+
+    TK-327 (DEC-71d as revised by DEC-72c/i): LAST, ``allowed_tags`` (empty unless
+    ``expressive_tags`` is on) is the emission-policy guarantee — ANY bracketed ``[...]`` token
+    not EXACTLY in ``allowed_tags`` rejects the WHOLE text to ``None``, same no-placebo posture as
+    every check above it. Prose parentheses are never bracketed tokens and are never touched."""
     if raw_text is None:
         return None
     unlabeled = _LEADING_LABEL_PATTERN.sub("", raw_text, count=1)
@@ -159,6 +203,8 @@ def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS)
     for pattern in _FORBIDDEN_PATTERNS:
         if pattern.search(stripped):
             return None
+    if find_disallowed_token(stripped, allowed_tags) is not None:
+        return None
     return stripped
 
 
@@ -252,6 +298,7 @@ class SpeechShapeStage:
         daily_token_ceiling: int | None = None,
         max_chars: int = _MAX_SPEECH_CHARS,
         speak_full_replies: bool = False,
+        expressive_tags: bool = False,
     ) -> None:
         # Mirrors ComposeStage's AC3: fail at CONSTRUCTION when this mouth WILL be called (voice
         # on + adapter present) but the shared deepseek profile has no key to build against.
@@ -270,11 +317,19 @@ class SpeechShapeStage:
         # TK-318 (DEC-69b): default-OFF — bootstrap.build_speech_shape_stage threads
         # config.wombat_speak_full_replies here.
         self._speak_full_replies = speak_full_replies
+        # TK-327 (DEC-71c as revised by DEC-72d): default-OFF — bootstrap threads the
+        # key-gated, constructed-adapter decision here (TK-328). False = ALLOWED_TAGS stays
+        # empty and the instruction below is byte-identical to today (the pin).
+        self._expressive_tags = expressive_tags
+        self._allowed_tags: frozenset[str] = ALLOWED_TAGS if expressive_tags else frozenset()
         # Built ONCE — the FIXED prompt (DEC-55) plus Mouth.COMPOSE's guard suffix, appended
         # verbatim via the read-only persona.expression seam (no fifth 'speech' mouth, DEC-55e).
-        self._system_instruction = " ".join(
-            [_SPEECH_SHAPE_INSTRUCTION, guard_suffix(Mouth.COMPOSE)]
-        )
+        # TK-327: expressive_tags extends the SAME join with one more element — the definitions
+        # block + placement rules — rather than altering the first two (byte pin when off).
+        instruction_parts = [_SPEECH_SHAPE_INSTRUCTION, guard_suffix(Mouth.COMPOSE)]
+        if expressive_tags:
+            instruction_parts.append(render_expressive_instruction())
+        self._system_instruction = " ".join(instruction_parts)
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("compose")
@@ -380,7 +435,7 @@ class SpeechShapeStage:
                         "speech_shape: daily spend ledger write failed; speech output stands",
                         exc_info=True,
                     )
-            speech_text = _shape_speech_text(response.text, self._max_chars)
+            speech_text = _shape_speech_text(response.text, self._max_chars, self._allowed_tags)
             if speech_text is None:
                 logger.warning(
                     "speech_shape: model response failed speech validation (blank, overlong, or "

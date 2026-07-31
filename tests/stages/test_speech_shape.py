@@ -31,6 +31,7 @@ from wombat.stages.speech_shape import (
     _sanitize_full_reply_text,
     _shape_speech_text,
 )
+from wombat.voice.expressive import ALLOWED_TAGS, TAG_DEFINITIONS
 
 _FIXED_NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 _ITEM_ID = "i-1"
@@ -643,6 +644,143 @@ async def test_layer2_successful_call_accounts_tokens_on_the_ledger() -> None:
     assert text == "A clean spoken summary."
     assert degraded is False
     assert ledger.added == [15]  # 10 prompt + 5 completion
+
+
+# --- TK-327 (DEC-71b/c/d/e as revised by DEC-72b/c/h/i): expressive_tags -----------------------
+
+
+def test_expressive_tags_defaults_to_false() -> None:
+    stage = SpeechShapeStage(config=_config(), voice_enabled=False, adapter_present=False)
+    assert stage._expressive_tags is False
+    assert stage._allowed_tags == frozenset()
+
+
+def test_ac1_default_stage_instruction_is_byte_identical_to_todays_join() -> None:
+    from wombat.persona.builder import Mouth
+    from wombat.persona.expression import guard_suffix
+    from wombat.stages.speech_shape import _SPEECH_SHAPE_INSTRUCTION
+
+    stage = SpeechShapeStage(config=_config(), voice_enabled=False, adapter_present=False)
+    expected = " ".join([_SPEECH_SHAPE_INSTRUCTION, guard_suffix(Mouth.COMPOSE)])
+    assert stage._system_instruction == expected
+
+
+def test_ac1_default_stage_validator_rejects_a_bracketed_tag_to_none() -> None:
+    assert _shape_speech_text("[calm] Your meeting moved.") is None
+
+
+def test_ac1_default_stage_validator_passes_prose_parens_untouched() -> None:
+    text = "Your first meeting is around noon."
+    assert _shape_speech_text(text) == text
+    assert _shape_speech_text("(around noon)") == "(around noon)"
+
+
+async def test_ac1_default_stage_run_degrades_a_bracketed_tag_reply() -> None:
+    model = FakeModel(response=_response("[calm] Your meeting moved."))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
+    ctx = _ctx(model)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is None
+    assert degraded is True
+
+
+def test_ac2_expressive_tags_true_instruction_carries_every_definition_and_placement_rule() -> None:
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=False, adapter_present=False, expressive_tags=True
+    )
+    for tag, guidance in TAG_DEFINITIONS.items():
+        assert tag in stage._system_instruction
+        assert guidance in stage._system_instruction
+    assert "directly before an opening parenthesis" in stage._system_instruction
+    assert stage._allowed_tags == ALLOWED_TAGS
+
+
+def test_ac2_expressive_tags_true_passes_a_verbatim_tagged_reply() -> None:
+    text = "[calm] Your meeting moved. [break] Nothing else needs you."
+    assert _shape_speech_text(text, allowed_tags=ALLOWED_TAGS) == text
+
+
+def test_ac2_expressive_tags_true_rejects_out_of_set_fixed_and_free_form_tags() -> None:
+    assert _shape_speech_text("[screaming] Look out!", allowed_tags=ALLOWED_TAGS) is None
+    assert _shape_speech_text("[warm, slightly amused] Sure.", allowed_tags=ALLOWED_TAGS) is None
+
+
+def test_ac2_expressive_tags_true_rejects_sic_the_pinned_accepted_false_positive() -> None:
+    assert _shape_speech_text("[sic]", allowed_tags=ALLOWED_TAGS) is None
+
+
+def test_ac2_expressive_tags_true_passes_prose_parentheses() -> None:
+    assert _shape_speech_text("(around noon)", allowed_tags=ALLOWED_TAGS) == "(around noon)"
+
+
+def test_ac2_expressive_tags_true_rejects_the_tag_before_paren_adjacency_hazard() -> None:
+    # DEC-74: the FULL adjacency matrix — both the zero-space and whitespace-tolerant forms
+    # reject to silence (the safe direction — silence, never mangling), while the same tag
+    # followed by ordinary prose with no parenthesis at all still passes.
+    assert _shape_speech_text("[break](see below)", allowed_tags=ALLOWED_TAGS) is None
+    assert _shape_speech_text("[break] (see below)", allowed_tags=ALLOWED_TAGS) is None
+    assert _shape_speech_text("[break] see below", allowed_tags=ALLOWED_TAGS) == "[break] see below"
+
+
+async def test_ac2_expressive_tags_true_run_passes_a_verbatim_tagged_reply_through_the_stage() -> (
+    None
+):
+    reply = "[calm] Your meeting moved. [break] Nothing else needs you."
+    model = FakeModel(response=_response(reply))
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=True, adapter_present=True, expressive_tags=True
+    )
+    ctx = _ctx(model)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text == reply
+    assert degraded is False
+
+
+async def test_ac2_expressive_tags_true_run_degrades_an_out_of_set_tag_reply() -> None:
+    model = FakeModel(response=_response("[screaming] Look out!"))
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=True, adapter_present=True, expressive_tags=True
+    )
+    ctx = _ctx(model)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is None
+    assert degraded is True
+
+
+# --- AC3 (voice.expressive.strip_allowed_tags) is asserted directly in tests/voice/
+# test_expressive.py; nothing stage-specific to re-prove here.
+
+
+# --- AC4: validate-then-send at the stage boundary -----------------------------------------------
+
+
+async def test_ac4_expressive_tags_false_never_offers_tags_even_with_a_tag_shaped_model_reply() -> (
+    None
+):
+    # expressive_tags off means allowed_tags is EMPTY regardless of what the model emits -- a
+    # tag the fixed subset WOULD allow if enabled still rejects to silence when disabled.
+    model = FakeModel(response=_response("[break] Nothing else needs you."))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
+    ctx = _ctx(model)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is None
+    assert degraded is True
 
 
 # --- wire round-trip (Q-49) -------------------------------------------------------------------
