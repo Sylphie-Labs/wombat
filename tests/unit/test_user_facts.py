@@ -95,14 +95,14 @@ def test_ac1_ensure_schema_creates_pinned_shape_and_is_idempotent(fresh_table: N
     assert cols["updated_at"] == "timestamp with time zone"
 
 
-def test_ac1_ensure_all_schemas_carries_exactly_eleven_entries() -> None:
+def test_ac1_ensure_all_schemas_carries_exactly_twelve_entries() -> None:
     source = inspect.getsource(schema_preflight.ensure_all_schemas)
     calls = [
         line.strip()
         for line in source.splitlines()
         if line.strip().startswith("ensure_") and line.strip().endswith("_schema(conn)")
     ]
-    assert len(calls) == 11  # TK-295 added the eleventh entry (wombat_chat_turns)
+    assert len(calls) == 12  # TK-310 added the twelfth entry (wombat_observations)
     assert "ensure_user_facts_schema(conn)" in source
 
 

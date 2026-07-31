@@ -74,14 +74,14 @@ def test_ac1_ensure_schema_creates_pinned_shape_and_is_idempotent(fresh_table: N
     assert cols["captured_at"] == "timestamp with time zone"
 
 
-def test_ac1_ensure_all_schemas_carries_exactly_eleven_entries() -> None:
+def test_ac1_ensure_all_schemas_carries_exactly_twelve_entries() -> None:
     source = inspect.getsource(schema_preflight.ensure_all_schemas)
     calls = [
         line.strip()
         for line in source.splitlines()
         if line.strip().startswith("ensure_") and line.strip().endswith("_schema(conn)")
     ]
-    assert len(calls) == 11
+    assert len(calls) == 12
     assert "ensure_chat_turns_schema(conn)" in source
 
 

@@ -47,6 +47,8 @@ from wombat.external_store import (
 )
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
+from wombat.observations import CurrentActivity, ObservationStore
+from wombat.observe_screen import ScreenActivityCollector
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
 from wombat.persona.builder import Mouth
@@ -1450,3 +1452,47 @@ async def test_ac2_brief_timer_shaped_self_park_survives_2000_wakes_never_fails(
     for _ in range(2000):
         state = await engine.fire_timer(run_id)
         assert state.status is RunStatus.WAITING  # never FAILED, across every one of 2000 wakes
+
+
+# --- TK-310 (DEC-68(a)/(c)): the ambient-observability screen channel is toggle-gated ---------
+
+
+def test_ac3_observe_screen_toggle_false_constructs_no_collector_store_or_activity() -> None:
+    """AC3: with ``wombat_observe_screen`` at its default (``False``), ``assemble_runtime`` never
+    constructs ``ObservationStore``/``CurrentActivity``/``ScreenActivityCollector`` — structural
+    inertness (toggle off => no store => zero writes ever possible, by construction)."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.observation_store is None
+    assert bundle.current_activity is None
+    assert bundle.screen_collector is None
+
+
+def test_observe_screen_toggle_true_constructs_the_wired_screen_collector_trio() -> None:
+    """The toggle-on mirror of the test above: all three fields are constructed, and the
+    collector is wired over the SAME store/current_activity instances the bundle exposes (never a
+    second, independently-constructed pair)."""
+    op = load_operating_params()
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_observe_screen=True,
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert isinstance(bundle.observation_store, ObservationStore)
+    assert isinstance(bundle.current_activity, CurrentActivity)
+    assert isinstance(bundle.screen_collector, ScreenActivityCollector)
+    assert bundle.screen_collector._store is bundle.observation_store
+    assert bundle.screen_collector._current_activity is bundle.current_activity

@@ -67,6 +67,7 @@ from wombat.domain.daily_ledger import DailyLedger
 from wombat.external_store import EXTERNAL_ITEMS_PRUNE_DAYS, ExternalItemStore
 from wombat.gate.pending_journal_pg import PgPendingJournal
 from wombat.integrations.gmail.draft_composer import DraftComposer
+from wombat.observations import ObservationStore
 from wombat.params import load_operating_params
 from wombat.persona.builder import Mouth
 from wombat.persona.live import LivePersona
@@ -2030,6 +2031,97 @@ async def test_serve_boots_byte_unchanged_when_chat_turn_store_is_none(
     )
     bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
     assert bundle.chat_turn_store is None
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()  # must not raise
+
+
+# --- TK-310 (DEC-68(a)/(c)): serve() prunes wombat_observations exactly once at boot, guarded --
+
+
+class _RecordingObservationStore(ObservationStore):
+    """A real ``ObservationStore`` subclass (never opens a connection — ``prune_older_than`` is
+    fully overridden) that records every call, mirroring ``_RecordingChatTurnStore`` above."""
+
+    def __init__(self) -> None:
+        super().__init__(_FAKE_DSN)
+        self.prune_calls: list[int] = []
+
+    def prune_older_than(self, days: int) -> int:
+        self.prune_calls.append(days)
+        return 0
+
+
+async def test_serve_calls_observation_store_prune_older_than_exactly_once_at_boot(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    store = _RecordingObservationStore()
+    bundle = replace(bundle, observation_store=store)
+
+    monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
+    monkeypatch.setattr(runtime, "check_config", lambda config: None)
+    monkeypatch.setattr(runtime, "resolve_wombat_zone", lambda config: ZoneInfo("UTC"))
+
+    def _fake_assemble_runtime(
+        *, config: WombatConfig, dsn: str, params: Any, tz: ZoneInfo
+    ) -> RuntimeBundle:
+        assert dsn == _FAKE_DSN
+        return bundle
+
+    async def _fake_drive_and_serve(bundle_arg: RuntimeBundle, *, params: Any) -> None:
+        return None
+
+    def _fake_import_legacy_settings_file(dsn: str) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "assemble_runtime", _fake_assemble_runtime)
+    monkeypatch.setattr(runtime, "_drive_and_serve", _fake_drive_and_serve)
+    monkeypatch.setattr(runtime, "import_legacy_settings_file", _fake_import_legacy_settings_file)
+
+    await runtime.serve()
+
+    assert store.prune_calls == [21]
+
+
+async def test_serve_boots_byte_unchanged_when_observation_store_is_none(
+    monkeypatch: pytest.MonkeyPatch, _no_env_file: None
+) -> None:
+    """A store-less directly-constructed bundle (``_serve_bundle`` never sets ``observation_
+    store``, so it defaults ``None`` — the ``wombat_observe_screen`` toggle-off shape) boots
+    without error — the field-guard in ``serve()`` is a true no-op, never raising on the absent
+    seam."""
+    fake_config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_pg_dsn=_FAKE_DSN,
+    )
+    bundle, _registry = _serve_bundle(schedule_spy=None, schedule_pathway_id=None)
+    assert bundle.observation_store is None
 
     monkeypatch.setattr(runtime, "load_config", lambda: fake_config)
     monkeypatch.setattr(runtime, "check_config", lambda config: None)

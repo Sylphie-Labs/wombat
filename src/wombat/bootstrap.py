@@ -204,6 +204,8 @@ from .integrations.gmail.token_store import TokenStore as GmailTokenStore
 from .integrations.gmail.triage import load_triage_rules
 from .kb.loader import load_psychology_kb
 from .kb.schema import ValidationError as KBValidationError
+from .observations import CurrentActivity, ObservationStore
+from .observe_screen import ScreenActivityCollector
 from .params import OperatingParams, load_operating_params
 from .pathways.brief_pathway import (
     BRIEF_PATHWAY_ID,
@@ -743,6 +745,15 @@ class RuntimeBundle:
     # field-declaration precedent above so hand-rolled RuntimeBundle constructions elsewhere
     # (tests) don't need to pass it.
     chat_turn_store: ChatTurnStore | None = None
+    # TK-310 (DEC-68(a)/(c)): the ambient-observability screen channel — ``observation_store``,
+    # ``current_activity``, and ``screen_collector`` are constructed TOGETHER, ONLY when
+    # ``config.wombat_observe_screen`` is true at ``assemble_runtime`` time (structural inertness:
+    # toggle off => all three stay ``None`` => no store, no writes, no polling). Unlike external_
+    # item_store/scratchpad_store/chat_turn_store above, these are NOT unconditionally constructed
+    # — the toggle gate IS the point (consent-gated capture, DEC-68(b)).
+    observation_store: ObservationStore | None = None
+    current_activity: CurrentActivity | None = None
+    screen_collector: ScreenActivityCollector | None = None
 
 
 def assemble_runtime(
@@ -1503,6 +1514,23 @@ def assemble_runtime(
     substrate.pathways.register(DREAM_SCHEDULE_PATHWAY_ID, dream_schedule_graph)
     dream_schedule_pathway_id: str | None = DREAM_SCHEDULE_PATHWAY_ID
 
+    # TK-310 (DEC-68(a)/(c)): the ambient-observability screen channel — constructed ONLY when
+    # config.wombat_observe_screen is true (structural inertness: toggle off leaves all three
+    # None, so no store/writes/polling ever happen). dsn is a required str here; ObservationStore
+    # is fully lazy (Q-46) — zero connection at construction either way.
+    observation_store: ObservationStore | None = None
+    current_activity: CurrentActivity | None = None
+    screen_collector: ScreenActivityCollector | None = None
+    if config.wombat_observe_screen:
+        observation_store = ObservationStore(dsn)
+        current_activity = CurrentActivity()
+        screen_collector = ScreenActivityCollector(
+            store=observation_store,
+            current_activity=current_activity,
+            tz=tz,
+            clock=_utc_now,
+        )
+
     return RuntimeBundle(
         engine=engine,
         pathways=substrate.pathways,
@@ -1527,4 +1555,7 @@ def assemble_runtime(
         external_item_store=external_item_store,
         scratchpad_store=scratchpad_store,
         chat_turn_store=chat_turn_store,
+        observation_store=observation_store,
+        current_activity=current_activity,
+        screen_collector=screen_collector,
     )

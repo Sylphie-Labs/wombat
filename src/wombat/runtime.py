@@ -456,6 +456,13 @@ async def serve() -> None:
     ``chat_turns._RETENTION_DAYS`` documents; passed as a literal here per the ruling (no shared
     importable constant, mirroring this ticket's own "no knob" pin).
 
+    ``bundle.observation_store.prune_older_than(21)`` (TK-310, DEC-68(a)/(c)) runs exactly ONCE
+    here, guarded the SAME way — non-``None`` ONLY when ``config.wombat_observe_screen`` was true
+    at ``assemble_runtime`` time (structural inertness: the toggle off leaves this field ``None``,
+    so this line is a no-op then). The 21-day window is the SAME pinned retention
+    ``observations._OBSERVATION_RETENTION_DAYS`` documents; passed as a literal here per the SAME
+    chat_turn_store-precedent ruling (no shared importable constant).
+
     ``_read_params_overlay(dsn)`` (TK-302, DEC-67(d), ruling v2.172 r3) runs strictly BETWEEN
     ``resolve_wombat_zone(config)`` and ``load_operating_params()`` — ``dsn`` is already validated
     loud above. It reads the EIGHT ``wombat_param_*`` ``wombat_settings`` rows and feeds them to
@@ -480,6 +487,8 @@ async def serve() -> None:
         bundle.scratchpad_store.purge_stale(SCRATCHPAD_PURGE_DAYS)
     if bundle.chat_turn_store is not None:
         bundle.chat_turn_store.purge_older_than(7)
+    if bundle.observation_store is not None:
+        bundle.observation_store.prune_older_than(21)
     await _drive_and_serve(bundle, params=params)
 
 

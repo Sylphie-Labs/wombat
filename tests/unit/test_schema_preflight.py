@@ -7,7 +7,7 @@ test_serve_boot.py``): absent it, tests are skipped LOUDLY. Spin up a throwaway 
     docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=wombat postgres:16
     WOMBAT_TEST_PG_DSN=postgresql://postgres:wombat@localhost:5433/postgres
 
-  AC1 a brand-new empty database: ``ensure_all_schemas(dsn)`` creates all eleven packaged tables,
+  AC1 a brand-new empty database: ``ensure_all_schemas(dsn)`` creates all twelve packaged tables,
       a second call is idempotent, AND the 2026-07-09 incident itself is fixed —
       ``assemble_runtime(replay_pending=True)`` against a fresh throwaway database no longer
       raises ``UndefinedTable`` at the eager pending-journal replay.
@@ -44,10 +44,11 @@ _requires_pg = pytest.mark.skipif(
     ),
 )
 
-# The eleven packaged tables this pre-flight must create (Q-104-verified module homes; TK-240
+# The twelve packaged tables this pre-flight must create (Q-104-verified module homes; TK-240
 # added the sixth, wombat_settings; TK-244 added the seventh, wombat_external_items; TK-247 added
 # the eighth, wombat_scratchpad; TK-286 added the ninth, wombat_seen_events; TK-294 added the
-# tenth, wombat_user_facts; TK-295 added the eleventh, wombat_chat_turns).
+# tenth, wombat_user_facts; TK-295 added the eleventh, wombat_chat_turns; TK-310 added the
+# twelfth, wombat_observations).
 _PACKAGED_TABLES = (
     "wombat_queue",
     "daily_ledger",
@@ -60,6 +61,7 @@ _PACKAGED_TABLES = (
     "wombat_seen_events",
     "wombat_user_facts",
     "wombat_chat_turns",
+    "wombat_observations",
 )
 
 
