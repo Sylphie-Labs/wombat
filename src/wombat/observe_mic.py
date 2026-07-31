@@ -135,7 +135,14 @@ class MicInCallProbe:
 
     def process_beat(self, in_call: bool, *, now: datetime) -> None:
         """The pure(ish) core: fold ONE beat (already read) into the probe's open/closed segment
-        state. Never raises."""
+        state. Never raises.
+
+        Opus-verify repair, CHECKED AND RULED OUT: this probe deliberately does NOT stamp
+        ``CurrentActivity.refreshed_at`` — it writes only the ``in_call`` flag, and only on
+        transitions, never per-beat. ``refreshed_at`` is the SCREEN poller's liveness clock
+        (``app``/``title`` are what the staleness gate protects, and the renderer never emits
+        ``(in a call)`` without a live app/title anyway); a mic-side stamp would let a healthy mic
+        poller present a dead screen poller's frozen window as live."""
         if in_call:
             if self._open_started_at is None:
                 self._open_started_at = now

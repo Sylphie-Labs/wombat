@@ -58,10 +58,14 @@ TABLE = "wombat_observations"
 _OBSERVATION_RETENTION_DAYS = 21
 
 # Batch-review repair (DEC-63 no-knob precedent: pinned, not a setting): a ``CurrentActivity``
-# snapshot whose ``since`` is older than this is treated as STALE by its renderer
+# snapshot whose ``refreshed_at`` is older than this is treated as STALE by its renderer
 # (``voice.context_prefetch.build_current_activity_context``) — if the poller dies or the machine
 # sleeps, the model is told nothing rather than told a stale window is live (the same
 # absent-not-wrong posture as the renderer's existing app/title-``None`` handling, which stays).
+# Opus-verify repair: the clock is ``refreshed_at`` (the LAST SUCCESSFUL POLL beat — re-stamped
+# even on observe_screen's same-segment-continues path), NEVER ``since`` (segment-OPEN time): a
+# window kept focused past 300s under a healthy poller must keep rendering; only a poller that
+# actually stopped beating ages out.
 _STALE_AFTER_SECONDS = 300
 
 
@@ -72,8 +76,10 @@ def ensure_schema(conn: psycopg.Connection[Any]) -> None:
     (``CREATE TABLE/INDEX IF NOT EXISTS`` — safe to call every process start, NG-3: no migration
     framework). Callers: tests and ``schema_preflight.ensure_all_schemas``.
     """
-    sql = resources.files(_MIGRATION_PACKAGE).joinpath(_MIGRATION_FILENAME).read_text(
-        encoding="utf-8"
+    sql = (
+        resources.files(_MIGRATION_PACKAGE)
+        .joinpath(_MIGRATION_FILENAME)
+        .read_text(encoding="utf-8")
     )
     with conn.cursor() as cur:
         cur.execute(sql)
@@ -186,12 +192,18 @@ class CurrentActivity:
     ``in_call`` ships FROM BIRTH (``False`` always, here) so a later mic ticket only ever flips
     this field in place — this module and ``observe_screen.py`` write NO mic code and never touch
     it.
+
+    ``refreshed_at`` (Opus-verify repair) is the LAST SUCCESSFUL POLL beat's timestamp — stamped
+    by ``ScreenActivityCollector`` on EVERY successful beat, including the same-segment-continues
+    no-op path. It is the staleness clock ``_STALE_AFTER_SECONDS`` gates against; ``since`` keeps
+    its meaning (segment OPEN time) and is never used for staleness.
     """
 
     app: str | None = None
     title: str | None = None
     since: datetime | None = None
     in_call: bool = False
+    refreshed_at: datetime | None = None
 
 
 __all__ = [

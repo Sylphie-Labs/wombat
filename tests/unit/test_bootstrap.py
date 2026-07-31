@@ -840,9 +840,7 @@ def test_assemble_runtime_wires_one_shared_last_spoken_register_into_both_speak_
     tmp_path: Path,
 ) -> None:
     op = load_operating_params()
-    config = _config().model_copy(
-        update={"wombat_brief_path": str(tmp_path / "brief.txt")}
-    )
+    config = _config().model_copy(update={"wombat_brief_path": str(tmp_path / "brief.txt")})
     bundle = bootstrap.assemble_runtime(
         config=config,
         dsn="postgresql://fake-host/fake-db",
@@ -955,9 +953,7 @@ async def test_assemble_runtime_wires_asr_context_hook_reading_the_shared_regist
     (drop_dir / "note.wav").write_bytes(b"context-hook-wiring-bytes")
 
     op = load_operating_params()
-    config = _config().model_copy(
-        update={"wombat_asr_drop_dir": str(drop_dir)}
-    )
+    config = _config().model_copy(update={"wombat_asr_drop_dir": str(drop_dir)})
     bundle = bootstrap.assemble_runtime(
         config=config,
         dsn="postgresql://fake-host/fake-db",
@@ -1317,6 +1313,7 @@ class _RaisingActivitySnapshot:
     title: str | None = "Untitled - Notepad"
     since: datetime | None = None
     in_call: bool = False
+    refreshed_at: datetime | None = None
 
     @property
     def app(self) -> str | None:
@@ -1379,16 +1376,30 @@ def test_build_current_activity_context_long_title_never_cuts_the_in_call_suffix
     assert line.endswith(" (in a call)")
 
 
-def test_build_current_activity_context_old_since_is_stale_and_renders_absent() -> None:
-    """Batch-review repair (fake clock): a snapshot whose ``since`` is older than
-    observations._STALE_AFTER_SECONDS (300) against the injected clock renders ABSENT -- if the
-    poller dies or the machine sleeps, the model is never told a stale window is live. A
-    within-window ``since`` still renders, and ``since=None`` (no age info -- e.g. a hand-rolled
-    snapshot) keeps the pre-repair behavior."""
+def test_build_current_activity_context_old_refreshed_at_is_stale_and_renders_absent() -> None:
+    """Opus-verify repair (fake clock): the staleness clock is ``refreshed_at`` -- the LAST
+    SUCCESSFUL POLL beat -- never ``since`` (segment-OPEN time). A snapshot whose ``refreshed_at``
+    is older than observations._STALE_AFTER_SECONDS (300) against the injected clock renders
+    ABSENT (dead poller / machine sleep -- absent, never wrong); a fresh ``refreshed_at`` renders
+    even when ``since`` is HOURS old (one window held focused all morning under a healthy poller);
+    ``refreshed_at=None`` (no age info -- e.g. a hand-rolled snapshot) renders as before, and an
+    old ``since`` alone never gates anything."""
     now = datetime(2026, 7, 31, 12, 0, 0, tzinfo=UTC)
-    fresh = CurrentActivity(app="notepad.exe", title="Notes", since=now - timedelta(seconds=299))
-    stale = CurrentActivity(app="notepad.exe", title="Notes", since=now - timedelta(seconds=301))
-    ageless = CurrentActivity(app="notepad.exe", title="Notes", since=None)
+    fresh = CurrentActivity(
+        app="notepad.exe",
+        title="Notes",
+        since=now - timedelta(hours=3),  # segment open for hours -- must NOT count as stale
+        refreshed_at=now - timedelta(seconds=299),
+    )
+    stale = CurrentActivity(
+        app="notepad.exe",
+        title="Notes",
+        since=now - timedelta(seconds=10),  # a recent since must not rescue a dead poller
+        refreshed_at=now - timedelta(seconds=301),
+    )
+    ageless = CurrentActivity(
+        app="notepad.exe", title="Notes", since=now - timedelta(hours=3), refreshed_at=None
+    )
     assert build_current_activity_context(fresh, clock=lambda: now) == {
         "current_activity": "notepad.exe - Notes"
     }
@@ -1812,9 +1823,7 @@ async def test_ac3_max_steps_ceiling_trip_logs_error_naming_run_id(
         )
 
     assert state.status is RunStatus.FAILED
-    matching = [
-        r for r in caplog.records if r.levelname == "ERROR" and run_id in r.getMessage()
-    ]
+    matching = [r for r in caplog.records if r.levelname == "ERROR" and run_id in r.getMessage()]
     assert len(matching) == 1
 
 

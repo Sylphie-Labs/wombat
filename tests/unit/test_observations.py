@@ -23,6 +23,7 @@ import ast
 import inspect
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -36,6 +37,7 @@ from wombat import observations, observe_mic, schema_preflight
 from wombat.observations import CurrentActivity, ObservationStore, ensure_schema
 from wombat.observe_mic import MicInCallProbe
 from wombat.observe_screen import ScreenActivityCollector, ScreenBeat
+from wombat.voice.context_prefetch import build_current_activity_context
 
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
 
@@ -128,9 +130,7 @@ def test_append_segment_get_window_prune_older_than_round_trip(fresh_table: None
         assert rows[0]["day_key"] == t0.date()
 
         # A different channel never surfaces in a "screen" window read.
-        store.append_segment(
-            "webcam", "presence", t2, t3, {"present": True}, t2.date()
-        )
+        store.append_segment("webcam", "presence", t2, t3, {"present": True}, t2.date())
         rows_screen_only = store.get_window("screen", now - timedelta(hours=4), now)
         assert len(rows_screen_only) == 2
 
@@ -334,6 +334,79 @@ def test_ac6_store_raise_logs_loudly_and_later_segments_still_record(
 
     assert len(store.segments) == 1
     assert store.segments[0]["payload"]["app"] == "notepad.exe"
+
+
+# ----------------------------------------- staleness clock = last successful poll (Opus repair)
+
+
+def _clock_at(moment: datetime) -> Callable[[], datetime]:
+    """A frozen fake clock — binds ``moment`` by value (loop-safe, unlike a bare lambda)."""
+    return lambda: moment
+
+
+def test_long_focused_window_never_goes_stale_while_the_real_collector_keeps_beating() -> None:
+    """Opus-verify repair (a), driving the REAL ScreenActivityCollector's same-segment-continues
+    early-return path via poll_once: 80 beats at the 10s cadence on ONE unchanged window (800s of
+    reading/coding/a long Zoom call -- far past _STALE_AFTER_SECONDS=300) must keep re-stamping
+    ``refreshed_at``, so build_current_activity_context STILL renders the key at every beat. The
+    old ``since``-keyed gate silently dropped it after beat ~30 while the poller was perfectly
+    healthy."""
+    store = _FakeObservationStore()
+    activity = CurrentActivity()
+    t0 = datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC)
+    now = t0
+
+    collector = ScreenActivityCollector(
+        store=store,
+        current_activity=activity,
+        tz=ZoneInfo("UTC"),
+        clock=lambda: now,
+        read_beat=lambda: ScreenBeat(app="Zoom.exe", title="Weekly sync"),
+    )
+
+    for beat_index in range(80):
+        now = t0 + timedelta(seconds=10 * beat_index)
+        collector.poll_once()
+        rendered = build_current_activity_context(activity, clock=_clock_at(now))
+        assert rendered == {"current_activity": "Zoom.exe - Weekly sync"}, (
+            f"key dropped at beat {beat_index} ({10 * beat_index}s into one focused window)"
+        )
+
+    # since kept its meaning: it is still the segment-OPEN time, 790s ago -- not re-stamped.
+    assert activity.since == t0
+    assert activity.refreshed_at == t0 + timedelta(seconds=790)
+
+
+def test_stopped_beats_age_the_snapshot_out_after_the_pinned_window() -> None:
+    """Opus-verify repair (b): when the beats STOP (dead poller / machine sleep), ``refreshed_at``
+    stops advancing and 300s later the render is ABSENT -- absent, never wrong."""
+    store = _FakeObservationStore()
+    activity = CurrentActivity()
+    t0 = datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC)
+    now = t0
+
+    collector = ScreenActivityCollector(
+        store=store,
+        current_activity=activity,
+        tz=ZoneInfo("UTC"),
+        clock=lambda: now,
+        read_beat=lambda: ScreenBeat(app="Zoom.exe", title="Weekly sync"),
+    )
+
+    for beat_index in range(3):
+        now = t0 + timedelta(seconds=10 * beat_index)
+        collector.poll_once()
+    last_beat = now
+
+    # No more beats. Within the 300s window the last-polled snapshot still renders...
+    assert build_current_activity_context(
+        activity, clock=lambda: last_beat + timedelta(seconds=299)
+    ) == {"current_activity": "Zoom.exe - Weekly sync"}
+    # ...and 300s+ after the final beat it is gone.
+    assert (
+        build_current_activity_context(activity, clock=lambda: last_beat + timedelta(seconds=301))
+        == {}
+    )
 
 
 # ----------------------------------------------------------------------- mic probe ACs (TK-313)

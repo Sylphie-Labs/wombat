@@ -93,9 +93,7 @@ def read_foreground_window() -> ScreenBeat | None:
         user32.GetWindowTextW(hwnd, title_buf, 1024)
         title = title_buf.value
 
-        h_process = kernel32.OpenProcess(
-            _PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value
-        )
+        h_process = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
         if not h_process:
             return None
         try:
@@ -181,9 +179,14 @@ class ScreenActivityCollector:
             return
 
         self._failure_streak_warned = False
+        # Opus-verify repair: EVERY successful beat re-stamps refreshed_at — the staleness clock
+        # (observations._STALE_AFTER_SECONDS) keys off the last successful poll, NOT segment-open
+        # time, so a window kept focused past 300s under a healthy poller never ages out. This
+        # stamp must land BEFORE the same-segment-continues early return below.
+        self._current_activity.refreshed_at = now
         title = _normalize_title(beat.title)
         if self._open_app == beat.app and self._open_title == title:
-            return  # same segment continues — nothing to do
+            return  # same segment continues — nothing to do (refreshed_at re-stamped above)
 
         self._close_open_segment(now)
         self._open_app = beat.app

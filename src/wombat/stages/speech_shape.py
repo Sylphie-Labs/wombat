@@ -172,6 +172,10 @@ def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS)
 _FULL_REPLY_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _FULL_REPLY_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _FULL_REPLY_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+# Opus-verify repair: underscore BOLD (__text__) — the single-underscore italic pattern below can
+# never match it (its char class excludes '_'), so '__Wombat__: ...' survived the strip and was
+# spoken verbatim, label and all. Handled BEFORE the single-underscore italic so nesting resolves.
+_FULL_REPLY_BOLD_UNDERSCORE_RE = re.compile(r"__(.+?)__", re.DOTALL)
 _FULL_REPLY_ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_([^_\n]+)_(?!\w)")
 _FULL_REPLY_ITALIC_ASTERISK_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 _FULL_REPLY_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", re.MULTILINE)
@@ -190,6 +194,7 @@ def _strip_markdown_tokens(text: str) -> str:
     stripped = _FULL_REPLY_LINK_RE.sub(r"\1", text)
     stripped = _FULL_REPLY_URL_RE.sub("", stripped)
     stripped = _FULL_REPLY_BOLD_RE.sub(r"\1", stripped)
+    stripped = _FULL_REPLY_BOLD_UNDERSCORE_RE.sub(r"\1", stripped)
     stripped = _FULL_REPLY_ITALIC_UNDERSCORE_RE.sub(r"\1", stripped)
     stripped = _FULL_REPLY_ITALIC_ASTERISK_RE.sub(r"\1", stripped)
     stripped = _FULL_REPLY_HEADING_RE.sub("", stripped)

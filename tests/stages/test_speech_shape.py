@@ -284,6 +284,22 @@ def test_batch_repair_full_reply_bold_wrapped_label_is_stripped_after_markdown()
     )
 
 
+def test_opus_repair_full_reply_underscore_bold_label_is_stripped_after_markdown() -> None:
+    """Opus-verify repair: '__Wombat__: ...' is underscore BOLD, which the single-underscore
+    italic pattern can never match (its char class excludes '_') -- the dedicated __text__ strip
+    runs before it, so the exposed 'Wombat:' label is then removed and neither the label nor a
+    literal underscore is ever spoken."""
+    assert (
+        _sanitize_full_reply_text("__Wombat__: The meeting is at three.", 400)
+        == "The meeting is at three."
+    )
+
+
+def test_opus_repair_full_reply_plain_underscore_bold_is_unwrapped() -> None:
+    """Opus-verify repair: plain '__bold__ text' keeps its content, loses the markers."""
+    assert _sanitize_full_reply_text("__bold__ text", 400) == "bold text"
+
+
 async def test_ac1_stage_carries_a_label_stripped_summary_through_run() -> None:
     model = FakeModel(response=_response("Wombat: The meeting is at 3pm."))
     stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
@@ -317,9 +333,7 @@ def test_speak_full_replies_defaults_to_false() -> None:
     assert stage._speak_full_replies is False
 
 
-async def test_ac2_speak_full_replies_on_zero_model_calls_composed_text_modulo_whitespace() -> (
-    None
-):
+async def test_ac2_speak_full_replies_on_zero_model_calls_composed_text_modulo_whitespace() -> None:
     model = FakeModel(response=_response("should never be used"))
     stage = SpeechShapeStage(
         config=_config(), voice_enabled=True, adapter_present=True, speak_full_replies=True

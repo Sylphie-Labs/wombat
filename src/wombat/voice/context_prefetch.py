@@ -43,9 +43,11 @@ this renderer reduces it to the bare executable basename (``_process_basename``,
 repair) before rendering, so a long install path never eats the ``_MAX_ACTIVITY_CHARS`` budget the
 title needs and no ``C:/Users/<name>`` filesystem path leaks into the prompt. ``current_activity=
 None`` (collector absent/toggle off) -> ``{}`` no read no warning. A stale/absent snapshot (``app``
-or ``title`` is ``None`` — the collector's own closed-segment state — OR ``since`` older than
-``observations._STALE_AFTER_SECONDS``, batch-review repair: a dead poller/machine-sleep snapshot
-renders absent, never as live) -> no key. ANY exception
+or ``title`` is ``None`` — the collector's own closed-segment state — OR ``refreshed_at`` older
+than ``observations._STALE_AFTER_SECONDS``, batch-review repair: a dead poller/machine-sleep
+snapshot renders absent, never as live; Opus-verify repair: the clock is ``refreshed_at``, the
+LAST SUCCESSFUL POLL beat, never ``since``/segment-open time — a window held focused past 300s
+under a healthy poller keeps rendering) -> no key. ANY exception
 reading the snapshot's fields -> ``{}`` plus exactly ONE loud warning (CON-3 parity with the two
 builders above).
 """
@@ -120,6 +122,9 @@ class ActivitySnapshot(Protocol):
 
     @property
     def since(self) -> datetime | None: ...
+
+    @property
+    def refreshed_at(self) -> datetime | None: ...
 
 
 def build_voice_context(
@@ -225,10 +230,13 @@ def build_current_activity_context(
 
     ``current_activity`` is ``None`` (collector absent/toggle off): returns ``{}`` immediately, no
     read, no warning. A stale/absent snapshot — ``app`` or ``title`` is ``None`` (the collector's
-    own closed-segment state), OR ``since`` older than ``observations._STALE_AFTER_SECONDS``
-    against ``clock()`` (batch-review repair: a dead poller or a machine waking from sleep must
-    not present a stale window as live — absent, never wrong; ``since=None`` with app/title set
-    carries no age and renders as before) — contributes NO key (never an empty string). ANY
+    own closed-segment state), OR ``refreshed_at`` (the LAST SUCCESSFUL POLL beat — Opus-verify
+    repair: never ``since``/segment-open time, which ages past the threshold on any window held
+    focused >300s under a perfectly healthy poller) older than
+    ``observations._STALE_AFTER_SECONDS`` against ``clock()`` (batch-review repair: a dead poller
+    or a machine waking from sleep must not present a stale window as live — absent, never wrong;
+    ``refreshed_at=None`` with app/title set carries no age and renders as before) — contributes
+    NO key (never an empty string). ANY
     exception raised reading the snapshot's fields degrades to ``{}`` plus exactly ONE loud
     warning (CON-3 parity with ``build_voice_context``/``build_user_facts_context``). ``app`` is
     reduced to its bare executable basename (``_process_basename``, batch-review repair) before
@@ -241,9 +249,9 @@ def build_current_activity_context(
         app = current_activity.app
         title = current_activity.title
         in_call = current_activity.in_call
-        since = current_activity.since
-        stale = since is not None and (
-            ((clock() if clock is not None else datetime.now(UTC)) - since).total_seconds()
+        refreshed_at = current_activity.refreshed_at
+        stale = refreshed_at is not None and (
+            ((clock() if clock is not None else datetime.now(UTC)) - refreshed_at).total_seconds()
             > _STALE_AFTER_SECONDS
         )
     except Exception:
