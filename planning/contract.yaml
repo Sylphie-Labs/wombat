@@ -7614,7 +7614,7 @@ nodes:
     kind: ticket
     parent: EP-37
     title: "dream_derive - deterministic observational user-model pass: recurring-meeting rhythms + frequent correspondents distilled from wombat_external_items into wombat_user_facts (source='derived'), pure code, NO LLM, no egress (DEC-66/EP-37 first ticket; DISPATCH GATED by DEF-13)"
-    status: todo
+    status: done
     priority: P2
     estimate: M
     engineering_level: mvp
@@ -7650,6 +7650,8 @@ nodes:
       - src/wombat/bootstrap.py
       - tests/behavior/test_dream_derive.py
       - tests/pathways/test_dream_pathway.py
+      - src/wombat/behavior/stages/dream_facts.py
+      - tests/behavior/test_dream_facts.py
   - id: TK-300
     kind: ticket
     parent: EP-33
@@ -8003,7 +8005,7 @@ nodes:
     kind: ticket
     parent: EP-32
     title: "Cross-arc minors polish (ISS-31 findings 1/2/4 + the companion-tail WARNING wording) - params-overlay skips null/blank rows silently, HH:MM:SS pattern validation at the PUT door for the two time params, quiet-hours hold INFO logs on state change only, chat-turn sink WARNING names the actual failing phase"
-    status: todo
+    status: done
     priority: P2
     estimate: S
     engineering_level: mvp
@@ -8040,7 +8042,7 @@ nodes:
     kind: ticket
     parent: EP-33
     title: "known_user_context told-first ordering - UserFactsStore.list_facts prioritizes source='told' facts ahead of every other source inside the 15-line window (recency within each tier, cap unchanged) - the DEC-66 crowd-out guard"
-    status: todo
+    status: done
     priority: P2
     estimate: S
     engineering_level: mvp
@@ -8067,7 +8069,7 @@ nodes:
     kind: ticket
     parent: EP-37
     title: "Observation consent - three observe toggles wombat_observe_screen/webcam/mic, default OFF, plain config fields on DEC-43 precedence, restart-to-apply, app rows in the system view (DEC-68b)"
-    status: todo
+    status: done
     priority: P2
     estimate: S
     engineering_level: mvp
@@ -8103,7 +8105,7 @@ nodes:
     kind: ticket
     parent: EP-37
     title: "ScreenActivityCollector + wombat_observations ledger (migration 013) + ObservationStore + in-memory CurrentActivity - ctypes foreground-window segments, 21-day boot prune, constructed ONLY when wombat_observe_screen is true (DEC-68a/c)"
-    status: todo
+    status: done
     priority: P2
     estimate: M
     engineering_level: mvp
@@ -8140,11 +8142,15 @@ nodes:
       - src/wombat/bootstrap.py
       - tests/unit/test_observations.py
       - tests/unit/test_bootstrap.py
+      - src/wombat/runtime.py
+      - src/wombat/schema_preflight.py
+      - tests/unit/test_runtime.py
+      - tests/unit/test_schema_preflight.py
   - id: TK-311
     kind: ticket
     parent: EP-37
     title: "current_activity payload key on chat/voice turns - the ONE context-hook closure gains the bounded now-snapshot line; the TK-298 _GROUNDING_ONLY_KEYS drift pin updates DELIBERATELY to five keys (DEC-68d1)"
-    status: todo
+    status: done
     priority: P2
     estimate: S
     engineering_level: mvp
@@ -8182,7 +8188,7 @@ nodes:
     kind: ticket
     parent: EP-37
     title: "Charter honesty for screen observation - ONE conditionally-true sentence joins CAPABILITY_CHARTER at a ruled position, every cannot/never clause byte-retained (DEC-68f)"
-    status: todo
+    status: done
     priority: P2
     estimate: S
     engineering_level: mvp
@@ -8207,7 +8213,7 @@ nodes:
     kind: ticket
     parent: EP-37
     title: "In-call device signal + reduce-only gate hold - zero-capture Windows audio-session probe under the mic toggle, composing with the quiet-hours evaluator wrapper, gate_stage.py byte-untouched (DEC-68a/e)"
-    status: todo
+    status: done
     priority: P2
     estimate: M
     engineering_level: mvp
@@ -8243,6 +8249,7 @@ nodes:
       - src/wombat/bootstrap.py
       - tests/unit/test_observations.py
       - tests/unit/test_bootstrap.py
+      - pyproject.toml
   - id: TK-314
     kind: ticket
     parent: EP-37
@@ -8283,7 +8290,7 @@ nodes:
     kind: ticket
     parent: EP-30
     title: "Voice speaker-label strip - anchored one-shot leading-label strip in _shape_speech_text BEFORE the forbidden-pattern loop, plus one no-self-label _SPEECH_SHAPE_INSTRUCTION sentence (DEC-69a)"
-    status: todo
+    status: done
     priority: P1
     estimate: S
     engineering_level: mvp
@@ -8316,7 +8323,7 @@ nodes:
     kind: ticket
     parent: EP-30
     title: "wombat_speak_full_replies toggle (default OFF) - opted-in voice path speaks the pane's actual reply text through deterministic sanitize under the spoken-cap ceiling; shaped summary stays the default (DEC-69b)"
-    status: todo
+    status: done
     priority: P2
     estimate: S
     engineering_level: mvp
@@ -9818,3 +9825,4 @@ changelog:
   - { date: "2026-07-30", version: "2.175", by: "architect (companion-tail triage; single serial governance session)", change: "COMPANION-ARC TAIL TRIAGED (DEC-65 arc fully landed + review-clean; the fourth minor - the CON-6 third-person motive-screen widening - already landed at 44db518/v2.173). Three pending minors homed, no silent drops: (1) known_user_context CROWD-OUT -> NEW TK-316 with the ruling embedded (Jim-endorsed direction, architect-ruled shape): UserFactsStore.list_facts gains told-first source-priority ordering - CASE source='told' tier first, updated_at DESC within tiers, 15-line cap and render byte-untouched; inert until DEF-12's capture lands but minted BEFORE dream_observe becomes the third nightly writer, and recorded as the DEC-66 cap-pressure hook; (2) TK-308 stale WARNING string ('ChatTurnStore.record_turn raised' blaming the store for parse failures) -> folded into TK-315 as item (d) with its own AC (one-line message reword at sources/bootstrap.py:442, guard shape byte-unchanged) - TK-315 retitled cross-arc minors polish, files_in_scope extended; (3) TK-308 partial-move asymmetry -> NEW ISS-32 accepted-behavior note recorded from the batch-journal finding WITHOUT re-deriving specifics (cost ruling): guard coverage asymmetry has no observed failure mode, revisit only on a live malformed-payload WARNING. validate + gate_check analyze PASS post-edit." }
   - { date: "2026-07-30", version: "2.176", by: "architect (ambient-observability arc recorded; single serial governance session)", change: "DEC-68 RECORDED from Jim's 2026-07-30 ambient-observability directive (verbatim in the decision) - perceive -> derive deterministically at capture -> discard raw -> two surfaces: three consented on-host channels (screen = foreground-window metadata via ctypes zero-pixels; webcam = in-memory face-present boolean; mic = zero-capture held-mic probe first, VAD last-and-allowed-to-die), the wombat_observations 21-day ledger (migration 013 CONFIRMED next-free, dir ends at 012) + in-memory CurrentActivity, the current_activity chat/voice-only payload key at DEC-45 custody tier, the nightly LLM-free dream_observe pass writing source='behavior' facts, per-channel default-OFF toggles structurally inert when off, exactly ONE reduce-only gate touch (in-call hold, TK-304 wrapper shape). NEW NG-9 (no home-wide hive - Jim verbatim), NEW DEF-15 (webcam-strengthened gate presence - would LOOSEN holds; the draft's provisional DEF-14 renumbered, DEF-14 was already minted for brief toggles), Q-118..Q-121 raised AND resolved at recording (restart-only consent v1, webcam presence-only PERMANENTLY, bounded titles on the one mouth egress accepted with app-name-only fallback recorded, phase order confirmed). EP-37 intent AMENDED with growth input (d). DEF-13 TRIGGER MET (companion arc landed + review-clean at v2.173 with the TK-298 e2e seam proof) - TK-299 is dispatchable and sequenced WITH the Phase-1 batch. TK-309..TK-314 MINTED ready (consent toggles; collector+ledger+store; current_activity key with the DELIBERATE five-key _GROUNDING_ONLY_KEYS pin update; charter sentence; in-call probe+hold under the mic toggle; dream_observe). Rebase checklist §R1-§R11 EXECUTED against the post-settings tree: all draft seams re-verified live (runtime overlay :96/:474 - observe toggles ruled PLAIN config fields, NOT the closed PARAMS_APP_EDITABLE spec; quiet wrapper bootstrap.py:936; four-key pin test_compose_stage.py:538; charter oracle tests/capabilities/test_capability_charter.py; App.tsx post-TK-306 layout - NO toggle primitive exists, so the consent rows are ruled existing-Select Off/On, no new primitive); pycaw-vs-ctypes and opencv dependency rulings stay briefing-time per the draft. validate + gate_check analyze PASS post-edit." }
   - { date: "2026-07-30", version: "2.177", by: "architect (voice arc minted; single serial governance session)", change: "DEC-69 RECORDED from Jim's voice bug + directive (verbatim in the decision) and the architect diagnosis (root cause traced + fake-reproduced: bare speaker labels pass _FORBIDDEN_PATTERNS untouched and are spoken verbatim; markdown-wrapped labels reject the whole turn; no instruction anywhere forbids self-labeling; anchors re-verified live post-TK-303). Two halves: (a) an always-on anchored one-shot leading-label STRIP in _shape_speech_text before the forbidden loop + one no-self-label instruction sentence (strip-not-reject - a leading label is removable without mangling; the DEC-27 deterministic-boundary posture; generic, never reads the assistant name; the 'Reminder:' false-positive class accepted and recorded) -> NEW TK-317 (P1/S); (b) NEW wombat_speak_full_replies (default OFF, restart-tier) - opted-in voice turns skip the shaping model call and speak the pane's ACTUAL reply text through deterministic sanitize (label strip + markdown/URL token strip + whitespace collapse) word-boundary-truncated at wombat_spoken_reply_max_chars -> NEW TK-318 (P2/S). SUPERSESSION NAMED AND SCOPED: DEC-55(c)'s composed-text bar falls ONLY for the explicit opt-in, per DEC-67's philosophy line; DEC-55f's reject posture stays scoped to the shaped-summary path; SpeakSink/compose/chat_reply byte-untouched; OFF byte-identical. validate + gate_check analyze PASS post-edit." }
+  - { date: "2026-07-31", version: "2.178", by: "orchestrator-architect (board-closing batch closeout, part 1 of 3; single serial governance session per Jim's orchestrator-only-writes rule)", change: "BOARD-CLOSING PARALLEL BATCH LANDED - ten of the eleven remaining tickets flipped done against spot-verified live-tree landings (TK-314 flips at v2.179 under the scope ruling): L1 TK-299 + TK-309 + TK-316 + TK-317 @ d747be4, L2 TK-310 + TK-312 @ 69a56f0, L3 TK-311 @ ff1168a, L4 TK-315 @ 3bacbae, L5 TK-313 @ 00f74ad, L7 TK-318 @ 2316113, batch-review round-1 repair @ ea2b767. EIGHT batch rulings recorded as governance-of-record (decided by the orchestrator during the batch, returned for verbatim recording per the orchestrator-only-writes rule): (r1) LEVELING - the eleven ship as one 7-level parallel batch; seven tickets (TK-299, TK-310, TK-311, TK-315, TK-313, TK-314, TK-318) all touch src/wombat/bootstrap.py so seven levels is the structural floor, order pinned TK-299(L1) -> TK-310(L2) -> TK-311(L3) -> TK-315(L4) -> TK-313(L5) -> TK-314(L6) -> TK-318(L7) with TK-309/TK-316/TK-317 riding L1 and TK-312 riding L2 on disjoint files (disjointness verified file-by-file within every level); TK-315 deliberately sequenced BEFORE TK-313 so the quiet-hours state-change-only INFO convention exists before TK-313's wrapper composes over it; throwaway-pg ports TK-299=5440 TK-309=5441 TK-316=5442 TK-310=5443 TK-315=5444 TK-313=5445 TK-314=5446 TK-318=5447 TK-311=5448. (r2) TK-299 RETENTION VERIFICATION (the recorded briefing-time gate discharged): EXTERNAL_ITEMS_PRUNE_DAYS = 30 verified live at external_store.py:20 and applied in runtime.serve():478 - deep enough for the 3-distinct-week recurrence bar; lookback PINNED _LOOKBACK_DAYS = 28, the bar NOT weakened; other pins - 30-minute start-time tolerance, gmail correspondent threshold 5, _MAX_DERIVED_FACTS = 5. (r3) DREAM-GRAPH INSERTION MECHANICS (scope normalization): a dream stage's downstream target lives in its OWN transitions tuple and run() Transition(to=...) (DreamFactsStage verified at dream_facts.py:169 targeting dream_behavior_log), so TK-299 files_in_scope grows with dream_facts.py + tests/behavior/test_dream_facts.py (retarget to dream_derive) and TK-314's grows with dream_derive.py + tests/behavior/test_dream_derive.py + tests/pathways/test_dream_pathway.py (retarget to dream_observe); final landed order dream_facts -> dream_derive -> dream_observe -> dream_behavior_log. (r4) TK-310 HOMING: the ObservationStore boot prune lands in runtime.serve() beside the existing external-items/chat-turns prunes (runtime.py:478-482); migration 013 registers via an ensure_schema in observations.py (importlib.resources, the user_facts convention) called from schema_preflight.py (the ensure_chat_turns_schema pattern); runtime.py, schema_preflight.py, tests/unit/test_runtime.py and tests/unit/test_schema_preflight.py join TK-310 files_in_scope. (r5) CURRENTACTIVITY SHAPE: the in-memory snapshot minted by TK-310 carries in_call bool = False FROM BIRTH; TK-313 only flips it and TK-311's renderer reads it (appending ' (in a call)' when true) - removes every cross-level renderer re-touch and keeps within-level file scopes disjoint. (r6) LEDGER VOCABULARY (wombat_observations rows): screen segments are channel='screen' kind='app_segment' payload {app, title}; mic in-call segments are channel='mic' kind='in_call' payload empty; day_key is tz-local per DEC-21 - binds TK-310 (writer), TK-313 (writer), TK-314 (reader). (r7) TK-313 PYCAW (the recorded pycaw-vs-ctypes-COM briefing-time deferral, decided): pycaw>=20240210 joins [project].dependencies (pyproject.toml joins TK-313 scope), imported LAZILY inside the probe so non-Windows/ImportError/COM-raise degrades to False plus one WARNING (reduce-only never becomes silence-forever); the structural no-capture-API test pins that observe_mic.py references no sounddevice/pyaudio/IAudioClient/stream-open token - session enumeration only; rationale - raw ctypes-COM WASAPI vtables would dwarf the mvp ticket for zero privacy gain, pycaw is local-only zero egress. (r8) TK-314 DEPENDENCY: TK-314 gains an in-batch dependency on TK-313 (its call-rhythm template consumes the channel='mic'/kind='in_call' rows TK-313 writes) in addition to the contract's TK-310/TK-297 and the batch's TK-299 graph-predecessor - reflected as level 6 after TK-313's level 5. BATCH VERIFY, honestly recorded: the FIRST Opus pass over the ten-ticket diff FAILED with 3 critical/major findings - the ScreenActivityCollector/MicInCallProbe run() loops were constructed into RuntimeBundle but never scheduled into runtime._drive_and_serve's gather; dream_derive bucketed weekday/time off the poller's UTC-normalized start instead of tz-local; current_activity.app carried the full process image path into prompts - all repaired @ ea2b767 (pollers join the gather None-guarded with best-effort close, toggle-off boots unaffected; tz-local bucketing verified by hand, 01:00 UTC Monday buckets to Sunday 21:00 America/New_York; app reduced to executable basename). Independent Opus RE-VERIFY PASS on ea2b767: pytest 2048 passed/125 skipped (2195/14 with throwaway pg on 5450, only live-creds harnesses skipped), ruff clean, mypy 362 files clean, app npm test 332 across 27 files, lint clean; every ticket AC re-run green; probe_in_call live-tested on this Windows host (real WASAPI session enumeration, returned False, no device opened); no planning/, .env, or live-db contact anywhere in the batch. SIX minor findings returned with the PASS verdict (bold-wrapped label survives the full-reply strip; the leading-label pattern eats spaced clauses like 'It costs 5: dollars'; the in-call suffix truncates mid-word; CurrentActivity.since is never read so a dead poller stamps stale activity forever; the config.py observe-toggles comment went stale in-batch; observation_store never closed at shutdown) - all six discharged at v2.179. TK-314 reported BLOCKED at build (dream_pathway.py's fixed 9-positional-stage build signature was outside its scope) - ruled and landed at v2.179. files_in_scope normalized in this entry per r3/r4/r7." }
