@@ -116,6 +116,12 @@ class ScreenpipeClient:
     def __init__(self, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")
         self._failure_streak_warned = False
+        # ISS-37-RIDER m5: set on EVERY `search()` call — True whenever that call's `[]`/result
+        # came from degrade (permanent non-loopback refusal or a caught exception) rather than a
+        # genuine, trustworthy query result. Callers (``screenpipe_source.ScreenpipeEventSource``)
+        # read this to decide whether the polled window was actually observed (safe to advance
+        # the cursor) or lost to an outage (must be retried, never silently dropped).
+        self.last_search_degraded = False
 
         host = urlparse(base_url).hostname
         self._degraded = host not in _LOOPBACK_HOSTS
@@ -151,8 +157,11 @@ class ScreenpipeClient:
     ) -> list[ScreenpipeItem]:
         """``GET /search`` over ``[start, end]`` with ``content_type=ocr`` — bounded to at most
         ``_MAX_RESULTS`` items, each text field char-capped at ``_MAX_TEXT_CHARS``. ``[]`` on
-        any exception or while permanently degraded (DEC-70i). Never raises."""
+        any exception or while permanently degraded (DEC-70i). Never raises. Sets
+        ``last_search_degraded`` on EVERY call (ISS-37-RIDER m5) so a caller can distinguish a
+        genuine empty window from a degraded one."""
         if self._degraded:
+            self.last_search_degraded = True
             return []
         capped_limit = _MAX_RESULTS if limit is None else min(limit, _MAX_RESULTS)
         params = {
@@ -168,8 +177,10 @@ class ScreenpipeClient:
             items = [_parse_item(raw) for raw in body.get("data", [])]
         except Exception:
             self._warn_once()
+            self.last_search_degraded = True
             return []
         self._rearm()
+        self.last_search_degraded = False
         return items[:_MAX_RESULTS]
 
     def _get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:

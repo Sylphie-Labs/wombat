@@ -603,7 +603,10 @@ def test_screenpipe_source_not_wired_when_toggle_is_false(
         )
 
     assert not _is_registered(registry, "screenpipe")
-    assert "WOMBAT_OBSERVE_SCREENPIPE" in caplog.text
+    # ISS-37-RIDER m6: EXACTLY one skip record naming the toggle — a substring check on
+    # `caplog.text` alone would still pass if the skip line were (mistakenly) emitted twice.
+    skip_records = [r for r in caplog.records if "WOMBAT_OBSERVE_SCREENPIPE" in r.getMessage()]
+    assert len(skip_records) == 1
     assert consent_calls == []
 
 

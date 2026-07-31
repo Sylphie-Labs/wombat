@@ -22,7 +22,12 @@ client/model contact (structural inertness) — no log line, this is the ordinar
 Else, READ: a trailing ``_LOOKBACK_DAYS = 21`` window via ONE ``client.search`` call per local day
 (at most 21 calls; ``ScreenpipeClient`` itself caps 50 results/search and never raises — a down or
 misconfigured screenpipe degrades every call to ``[]`` after its own single per-streak WARNING,
-DEC-70i — this stage adds no extra degrade handling on top of that).
+DEC-70i — this stage adds no extra degrade handling on top of that). Each call is offloaded via
+``asyncio.to_thread`` (ISS-37-RIDER batch-review repair — the same anti-precedent
+``ScreenpipeEventSource.poll`` already established in this arc): ``client.search`` is a
+synchronous, blocking ``urllib`` call under its own ~2.0s timeout, and this stage runs directly
+inside the shared event loop's async ``run()`` — up to 21 sequential blocking calls would
+otherwise freeze drain/ASR/chat/timers for up to ~42s during the nightly dream run.
 
 FOLD (pure code, no model — DEC-70f): the raw ``ScreenpipeItem`` list is deterministically folded
 into a bounded projection — top apps by capture-count residency, the top recurring window/document
@@ -70,6 +75,7 @@ existing ``known_user_context`` block automatically).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, time, timedelta
@@ -355,7 +361,12 @@ class DreamScreenpipeStage:
         self._user_facts = user_facts
         self._tz = tz
 
-    def _collect_items(self, now: datetime) -> list[ScreenpipeItem]:
+    async def _collect_items(self, now: datetime) -> list[ScreenpipeItem]:
+        """ISS-37-RIDER batch-review repair: each ``client.search`` call is a blocking
+        ``urllib`` call under its own ~2.0s timeout (``ScreenpipeClient``) — offloaded via
+        ``asyncio.to_thread`` (the SAME anti-precedent ``ScreenpipeEventSource.poll`` already
+        established in this arc) so up to 21 sequential searches never freeze the shared event
+        loop (drain/ASR/chat/timers) for up to ~42s during the nightly dream run."""
         assert self._client is not None  # run() gates the None case before calling here
         items: list[ScreenpipeItem] = []
         today_local = now.astimezone(self._tz).date()
@@ -363,7 +374,7 @@ class DreamScreenpipeStage:
             day = today_local - timedelta(days=day_offset)
             day_start = datetime.combine(day, time.min, tzinfo=self._tz)
             day_end = day_start + timedelta(days=1)
-            items.extend(self._client.search(day_start, day_end))
+            items.extend(await asyncio.to_thread(self._client.search, day_start, day_end))
         return items
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -371,7 +382,7 @@ class DreamScreenpipeStage:
         new_facts = 0
 
         if self._client is not None:
-            items = self._collect_items(now)
+            items = await self._collect_items(now)
             projection_lines = _build_projection(items, self._tz)
 
             if projection_lines:

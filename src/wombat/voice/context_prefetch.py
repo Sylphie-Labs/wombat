@@ -62,7 +62,11 @@ emitted no ``current_activity`` key (absent/stale snapshot — that gate lives e
 builder, never re-implemented here): returns the base result untouched, no search call. Otherwise
 ONE inline, synchronous ``screenpipe_client.search`` call (rides the client's own pinned short
 timeout — the ISS-30 finding-3 accepted posture) over the trailing
-``_SCREEN_HINT_LOOKBACK_SECONDS`` filtered to the foreground app's basename; the NEWEST returned
+``_SCREEN_HINT_LOOKBACK_SECONDS``, UNFILTERED by app (ISS-37-RIDER batch-review repair:
+screenpipe's own ``app_name`` field is the OS app display name — the arc's own fixtures use
+``"VSCode"`` — never the Windows process image basename ``current_activity.app`` reduces to,
+e.g. ``"Code.exe"``; filtering server-side on the wrong vocabulary silently returned zero items
+in production even with matching content on screen); the NEWEST returned
 item (by ``captured_at``) becomes the suffix `` | on screen: <snippet>``, the snippet truncated so
 the COMBINED line stays within ``_MAX_ACTIVITY_LINE_CHARS`` (the base app-title/in-call line is
 NEVER itself cut here — only the snippet gives, and if no room is left for even one snippet
@@ -269,6 +273,17 @@ def _process_basename(path: str) -> str:
     return tail or path
 
 
+def _sanitize_snippet(text: str) -> str:
+    """Collapse ALL whitespace runs (spaces, tabs, and — critically — newlines) to a single
+    space and strip the ends (TK-323 batch-review repair). OCR text is UNTRUSTED (any webpage
+    or email visible on screen, DEC-70f taint) rendered inline into a semicolon-joined
+    ``key: value`` prompt line (``compose.py``); a bare ``.strip()`` leaves interior newlines
+    intact, letting a crafted on-screen string forge additional grounding lines (e.g. a fake
+    ``known_user_context: ...`` line). Splitting on, then rejoining, whitespace makes a forged
+    newline structurally impossible to smuggle through this field."""
+    return " ".join(text.split())
+
+
 def build_current_activity_context(
     current_activity: ActivitySnapshot | None,
     *,
@@ -333,8 +348,10 @@ def build_current_activity_screen_hint(
     byte-identical). ``screenpipe_client`` is ``None``, or the base call emitted no
     ``current_activity`` key: returns the base dict untouched, no search call, no read of
     ``current_activity`` beyond what the base call already did. Otherwise makes ONE inline
-    ``screenpipe_client.search`` call over ``[now - _SCREEN_HINT_LOOKBACK_SECONDS, now]`` filtered
-    to the foreground app's basename; the newest item (by ``captured_at``) becomes the suffix
+    ``screenpipe_client.search`` call over ``[now - _SCREEN_HINT_LOOKBACK_SECONDS, now]``,
+    UNFILTERED by app (batch-review repair — screenpipe's ``app_name`` vocabulary does not match
+    the Windows process basename this module renders; see the module docstring); the newest item
+    (by ``captured_at``) becomes the suffix
     `` | on screen: <snippet>``, the snippet truncated so the combined line stays within
     ``_MAX_ACTIVITY_LINE_CHARS`` (the base line is never itself cut here). No item, an
     empty/whitespace-only snippet, no room left for even one snippet char, or ANY exception —
@@ -352,11 +369,11 @@ def build_current_activity_screen_hint(
             return base
         now = clock() if clock is not None else datetime.now(UTC)
         start = now - timedelta(seconds=_SCREEN_HINT_LOOKBACK_SECONDS)
-        items = screenpipe_client.search(start, now, app_name=_process_basename(app))
+        items = screenpipe_client.search(start, now)
         if not items:
             return base
         newest = max(items, key=lambda item: item.captured_at)
-        snippet = newest.text_snippet.strip()
+        snippet = _sanitize_snippet(newest.text_snippet)
         if not snippet:
             return base
         base_line = base["current_activity"]

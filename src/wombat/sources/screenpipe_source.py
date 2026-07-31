@@ -155,9 +155,14 @@ class ScreenpipeEventSource:
         ``[]`` rather than killing this source's poll loop (the registry's CRF-4 guard is a
         separate, downstream layer for the enqueue step, not a substitute for this one).
 
-        ISS-37 m5: ``_search_from`` advances ONLY after a successful ``search`` call returns —
-        the pragma-no-cover exception branch below leaves it untouched, so a failed poll retries
-        the SAME window next beat instead of losing it forever.
+        ISS-37-RIDER m5: ``_search_from`` advances ONLY when this poll's ``search`` call was
+        NOT degraded. The exception branch below is the belt-and-suspenders defensive path
+        (pragma-no-cover — the real ``ScreenpipeClient.search`` never raises, DEC-70i); the
+        REAL degrade path is ``search`` returning ``[]`` normally while permanently degraded or
+        mid-outage. ``ScreenpipeClient`` exposes this via ``last_search_degraded`` (set on every
+        call); a client that doesn't expose it (older/minimal test doubles) is treated as never
+        degraded, preserving prior behavior. Either way the SAME window is retried next beat
+        instead of being silently discarded forever.
         """
         now = self._clock()
         start = self._search_from
@@ -170,7 +175,16 @@ class ScreenpipeEventSource:
                 exc_info=True,
             )
             return []
-        self._search_from = now
+        degraded = getattr(self._client, "last_search_degraded", False)
+        if not degraded:
+            self._search_from = now
+        else:
+            logger.debug(
+                "screenpipe source: search degraded for window %s-%s — retrying the same "
+                "window next poll instead of advancing the cursor",
+                start,
+                now,
+            )
 
         # ISS-37 m3: a result count at the client's cap means this window was truncated — the
         # true tail is unseen, so continuity across the boundary is broken (see `_derive`).

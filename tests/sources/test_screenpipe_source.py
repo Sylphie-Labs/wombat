@@ -136,6 +136,37 @@ class _FlakyOnceClient:
         return [item for item in self._items if start <= item.captured_at < end]
 
 
+class _DegradedOnceClient:
+    """A fake client that reproduces the REAL ``ScreenpipeClient.search`` degrade shape
+    (DEC-70i) — degraded on its FIRST call, returning ``[]`` WITHOUT raising and setting
+    ``last_search_degraded = True`` exactly like the real client does while an outage is
+    ongoing; then recovers and serves ``items`` windowed like ``_WindowedFakeClient``, with
+    ``last_search_degraded`` cleared back to ``False``. Records every ``(start, end)`` window it
+    was called with (ISS-37-RIDER m5)."""
+
+    def __init__(self, items: list[ScreenpipeItem]) -> None:
+        self._items = items
+        self._recovered = False
+        self.calls: list[tuple[datetime, datetime]] = []
+        self.last_search_degraded = False
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        self.calls.append((start, end))
+        if not self._recovered:
+            self._recovered = True
+            self.last_search_degraded = True
+            return []
+        self.last_search_degraded = False
+        return [item for item in self._items if start <= item.captured_at < end]
+
+
 def _item(app: str, title: str, ref: str, offset_s: float) -> ScreenpipeItem:
     return ScreenpipeItem(
         app=app,
@@ -388,6 +419,27 @@ async def test_iss37_m5_search_cursor_only_advances_after_a_successful_search() 
     await source.poll()
     # The retried window's start is UNCHANGED from the first, failed attempt.
     assert client.calls[1] == (_BASE, _BASE + timedelta(seconds=20))
+
+
+async def test_iss37_rider_m5_search_cursor_holds_through_a_non_raising_degrade() -> None:
+    """The REAL degrade path (DEC-70i): ``client.search`` never raises — it returns ``[]`` and
+    signals ``last_search_degraded``. The cursor must hold through THIS shape too, not just the
+    defensive raise branch, or a real screenpipe outage silently discards every window it covers."""
+    clock = _FakeClock(_BASE)
+    client = _DegradedOnceClient([_item("editor", "main.py", "ref-1", 5)])
+    source = ScreenpipeEventSource(client=client, poll_interval_seconds=30.0, clock=clock)
+
+    clock.set(_BASE + timedelta(seconds=10))
+    assert await source.poll() == []
+    assert client.calls == [(_BASE, _BASE + timedelta(seconds=10))]
+    assert client.last_search_degraded is True
+
+    clock.set(_BASE + timedelta(seconds=20))
+    await source.poll()
+    # The retried window's start is UNCHANGED from the first, degraded attempt — the window
+    # was never lost.
+    assert client.calls[1] == (_BASE, _BASE + timedelta(seconds=20))
+    assert client.last_search_degraded is False
 
 
 # --------------------------------------------------------------------------------------- AC(b)
