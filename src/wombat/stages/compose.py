@@ -143,12 +143,18 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 # ``known_user_context``/``context_calendar_today``/``context_recent_email``
 # (voice/context_prefetch.py, TK-290/TK-296). Prompt-only grounding, never echoed verbatim by the
 # degrade template — see the module docstring.
+#
+# TK-311 (DEC-68(d)(1)): grows to five DELIBERATELY — ``current_activity``
+# (voice/context_prefetch.py's build_current_activity_context, merged into the SAME asr_context_
+# hook closure) joins the set. The tests/unit/test_compose_stage.py TK-298 drift pin updates in
+# this SAME diff, precisely because it exists to make an addition like this one loud.
 _GROUNDING_ONLY_KEYS = frozenset(
     {
         "replying_to",
         "known_user_context",
         "context_calendar_today",
         "context_recent_email",
+        "current_activity",
     }
 )
 

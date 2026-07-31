@@ -62,6 +62,7 @@ from wombat.stages.brief_timer_stage import BriefTimerStage
 from wombat.stages.gate_stage import GateStage
 from wombat.substrate import cold_boot_bundle
 from wombat.user_facts import UserFactsStore
+from wombat.voice.context_prefetch import build_current_activity_context
 from wombat.voice.reply_context import LastSpokenRegister
 
 # The ten seams the Engine must carry after composition (4 required substrate + 6 optional).
@@ -1064,6 +1065,119 @@ async def test_ac3_typed_chat_and_voice_turn_each_carry_known_user_context_throu
     voice_user_message = voice_compose_calls[0][1].content
     assert "Likes coffee in the morning" in voice_user_message
     assert "replying_to: Should I send it now?" in voice_user_message
+
+
+# --- TK-311 (DEC-68(d)(1)): current_activity merged into the SAME asr_context_hook closure -------
+
+
+class _RaisingActivitySnapshot:
+    """A fake satisfying context_prefetch.ActivitySnapshot's structural shape whose ``app`` read
+    raises -- proves build_current_activity_context's guarded read degrades to {} plus exactly one
+    WARNING (CON-3), never propagating into the shared closure (AC3)."""
+
+    title: str | None = "Untitled - Notepad"
+    in_call: bool = False
+
+    @property
+    def app(self) -> str | None:
+        raise RuntimeError("boom")
+
+
+def test_build_current_activity_context_absent_or_stale_snapshot_yields_no_key() -> None:
+    """AC2/AC3: None (collector absent/toggle off) and a stale snapshot (no open segment -- app/
+    title still None, the collector's own closed-segment state) both contribute NO key."""
+    assert build_current_activity_context(None) == {}
+    assert build_current_activity_context(CurrentActivity()) == {}
+    assert build_current_activity_context(CurrentActivity(app="notepad.exe", title=None)) == {}
+
+
+def test_build_current_activity_context_raise_degrades_to_no_key_plus_one_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC3: a snapshot read that raises still lets the turn proceed -- key absent, exactly one
+    loud WARNING, never a propagated exception (CON-3 degrade, mirrors build_voice_context/
+    build_user_facts_context's own contract)."""
+    with caplog.at_level(logging.WARNING):
+        result = build_current_activity_context(_RaisingActivitySnapshot())
+    assert result == {}
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+
+
+def test_build_current_activity_context_live_snapshot_renders_one_line_within_cap() -> None:
+    """AC1 renderer shape: '<app> - <title>' plus ' (in a call)' when in_call is true, within the
+    pinned 160-char cap."""
+    activity = CurrentActivity(app="notepad.exe", title="Untitled - Notepad", in_call=True)
+    result = build_current_activity_context(activity)
+    assert result == {"current_activity": "notepad.exe - Untitled - Notepad (in a call)"}
+    assert len(result["current_activity"]) <= 160
+
+
+async def test_assemble_runtime_asr_context_hook_omits_current_activity_when_collector_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2 wiring half: default wombat_observe_screen=False means current_activity is None on the
+    bundle, so the shared closure's build_current_activity_context call returns {} -- the key is
+    structurally absent from a real drop-dir voice-turn payload, byte-identical to pre-arc."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my plate"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-311-absent-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(update={"wombat_asr_drop_dir": str(drop_dir)})
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is None
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+    assert "current_activity" not in events[0].payload
+
+
+async def test_assemble_runtime_asr_context_hook_stamps_current_activity_when_toggle_on_and_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1 wiring half: with wombat_observe_screen on and a live (non-stale) current_activity
+    snapshot, the SAME shared closure stamps current_activity onto a real drop-dir voice-turn
+    payload -- proving TK-311's addition rides the SAME closure TK-289/290/296 already share,
+    never a second hook."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my plate"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-311-live-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={"wombat_asr_drop_dir": str(drop_dir), "wombat_observe_screen": True}
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is not None
+    bundle.current_activity.app = "notepad.exe"
+    bundle.current_activity.title = "Untitled - Notepad"
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+    assert events[0].payload["current_activity"] == "notepad.exe - Untitled - Notepad"
 
 
 # --- TK-245 (ruling v2.68 r5): assemble_runtime ALWAYS constructs ExternalItemStore(dsn) ------

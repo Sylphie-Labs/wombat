@@ -272,7 +272,11 @@ from .user_model.observation_writer import ObservationWriter
 from .user_model.outcome_inference import ItemDisposition
 from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
-from .voice.context_prefetch import build_user_facts_context, build_voice_context
+from .voice.context_prefetch import (
+    build_current_activity_context,
+    build_user_facts_context,
+    build_voice_context,
+)
 from .voice.reply_context import LastSpokenRegister
 from .voice.select import build_tts_adapter
 
@@ -1168,11 +1172,19 @@ def assemble_runtime(
     # forward reference: Python closures resolve free variables at CALL time, and this closure is
     # only ever called (by ASRSource.poll()/ChatSurface._accept_message, both well after
     # assemble_runtime returns) once user_facts_store has been assigned.
+    #
+    # TK-311 (DEC-68(d)(1)): ALSO merged into this SAME closure — build_current_activity_context
+    # reads current_activity, constructed further below (in the wombat_observe_screen-gated block
+    # alongside screen_collector) — the SAME forward-reference safety as user_facts_store just
+    # above applies (closures resolve free variables at call time, well after assemble_runtime
+    # returns and current_activity has been assigned, whether to a live CurrentActivity or left
+    # None on a toggle-off boot).
     def asr_context_hook() -> dict[str, str]:
         text = last_spoken_register.current()
         extra: dict[str, str] = {} if text is None else {"replying_to": text}
         extra.update(build_voice_context(external_item_store, tz=tz, clock=_utc_now))
         extra.update(build_user_facts_context(user_facts_store))
+        extra.update(build_current_activity_context(current_activity))
         return extra
 
     if chat_source is not None:

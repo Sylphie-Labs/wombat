@@ -32,6 +32,15 @@ and rendering via the SAME ``_render`` helper under NEW pinned caps (``_MAX_FACT
 ``_MAX_FACTS_CHARS`` = 900, DEC-63 no-knob precedent). Degrade shape mirrors
 ``build_voice_context`` EXACTLY: ``store=None`` -> ``{}`` no call no warning, zero rows -> no key,
 any raise -> ``{}`` plus exactly ONE loud warning (CON-3).
+
+``build_current_activity_context(current_activity)`` (TK-311, DEC-68(d)(1)) is the third sibling
+grounding builder, this one over ``observations.CurrentActivity``'s in-memory single-slot
+now-snapshot rather than a Postgres store: AT MOST ``{"current_activity": "<app> - <title>"}``,
+with `` (in a call)`` appended when ``in_call`` is true, truncated at ``_MAX_ACTIVITY_CHARS`` = 160
+(pinned, DEC-63 no-knob precedent). ``current_activity=None`` (collector absent/toggle off) ->
+``{}`` no read no warning. A stale/absent snapshot (``app`` or ``title`` is ``None`` — the
+collector's own closed-segment state) -> no key. ANY exception reading the snapshot's fields ->
+``{}`` plus exactly ONE loud warning (CON-3 parity with the two builders above).
 """
 
 from __future__ import annotations
@@ -57,6 +66,9 @@ _GMAIL_MAX_CHARS = 400
 _MAX_FACTS_LINES = 15
 _MAX_FACTS_CHARS = 900
 
+# TK-311 (DEC-68(d)(1)): the current_activity line cap — same no-knob precedent.
+_MAX_ACTIVITY_CHARS = 160
+
 
 class VoiceContextStore(Protocol):
     """The structural shape ``build_voice_context`` needs from a store — matches
@@ -75,6 +87,24 @@ class UserFactsContextStore(Protocol):
     test fake only needs to satisfy this shape, never import ``UserFactsStore`` itself."""
 
     def list_facts(self, limit: int) -> list[dict[str, Any]]: ...
+
+
+class ActivitySnapshot(Protocol):
+    """The structural shape ``build_current_activity_context`` needs from a now-snapshot — matches
+    ``observations.CurrentActivity``'s ``app``/``title``/``in_call`` fields exactly (mirrors the
+    ``VoiceContextStore``/``UserFactsContextStore`` Protocol convention above); a test fake only
+    needs to satisfy this shape, never import ``CurrentActivity`` itself. Declared as read-only
+    properties (this function only ever reads them) so both a plain mutable dataclass field
+    (``CurrentActivity``) and a raising ``@property`` test fake satisfy it structurally."""
+
+    @property
+    def app(self) -> str | None: ...
+
+    @property
+    def title(self) -> str | None: ...
+
+    @property
+    def in_call(self) -> bool: ...
 
 
 def build_voice_context(
@@ -155,6 +185,37 @@ def build_user_facts_context(store: UserFactsContextStore | None) -> dict[str, s
     return {"known_user_context": rendered}
 
 
+def build_current_activity_context(current_activity: ActivitySnapshot | None) -> dict[str, str]:
+    """Return AT MOST ``{"current_activity": "<app> - <title>"}`` (TK-311, DEC-68(d)(1)), with
+    `` (in a call)`` appended when ``in_call`` is true, truncated at ``_MAX_ACTIVITY_CHARS``.
+
+    ``current_activity`` is ``None`` (collector absent/toggle off): returns ``{}`` immediately, no
+    read, no warning. A stale/absent snapshot — ``app`` or ``title`` is ``None``, the collector's
+    own closed-segment state — contributes NO key (never an empty string). ANY exception raised
+    reading the snapshot's fields degrades to ``{}`` plus exactly ONE loud warning (CON-3 parity
+    with ``build_voice_context``/``build_user_facts_context``).
+    """
+    if current_activity is None:
+        return {}
+    try:
+        app = current_activity.app
+        title = current_activity.title
+        in_call = current_activity.in_call
+    except Exception:
+        logger.warning(
+            "build_current_activity_context: snapshot read raised — proceeding with no "
+            "current-activity payload",
+            exc_info=True,
+        )
+        return {}
+    if app is None or title is None:
+        return {}
+    line = f"{app} - {title}"
+    if in_call:
+        line += " (in a call)"
+    return {"current_activity": line[:_MAX_ACTIVITY_CHARS]}
+
+
 def _gcal_line(row: dict[str, Any], tz: ZoneInfo) -> str:
     """One compact line for a gcal row's ``payload`` (the raw ``CalendarEvent.to_payload``
     shape: ``event_id``/``title``/``start``/``end``/``all_day``)."""
@@ -195,8 +256,10 @@ def _render(lines: Iterable[str], *, max_items: int, max_chars: int) -> str:
 
 
 __all__ = [
+    "ActivitySnapshot",
     "UserFactsContextStore",
     "VoiceContextStore",
+    "build_current_activity_context",
     "build_user_facts_context",
     "build_voice_context",
 ]

@@ -480,9 +480,11 @@ async def test_ac4_chat_turn_degrade_renders_template_line_exactly_as_today() ->
 
 # --- REPAIR (batch review, TK-293 x TK-296): a chat degrade must not leak the grounding-only
 # fields context_hook stamps (known_user_context/context_calendar_today/context_recent_email/
-# replying_to) verbatim to the user, even though the model-facing prompt still needs to see them
-# (voice is shielded downstream by SpeechShapeStage's DEC-55c never-verbatim; typed chat is not —
-# ChatReplyStage resolves this stage's degrade text straight to the chat pane, unshaped). --------
+# replying_to/current_activity) verbatim to the user, even though the model-facing prompt still
+# needs to see them (voice is shielded downstream by SpeechShapeStage's DEC-55c never-verbatim;
+# typed chat is not — ChatReplyStage resolves this stage's degrade text straight to the chat pane,
+# unshaped). current_activity (TK-311, DEC-68(d)(1)) folded into the SAME fixture/test rather than
+# a new one — it is stamped by the SAME closure and must pass through the SAME filter. -----------
 
 _GROUNDED_CHAT_PAYLOAD: dict[str, Any] = {
     "text": "hey",
@@ -490,6 +492,7 @@ _GROUNDED_CHAT_PAYLOAD: dict[str, Any] = {
     "context_calendar_today": "09:00 Therapy appointment",
     "context_recent_email": "Re: divorce paperwork - lawyer@example.com",
     "replying_to": "sure, want me to book it?",
+    "current_activity": "notepad.exe - Untitled - Notepad",
 }
 
 
@@ -516,6 +519,8 @@ async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_t
     assert "context_calendar_today: 09:00 Therapy appointment" in user_msg.content
     assert "context_recent_email: Re: divorce paperwork - lawyer@example.com" in user_msg.content
     assert "replying_to: sure, want me to book it?" in user_msg.content
+    # AC1 (TK-311, DEC-68(d)(1)): the one-line current_activity reaches the prompt too, within cap.
+    assert "current_activity: notepad.exe - Untitled - Notepad" in user_msg.content
 
     # but the DEGRADED reply text — what ChatReplyStage resolves verbatim to the typed chat pane
     # — never echoes any grounding field back.
@@ -526,6 +531,7 @@ async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_t
     assert "Therapy appointment" not in text
     assert "divorce paperwork" not in text
     assert "sure, want me to book it?" not in text
+    assert "notepad.exe" not in text
     # the item's own genuine content still renders — the fix isn't a black hole, just a filter.
     assert text == TemplateComposer().render(ItemKind.CHAT, {"text": "hey"})
 
@@ -536,11 +542,12 @@ async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_t
 
 def test_grounding_only_keys_pinned_to_the_exact_context_hook_stampable_set() -> None:
     """``_GROUNDING_ONLY_KEYS`` must equal EXACTLY the keys ``assemble_runtime``'s shared
-    ``asr_context_hook`` closure can stamp onto a chat payload: ``replying_to`` (TK-289) plus
-    ``known_user_context``/``context_calendar_today``/``context_recent_email`` (TK-290/TK-296).
-    A future fifth grounding key added to that closure without a matching addition here would
-    silently reopen the v2.165 degrade leak (a grounding field dumped verbatim to the typed chat
-    pane) — this test is the structural tripwire."""
+    ``asr_context_hook`` closure can stamp onto a chat payload: ``replying_to`` (TK-289),
+    ``known_user_context``/``context_calendar_today``/``context_recent_email`` (TK-290/TK-296),
+    and now ``current_activity`` (TK-311, DEC-68(d)(1)) — the FIVE-key set, grown DELIBERATELY.
+    This pin exists precisely so a future grounding key added to that closure without a matching
+    addition here fails loudly instead of silently reopening the v2.165 degrade leak (a grounding
+    field dumped verbatim to the typed chat pane) — TK-311 cites this test per its briefing."""
 
     assert frozenset(
         {
@@ -548,6 +555,7 @@ def test_grounding_only_keys_pinned_to_the_exact_context_hook_stampable_set() ->
             "known_user_context",
             "context_calendar_today",
             "context_recent_email",
+            "current_activity",
         }
     ) == _GROUNDING_ONLY_KEYS
 
