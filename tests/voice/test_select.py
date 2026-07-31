@@ -25,6 +25,10 @@ leak into a test process.
       ``test_cloud_stt_absent_voice_cloud_extra_falls_back_to_local_with_loud_log``,
       ``test_boot_never_fails_for_a_cloud_voice_misconfiguration``.
 
+TK-326 (DEC-71a/DEC-72a) — the fish branch threads ``config.wombat_fish_model`` into the adapter's
+``model`` ctor param; deepgram/elevenlabs/local paths are byte-untouched:
+    ``test_cloud_tts_fish_provider_threads_configured_model_into_adapter``.
+
 TK-217 (CR4-1) — the failed-local-fallback warning is contextualized when it fills the fallback
 slot of an already-healthy cloud primary (never claims voice is disabled when the cloud primary
 still works), while the local-primary path's exact historical message is byte-preserved:
@@ -172,11 +176,16 @@ class _RaisingCloudTranscriber:
 
 class _RecordingCloudTTS:
     """A cloud TTS stand-in that succeeds — matches every real cloud TTS class's constructor
-    shape (``api_key`` positional, ``voice_id`` optional keyword)."""
+    shape (``api_key`` positional, ``voice_id``/``model`` optional keyword; TK-326 widens the
+    real ``FishAudioTTSAdapter`` to a REQUIRED ``model``, but this generic fake keeps it optional
+    so it still stands in for deepgram/elevenlabs, whose ctors never take one)."""
 
-    def __init__(self, api_key: str, *, voice_id: str | None = None) -> None:
+    def __init__(
+        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+    ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
+        self.model = model
 
     def speak(self, text: str) -> None:
         pass
@@ -186,7 +195,9 @@ class _RaisingCloudTTS:
     """A cloud TTS stand-in that constructs fine but raises on every ``speak`` call — exercises
     the mid-call primary-failure fallback path (AC2)."""
 
-    def __init__(self, api_key: str, *, voice_id: str | None = None) -> None:
+    def __init__(
+        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+    ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
 
@@ -446,6 +457,27 @@ def test_cloud_stt_absent_voice_cloud_extra_falls_back_to_local_with_loud_log(
 
     assert isinstance(transcriber, _FakeLocalTranscriber)
     assert "voice-cloud" in caplog.text.lower()
+
+
+def test_cloud_tts_fish_provider_threads_configured_model_into_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-326 (DEC-71a/DEC-72a): ``config.wombat_fish_model`` reaches the fish adapter's ``model``
+    ctor param; the deepgram/elevenlabs branches never receive it (asserted structurally by the
+    generic ``_RecordingCloudTTS`` fake's ``model`` defaulting to ``None`` everywhere else)."""
+    monkeypatch.setattr(select_module, "FishAudioTTSAdapter", _RecordingCloudTTS)
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
+    config = _config(
+        wombat_tts_provider="fish", wombat_tts_voice_id="voice-123", wombat_fish_model="s1"
+    )
+
+    adapter = build_tts_adapter(config, key_store=store)
+
+    assert isinstance(adapter, FallbackTTSAdapter)
+    primary = adapter._primary
+    assert isinstance(primary, _RecordingCloudTTS)
+    assert primary.model == "s1"
 
 
 class _FakeEnqueuer:

@@ -684,3 +684,12 @@ Jim's direction (ISS-34, verbatim on the record): "screenpipe sounds like what i
 **Ruling r2 (leveling + ports):** L1 326∥327, L2 328, L3 329; throwaway-pg 5452/5453/5454/5455; live pg 5436 never contacted.
 
 **Seams re-verified live for the briefings:** no model header sent today (tts.py:96-109); the `[break] (see below)` adjacency genuinely rejects via the link pattern (speech_shape.py:136); instruction built once at ctor (speech_shape.py:275); `_shape_speech_text` (:143) is the one validator seam; FallbackTTSAdapter fallback branch (select.py:88-97) is the one strip site; full-replies path stays DEF-18 tag-free, untouched.
+
+
+## 2026-07-31 — TK-326 done (contract v2.188): Fish engine pin landed; batch-verify pending
+
+**TK-326 flipped done (board 243/250), committed as its own commit with the code.** The three-edit shape landed exactly per v2.183/v2.187: config.py gains `wombat_fish_model` (Literal s1/s2-pro/s2.1-pro/s2.1-pro-free, default `s2.1-pro`, operator env-tier, deliberately NOT in APP_EDITABLE_FIELDS, docstring names `s2.1-pro-free` as the zero-credit variant, restart-tier); `FishAudioTTSAdapter` gains a keyword-only required `model` ctor param and `speak()` now sends the `model` HTTP header beside the untouched Authorization header (JSON body byte-identical — the DEC-72a undefined-default-engine gap is closed); `_construct_cloud_tts` threads `config.wombat_fish_model` into the fish branch only (elevenlabs/deepgram/local byte-untouched).
+
+**Scope normalization (within authority):** `tests/voice/test_egress_lesion.py` joined files_in_scope — its fakes construct the real adapter ctor, so the new required kwarg broke 3 lesion tests collaterally; fake shapes fixed only, egress assertions unchanged, and the lesion suite now re-proves one-POST/no-new-egress with the header present (DEC-71j held: one header on the existing DEC-28 opt-in Fish POST, zero new egress class).
+
+**Bar:** builder self-ran full quality bar — targeted 72/15 pg-skips, egress lesion 6 passed post-fix, full suite 2143 passed / 131 skipped (all pg) twice; architect re-ran the full suite green immediately before commit. **Batch-verify pending** — the single whole-batch Opus review runs after TK-327..329 land (v2 cadence); this records builder-green, not independent verification. validate PASS (316/269); gate_check analyze PASS. Remaining in batch: TK-327 (L1, parallel), TK-328 (L2), TK-329 (L3), then the DEC-73 streaming batch TK-330..333 closes the board at 250/250.

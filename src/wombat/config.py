@@ -291,6 +291,17 @@ class WombatConfig(BaseSettings):
     wombat_elevenlabs_api_key: SecretStr | None = None
     wombat_deepgram_api_key: SecretStr | None = None
     wombat_fish_api_key: SecretStr | None = None
+
+    # OPTIONAL (TK-326, DEC-71a/DEC-72a): pins the Fish Audio TTS engine version — sent as the
+    # ``model`` HTTP header on every Fish TTS POST (``FishAudioTTSAdapter.speak``, which never
+    # sent this header before this ticket). An operator .env-tier field, deliberately NOT in
+    # APP_EDITABLE_FIELDS (the ``wombat_screenpipe_url`` precedent: engine-version custody is a
+    # launch-time process-wiring concern, not a settings-UI preference). ``s2.1-pro-free`` is the
+    # zero-credit free-tier variant of the same bracket-grammar model family as the default
+    # ``s2.1-pro``. The vocabulary is closed (a ``Literal``) and enforced at boot: an
+    # unrecognized value fails ``load_config`` loudly, naming ``WOMBAT_FISH_MODEL``. Restart-tier
+    # (no hot-apply).
+    wombat_fish_model: Literal["s1", "s2-pro", "s2.1-pro", "s2.1-pro-free"] = "s2.1-pro"
     wombat_assistant_name: str = "Steward"
     # TK-292 (DEC-65a/c): the CHAT mouth's second name slot — "" (the default) means unset;
     # ClauseAlgebraStrategy/LivePersona fall back to "the user" when rendering CHAT.

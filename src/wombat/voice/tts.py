@@ -15,12 +15,13 @@ selecting a provider's key and voice is TK-193's job entirely. Jim's real Fish A
 only to the future env/keyring-gated live smoke.
 
 ``speak()`` makes ONE POST to the Fish Audio TTS endpoint (``FISH_AUDIO_TTS_URL``, a best-effort
-pin per Q-104) with header ``Authorization: Bearer <api_key>`` and a JSON body carrying ``text``,
-``reference_id`` (the configured ``voice_id``), and ``format: "wav"``. The response body is the
-raw WAV audio bytes, played back via ONE ``player.play(...)`` call. ANY transport or player
-failure RAISES — this module never catches: ``SpeakSink``'s existing broad-except path (CON-3,
-``src/wombat/sinks/speak.py``) is what converts an adapter failure into a terminal ``Degraded``
-without disturbing the already-composed/journaled text.
+pin per Q-104) with headers ``Authorization: Bearer <api_key>`` and ``model: <model>`` (TK-326,
+DEC-71a/DEC-72a — pins the Fish engine version; the adapter never sent this header before) and a
+JSON body carrying ``text``, ``reference_id`` (the configured ``voice_id``), and ``format: "wav"``.
+The response body is the raw WAV audio bytes, played back via ONE ``player.play(...)`` call. ANY
+transport or player failure RAISES — this module never catches: ``SpeakSink``'s existing
+broad-except path (CON-3, ``src/wombat/sinks/speak.py``) is what converts an adapter failure into
+a terminal ``Degraded`` without disturbing the already-composed/journaled text.
 
 The default ``transport`` is a lazily-constructed ``HttpxVoiceTransport`` and the default
 ``player`` is a lazily-constructed ``WinsoundPlayer`` (both built at
@@ -83,11 +84,13 @@ class FishAudioTTSAdapter:
         api_key: str,
         *,
         voice_id: str,
+        model: str,
         transport: VoiceTransport | None = None,
         player: AudioPlayer | None = None,
     ) -> None:
         self._api_key = api_key
         self._voice_id = voice_id
+        self._model = model
         self._transport: VoiceTransport = (
             transport if transport is not None else HttpxVoiceTransport()
         )
@@ -97,7 +100,7 @@ class FishAudioTTSAdapter:
         """Speak ``text`` via ONE Fish Audio TTS POST followed by ONE playback call. Raises on a
         transport failure (``VoiceTransportError``, non-2xx response) or a player failure —
         never caught here; ``SpeakSink`` owns the degrade (CON-3)."""
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {"Authorization": f"Bearer {self._api_key}", "model": self._model}
         json_body: dict[str, object] = {
             "text": text,
             "reference_id": self._voice_id,

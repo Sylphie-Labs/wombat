@@ -176,11 +176,16 @@ class _AbsentLocalTTS:
 
 class _RaisingCloudTTS:
     """A cloud TTS stand-in that constructs fine but raises on every ``speak()`` call — the
-    mid-call cloud-outage path (AC3)."""
+    mid-call cloud-outage path (AC3). ``model`` is optional (TK-326 widens the real
+    ``FishAudioTTSAdapter`` to a REQUIRED ``model``; this generic fake keeps it optional so it
+    still stands in for deepgram/elevenlabs, whose ctors never take one)."""
 
-    def __init__(self, api_key: str, *, voice_id: str | None = None) -> None:
+    def __init__(
+        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+    ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
+        self.model = model
 
     def speak(self, text: str) -> None:
         raise RuntimeError("cloud TTS exploded mid-call")

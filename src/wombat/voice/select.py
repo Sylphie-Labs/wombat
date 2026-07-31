@@ -183,14 +183,20 @@ def _construct_cloud_transcriber(provider: str, api_key: str, config: WombatConf
     return FishAudioTranscriber(api_key)
 
 
-def _construct_cloud_tts(provider: str, api_key: str, voice_id: str | None) -> TTSAdapter:
+def _construct_cloud_tts(
+    provider: str, api_key: str, voice_id: str | None, config: WombatConfig
+) -> TTSAdapter:
     """Construct the named cloud ``TTSAdapter`` (plain constructor args only, Q-104). Raises
     ``ImportError`` when the ``voice-cloud`` extra is not installed. ``voice_id`` is REQUIRED for
     fish/elevenlabs (checked by the caller before this is reached) and OPTIONAL for deepgram
-    (``DeepgramAuraTTSAdapter`` applies its own ``DEEPGRAM_AURA_DEFAULT_MODEL`` default)."""
+    (``DeepgramAuraTTSAdapter`` applies its own ``DEEPGRAM_AURA_DEFAULT_MODEL`` default).
+
+    TK-326 (DEC-71a/DEC-72a): the fish branch also threads ``config.wombat_fish_model`` into the
+    adapter's ``model`` ctor param, pinning the Fish engine version on every TTS POST — the
+    elevenlabs/deepgram branches below are byte-untouched."""
     if provider == "fish":
         assert voice_id is not None, "fish TTS requires voice_id (checked by the caller)"
-        return FishAudioTTSAdapter(api_key, voice_id=voice_id)
+        return FishAudioTTSAdapter(api_key, voice_id=voice_id, model=config.wombat_fish_model)
     if provider == "elevenlabs":
         assert voice_id is not None, "elevenlabs TTS requires voice_id (checked by the caller)"
         return ElevenLabsTTSAdapter(api_key, voice_id=voice_id)
@@ -266,7 +272,7 @@ def build_tts_adapter(
         return _build_local_tts(config)
 
     try:
-        primary: TTSAdapter = _construct_cloud_tts(provider, key, voice_id)
+        primary: TTSAdapter = _construct_cloud_tts(provider, key, voice_id, config)
     except ImportError:
         logger.warning(
             "voice: cloud TTS provider %r selected but the 'voice-cloud' extra is not "

@@ -1037,6 +1037,40 @@ def test_load_config_env_wins_over_true_pg_row_for_speak_full_replies(
     assert config.wombat_speak_full_replies is False
 
 
+# --- TK-326 (DEC-71a/DEC-72a): wombat_fish_model pins the Fish engine version, operator .env-tier
+# --- (deliberately NOT app-editable — the wombat_screenpipe_url precedent) ---------------------
+
+
+def test_wombat_fish_model_defaults_to_s21_pro() -> None:
+    """AC1: fresh install (no env) -> 's2.1-pro'; the field is deliberately NOT app-editable."""
+    config = WombatConfig(deepseek_api_key="k", deepseek_base_url="https://example.invalid")
+    assert config.wombat_fish_model == "s2.1-pro"
+    assert "wombat_fish_model" not in APP_EDITABLE_FIELDS
+
+
+def test_load_config_rejects_unknown_fish_model_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_FISH_MODEL", "s3-ultra")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_FISH_MODEL" in str(exc_info.value)
+
+
+def test_wombat_fish_model_docstring_names_the_free_variant() -> None:
+    """Structural check the briefing calls for: the field's docstring/comment must name
+    ``s2.1-pro-free`` as the zero-credit free-tier variant of the same bracket-grammar family."""
+    source = inspect.getsource(config_module)
+    comment_start = source.index("TK-326")
+    comment_block = source[comment_start : comment_start + 900]
+    assert "s2.1-pro-free" in comment_block
+    assert "zero-credit" in comment_block or "free-tier" in comment_block
+
+
 # --- TK-241 AC5 (v2.64): suite hermeticity — closes the CLASS of collection-time DB hazards ---
 
 

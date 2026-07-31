@@ -10,6 +10,11 @@ AC3 (clean-checkout import bar / lazy httpx+winsound): ``test_tts_module_imports
 installed``, ``test_fish_audio_tts_adapter_construction_with_default_transport_raises_without_
 httpx``.
 
+TK-326 (DEC-71a/DEC-72a): every construction now passes ``model="s2.1-pro"`` — the request-shape
+assertion in ``test_speak_sends_expected_request_and_plays_returned_bytes_exactly_once`` proves the
+``model`` HTTP header rides alongside the untouched ``Authorization`` header and the JSON body
+stays byte-identical.
+
 Every test rides a fake ``VoiceTransport`` + fake ``AudioPlayer`` — ZERO live network calls and
 ZERO real audio playback (DEF-7).
 """
@@ -113,7 +118,11 @@ def test_speak_sends_expected_request_and_plays_returned_bytes_exactly_once() ->
     transport = _RecordingFakeTransport()
     player = _RecordingFakePlayer()
     adapter = FishAudioTTSAdapter(
-        "fish-secret", voice_id="voice-abc123", transport=transport, player=player
+        "fish-secret",
+        voice_id="voice-abc123",
+        model="s2.1-pro",
+        transport=transport,
+        player=player,
     )
 
     adapter.speak("You have a new alert.")
@@ -121,7 +130,7 @@ def test_speak_sends_expected_request_and_plays_returned_bytes_exactly_once() ->
     assert len(transport.calls) == 1
     call = transport.calls[0]
     assert call["url"] == FISH_AUDIO_TTS_URL
-    assert call["headers"] == {"Authorization": "Bearer fish-secret"}
+    assert call["headers"] == {"Authorization": "Bearer fish-secret", "model": "s2.1-pro"}
     assert call["json"] == {
         "text": "You have a new alert.",
         "reference_id": "voice-abc123",
@@ -136,7 +145,11 @@ def test_fish_audio_tts_adapter_satisfies_ttsadapter_protocol() -> None:
     transport = _RecordingFakeTransport()
     player = _RecordingFakePlayer()
     adapter: TTSAdapter = FishAudioTTSAdapter(
-        "fish-secret", voice_id="voice-abc123", transport=transport, player=player
+        "fish-secret",
+        voice_id="voice-abc123",
+        model="s2.1-pro",
+        transport=transport,
+        player=player,
     )
     adapter.speak("hello")
     assert player.calls == [_WAV_BYTES]
@@ -160,7 +173,11 @@ def test_speak_raises_on_transport_or_player_failure(
     transport: VoiceTransport, player: _RecordingFakePlayer | _RaisingFakePlayer
 ) -> None:
     adapter = FishAudioTTSAdapter(
-        "fish-secret", voice_id="voice-abc123", transport=transport, player=player
+        "fish-secret",
+        voice_id="voice-abc123",
+        model="s2.1-pro",
+        transport=transport,
+        player=player,
     )
     with pytest.raises(Exception):  # noqa: B017 — either VoiceTransportError or RuntimeError
         adapter.speak("hello")
@@ -199,7 +216,11 @@ async def test_speak_sink_degrades_to_terminal_on_adapter_failure_text_unaffecte
     or player fails degrades to a terminal ``Degraded(to=None)`` carrying ``spoken=False,
     degraded=True`` — the composed text itself is untouched (TK-165 parity, CON-3)."""
     adapter = FishAudioTTSAdapter(
-        "fish-secret", voice_id="voice-abc123", transport=transport, player=player
+        "fish-secret",
+        voice_id="voice-abc123",
+        model="s2.1-pro",
+        transport=transport,
+        player=player,
     )
     stage = SpeakSink(voice_enabled=True, adapter=adapter)
     compose_artifact = _composed_output_artifact()
@@ -262,5 +283,8 @@ def test_fish_audio_tts_adapter_construction_with_default_transport_raises_witho
     _simulate_absent(monkeypatch, "httpx")
     with pytest.raises(ImportError):
         FishAudioTTSAdapter(
-            "fish-secret", voice_id="voice-abc123", player=_RecordingFakePlayer()
+            "fish-secret",
+            voice_id="voice-abc123",
+            model="s2.1-pro",
+            player=_RecordingFakePlayer(),
         )
