@@ -3,7 +3,9 @@ EP-37, DEC-66 first ticket).
 
 Inserted into the ``wombat.dream`` graph immediately after ``dream_facts`` (TK-297) — the same
 mechanical splice TK-297 made between ``dream_persona`` and ``dream_behavior_log``
-(``pathways/dream_pathway.py``): ``dream_facts`` -> ``dream_derive`` -> ``dream_behavior_log``.
+(``pathways/dream_pathway.py``): ``dream_facts`` -> ``dream_derive`` -> ``dream_observe``
+(TK-314's ledger-distillation pass, this stage's downstream neighbor since it was spliced in
+between ``dream_derive`` and ``dream_behavior_log``) -> ``dream_behavior_log``.
 
 Keyword-injected collaborators only (``DreamFactsStage`` precedent): ``external_items`` is
 ``wombat.external_store.ExternalItemStore`` (TK-244/TK-245), this stage's ONLY read path;
@@ -230,7 +232,7 @@ class DreamDeriveStage:
     full read/derive/cap/write contract."""
 
     name: str = "dream_derive"
-    transitions: tuple[str, ...] = ("dream_behavior_log",)
+    transitions: tuple[str, ...] = ("dream_observe",)
 
     def __init__(
         self,
@@ -318,7 +320,7 @@ class DreamDeriveStage:
                         logger.info("dream_derive: accepted new fact fact_key=%s", fact_key)
 
         return Transition(
-            to="dream_behavior_log",
+            to="dream_observe",
             output=Artifact(
                 kind=DREAM_DERIVE_REPORT_KIND,
                 produced_by=self.name,

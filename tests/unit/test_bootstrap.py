@@ -28,6 +28,7 @@ from pydantic import SecretStr
 import wombat.sources.bootstrap as sources_bootstrap_module
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
+from wombat.behavior.stages.dream_observe import DreamObserveStage
 from wombat.bootstrap import (
     _ENGINE_MAX_STEPS,
     MODEL_PROFILE,
@@ -1863,3 +1864,51 @@ def test_observe_screen_toggle_true_constructs_the_wired_screen_collector_trio()
     assert isinstance(bundle.screen_collector, ScreenActivityCollector)
     assert bundle.screen_collector._store is bundle.observation_store
     assert bundle.screen_collector._current_activity is bundle.current_activity
+
+
+# --- TK-314 (DEC-68(d)(2)): dream_observe splices into the dream graph unconditionally ---------
+
+
+def test_tk314_dream_observe_splices_between_derive_and_behavior_log_none_store_when_off() -> None:
+    """The dream graph carries ``dream_observe`` between ``dream_derive`` and
+    ``dream_behavior_log`` REGARDLESS of the observe toggles (the graph shape is pinned;
+    structural inertness lives in the collectors) — and on a default toggle-off boot the stage's
+    injected ``observations`` is ``None`` (its own one-WARNING nightly no-op degrade shape)."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    dream_graph = bundle.pathways.get(bundle.dream_pathway_id)
+    derive_stage = dream_graph.get("dream_derive")
+    observe_stage = dream_graph.get("dream_observe")
+    assert isinstance(observe_stage, DreamObserveStage)
+    assert derive_stage.transitions == ("dream_observe",)
+    assert observe_stage.transitions == ("dream_behavior_log",)
+    assert observe_stage._observations is None  # toggles off => no store, by construction
+
+
+def test_tk314_dream_observe_reads_the_same_toggle_gated_observation_store() -> None:
+    """With an observe toggle on, ``dream_observe`` is wired over the SAME ``observation_store``
+    instance the collectors write (never a second, independently-constructed store)."""
+    op = load_operating_params()
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_observe_screen=True,
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    dream_graph = bundle.pathways.get(bundle.dream_pathway_id)
+    observe_stage = dream_graph.get("dream_observe")
+    assert isinstance(observe_stage, DreamObserveStage)
+    assert bundle.observation_store is not None
+    assert observe_stage._observations is bundle.observation_store

@@ -212,6 +212,28 @@ class _PassthroughDeriveStage:
     out of scope for the TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_derive"
+    transitions: tuple[str, ...] = ("dream_observe",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_observe",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughObserveStage:
+    """TK-314 mechanical reshape (flagged per the ticket's own sanction): ``wombat.dream``'s new
+    ``dream_observe`` stage — always transitions straight onward; it carries none of
+    ``DreamObserveStage``'s own ledger-distillation behavior (TK-314 owns that, out of scope for
+    the TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_observe"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -360,6 +382,7 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
             _PassthroughPersonaStage(),
             _PassthroughFactsStage(),
             _PassthroughDeriveStage(),
+            _PassthroughObserveStage(),
             _PassthroughBehaviorLogStage(),
             _PassthroughWindowStage(),
             _PassthroughPatternStage(),

@@ -170,13 +170,35 @@ class _PassthroughDeriveStage:
     owns its own acceptance criteria in ``tests/behavior/test_dream_derive.py``)."""
 
     name: str = "dream_derive"
+    transitions: tuple[str, ...] = ("dream_observe",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_observe",
+            output=Artifact(
+                kind="wombat.dream_derive_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={"new_facts": 0},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughObserveStage:
+    """TK-314 mechanical reshape (flagged per the ticket's own sanction): a trivial
+    always-transitions-onward double standing in for ``DreamObserveStage`` — this module's ACs are
+    about the outcome pass, never touching an ``ObservationStore``/``UserFactsStore`` here (TK-314
+    owns its own acceptance criteria in ``tests/behavior/test_dream_observe.py``)."""
+
+    name: str = "dream_observe"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_behavior_log",
             output=Artifact(
-                kind="wombat.dream_derive_report",
+                kind="wombat.dream_observe_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={"new_facts": 0},
@@ -290,6 +312,7 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
         _PassthroughPersonaStage(),
         _PassthroughFactsStage(),
         _PassthroughDeriveStage(),
+        _PassthroughObserveStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),

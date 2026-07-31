@@ -186,7 +186,7 @@ async def test_ac1_qualifying_rows_land_exactly_two_facts_scatter_yields_nothing
     result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_observe"
     assert result.output.data == {"new_facts": 2}
 
     assert len(upsert_calls) == 2
@@ -254,7 +254,7 @@ async def test_ac3_empty_store_is_the_ordinary_case_zero_writes_no_error(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_observe"
     assert result.output.data == {"new_facts": 0}
     assert upsert_calls == []
     assert not any(r.levelno == logging.ERROR for r in caplog.records)
@@ -271,7 +271,7 @@ async def test_ac3_none_external_items_store_is_caught_loud_and_still_transition
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_observe"
     assert result.output.data == {"new_facts": 0}
     assert any(r.levelno == logging.ERROR for r in caplog.records)
 
@@ -291,7 +291,7 @@ async def test_ac3_raising_get_window_for_both_sources_is_caught_loud_and_still_
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_observe"
     assert result.output.data == {"new_facts": 0}
     assert upsert_calls == []
     error_messages = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
@@ -313,7 +313,7 @@ async def test_ac3_none_user_facts_store_skips_all_writes_loud_and_still_transit
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_observe"
     assert result.output.data == {"new_facts": 0}
     assert any(r.levelno == logging.ERROR for r in caplog.records)
 
@@ -338,7 +338,7 @@ async def test_ac3_raising_upsert_fact_mid_batch_loses_only_that_one_fact(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_observe"
     # Two candidates total (one meeting, one correspondent); the first upsert call raised, the
     # second still landed — new_facts counts only the SUCCESSFUL upsert.
     assert result.output.data == {"new_facts": 1}

@@ -44,6 +44,7 @@ from wombat.behavior.event_log import BehaviorEventLog
 from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
 from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
+from wombat.behavior.stages.dream_observe import DreamObserveStage
 from wombat.behavior.stages.pattern_detector import PatternDetectorStage
 from wombat.behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from wombat.chat_turns import ChatTurnStore
@@ -160,7 +161,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
-        # TK-297: the graph AC — the run walked all nine stages, in order, COMPLETED.
+        # TK-297/TK-314: the graph AC — the run walked all eleven stages, in order, COMPLETED.
         assert [step.stage_name for step in dream_state.steps] == [
             "dream_consolidate",
             "dream_outcome",
@@ -168,6 +169,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
             "dream_persona",
             "dream_facts",
             "dream_derive",
+            "dream_observe",
             "dream_behavior_log",
             "dream_window",
             "dream_pattern",
@@ -276,8 +278,8 @@ def _build_stack_with_raising_dream(
     )
 
     # Never reached (the entry always raises first) — throwaway stub outcome/tune/persona/facts/
-    # derive/behavior_log/window/pattern stages merely satisfy build_dream_pathway's now-required
-    # args (TK-47/TK-49/TK-214/TK-297/TK-299/TK-111/TK-112/TK-113 reshape).
+    # derive/observe/behavior_log/window/pattern stages merely satisfy build_dream_pathway's
+    # now-required args (TK-47/TK-49/TK-214/TK-297/TK-299/TK-314/TK-111/TK-112/TK-113 reshape).
     stub_entity_kg = InMemoryEntityKG()
     stub_writer = ObservationWriter(
         entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
@@ -308,6 +310,9 @@ def _build_stack_with_raising_dream(
     stub_derive_stage = DreamDeriveStage(
         external_items=None, user_facts=UserFactsStore(_DSN), tz=ZoneInfo("UTC")
     )
+    stub_observe_stage = DreamObserveStage(
+        observations=None, user_facts=UserFactsStore(_DSN), tz=ZoneInfo("UTC")
+    )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
@@ -328,6 +333,7 @@ def _build_stack_with_raising_dream(
         stub_persona_stage,
         stub_facts_stage,
         stub_derive_stage,
+        stub_observe_stage,
         stub_behavior_log_stage,
         stub_window_stage,
         stub_pattern_stage,

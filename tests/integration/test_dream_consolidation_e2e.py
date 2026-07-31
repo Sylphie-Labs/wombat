@@ -207,13 +207,35 @@ class _PassthroughDeriveStage:
     has no DSN for)."""
 
     name: str = "dream_derive"
+    transitions: tuple[str, ...] = ("dream_observe",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_observe",
+            output=Artifact(
+                kind="wombat.dream_derive_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={"new_facts": 0},
+            ),
+        )
+
+
+class _PassthroughObserveStage:
+    """TK-314 mechanical reshape (flagged per the ticket's own sanction): ``build_dream_pathway``
+    now also requires an ``observe`` stage, inserted between ``derive`` and ``behavior_log`` —
+    this suite's own AC1-AC3 witnesses are all about ``DreamConsolidationStage``, so a trivial
+    always-transitions-onward double merely satisfies the shape without asserting anything about
+    it (a real ``DreamObserveStage``'s own ACs live in ``tests/behavior/test_dream_observe.py``)."""
+
+    name: str = "dream_observe"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_behavior_log",
             output=Artifact(
-                kind="wombat.dream_derive_report",
+                kind="wombat.dream_observe_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={"new_facts": 0},
@@ -376,6 +398,7 @@ async def test_ac1_drain_with_work_reflects_reconciler_merges_and_terminates() -
         _PassthroughPersonaStage(),
         _PassthroughFactsStage(),
         _PassthroughDeriveStage(),
+        _PassthroughObserveStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),
@@ -443,6 +466,7 @@ async def test_ac2_clean_night_terminates_in_one_pass_with_zero_model_calls(
         _PassthroughPersonaStage(),
         _PassthroughFactsStage(),
         _PassthroughDeriveStage(),
+        _PassthroughObserveStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),
@@ -502,6 +526,7 @@ async def test_ac3_extractor_stall_still_transitions_and_run_completes(
         _PassthroughPersonaStage(),
         _PassthroughFactsStage(),
         _PassthroughDeriveStage(),
+        _PassthroughObserveStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),

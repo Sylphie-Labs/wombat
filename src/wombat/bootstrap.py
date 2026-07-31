@@ -131,10 +131,22 @@ unchanged).
 
 TK-299 (EP-37, DEC-66): the dream graph's new ``dream_derive`` stage — ``DreamDeriveStage``
 (``build_dream_pathway``'s new ``derive`` arg), inserted between ``dream_facts`` and
-``dream_behavior_log`` — PURE CODE, no model call: composes over the SAME ``external_item_store``
-(TK-245) and ``user_facts_store`` (TK-294) instances built above (never a second connection to
-either table). No new ``RuntimeBundle`` field: like ``dream_facts_stage`` this stage owns no
-closeable resource of its own.
+``dream_behavior_log`` (later resplit by TK-314's ``dream_observe`` insertion between
+``dream_derive`` and ``dream_behavior_log``) — PURE CODE, no model call: composes over the SAME
+``external_item_store`` (TK-245) and ``user_facts_store`` (TK-294) instances built above (never a
+second connection to either table). No new ``RuntimeBundle`` field: like ``dream_facts_stage``
+this stage owns no closeable resource of its own.
+
+TK-314 (EP-37, DEC-68(d)(2)): the dream graph's new ``dream_observe`` stage — ``DreamObserveStage``
+(``build_dream_pathway``'s new ``observe`` arg), inserted between ``dream_derive`` and
+``dream_behavior_log`` — PURE CODE, no model call: composes over the SAME toggle-gated
+``observation_store`` the collectors write (the TK-310/TK-313 block, HOISTED above the dream-stage
+block for exactly this — behavior-neutral, the store is Q-46 fully-lazy and every downstream
+reference is a call-time closure) and the SAME ``user_facts_store`` the other distillation passes
+use. On a toggle-off boot ``observation_store`` is ``None`` and the stage degrades to a one-WARNING
+no-op each night — the graph shape is IDENTICAL either way (structural inertness lives in the
+collectors, not the graph). No new ``RuntimeBundle`` field: like ``dream_derive_stage`` this stage
+owns no closeable resource of its own.
 """
 
 from __future__ import annotations
@@ -170,6 +182,7 @@ from cogworx.testing.doubles import InMemoryEntityKG
 from .behavior.event_log import BehaviorEventLog
 from .behavior.stages.dream_derive import DreamDeriveStage
 from .behavior.stages.dream_facts import DreamFactsStage
+from .behavior.stages.dream_observe import DreamObserveStage
 from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.reflection_compose import ReflectionComposeStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
@@ -1311,6 +1324,50 @@ def assemble_runtime(
     # scratchpad_store precedent).
     chat_turn_store = ChatTurnStore(dsn)
 
+    # TK-310 (DEC-68(a)/(c)): the ambient-observability screen channel — constructed ONLY when
+    # config.wombat_observe_screen is true (structural inertness: toggle off leaves all three
+    # None, so no store/writes/polling ever happen). dsn is a required str here; ObservationStore
+    # is fully lazy (Q-46) — zero connection at construction either way.
+    #
+    # TK-313 (DEC-68(a)/(e)): observation_store/current_activity are now shared with the mic
+    # channel — constructed when EITHER toggle is true, since CurrentActivity is ONE single-slot
+    # snapshot object (app/title/in_call together) that both channels write into in place. Either
+    # toggle alone still leaves screen_collector/mic_probe themselves gated on their OWN flag.
+    #
+    # TK-314 HOIST: this block moved above the dream-stage block (it previously sat just before
+    # the RuntimeBundle return) so DreamObserveStage below can take observation_store directly —
+    # behavior-neutral: the store is fully lazy, and every earlier reference to current_activity
+    # (the gate's in-call wrapper, asr_context_hook) is a closure resolving at call time.
+    observation_store: ObservationStore | None = None
+    current_activity: CurrentActivity | None = None
+    screen_collector: ScreenActivityCollector | None = None
+    mic_probe: MicInCallProbe | None = None
+    if config.wombat_observe_screen or config.wombat_observe_mic:
+        observation_store = ObservationStore(dsn)
+        current_activity = CurrentActivity()
+    if config.wombat_observe_screen:
+        assert observation_store is not None and current_activity is not None, (
+            "assemble_runtime: wombat_observe_screen true must have constructed the shared "
+            "observation_store/current_activity pair above"
+        )
+        screen_collector = ScreenActivityCollector(
+            store=observation_store,
+            current_activity=current_activity,
+            tz=tz,
+            clock=_utc_now,
+        )
+    if config.wombat_observe_mic:
+        assert observation_store is not None and current_activity is not None, (
+            "assemble_runtime: wombat_observe_mic true must have constructed the shared "
+            "observation_store/current_activity pair above"
+        )
+        mic_probe = MicInCallProbe(
+            store=observation_store,
+            current_activity=current_activity,
+            tz=tz,
+            clock=_utc_now,
+        )
+
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both
     # DreamOutcomeStage's entity-KG reads and DreamConsolidationStage's sweepers are as harmless
     # on a Google-less/sink-less boot as the terminal scaffold was (no external deps beyond the
@@ -1377,6 +1434,16 @@ def assemble_runtime(
         user_facts=user_facts_store,
         tz=tz,
     )
+    # TK-314 (EP-37, DEC-68(d)(2)): DreamObserveStage over the SAME toggle-gated
+    # observation_store the collectors write (hoisted above — None on a toggle-off boot, where
+    # the stage degrades to a one-WARNING nightly no-op) and the SAME user_facts_store the other
+    # distillation passes use (never a second connection). UNCONDITIONAL splice — the graph
+    # shape is pinned identical whether or not the observe channels are on; pure code, no model.
+    dream_observe_stage = DreamObserveStage(
+        observations=observation_store,
+        user_facts=user_facts_store,
+        tz=tz,
+    )
 
     def _record_persona_feedback(
         token: FeedbackToken, event_key: str, timestamp: datetime
@@ -1431,6 +1498,7 @@ def assemble_runtime(
         dream_persona_stage,
         dream_facts_stage,
         dream_derive_stage,
+        dream_observe_stage,
         dream_behavior_log_stage,
         dream_window_stage,
         dream_pattern_stage,
@@ -1584,45 +1652,6 @@ def assemble_runtime(
     dream_schedule_graph = build_dream_schedule_pathway(dream_timer_stage)
     substrate.pathways.register(DREAM_SCHEDULE_PATHWAY_ID, dream_schedule_graph)
     dream_schedule_pathway_id: str | None = DREAM_SCHEDULE_PATHWAY_ID
-
-    # TK-310 (DEC-68(a)/(c)): the ambient-observability screen channel — constructed ONLY when
-    # config.wombat_observe_screen is true (structural inertness: toggle off leaves all three
-    # None, so no store/writes/polling ever happen). dsn is a required str here; ObservationStore
-    # is fully lazy (Q-46) — zero connection at construction either way.
-    #
-    # TK-313 (DEC-68(a)/(e)): observation_store/current_activity are now shared with the mic
-    # channel — constructed when EITHER toggle is true, since CurrentActivity is ONE single-slot
-    # snapshot object (app/title/in_call together) that both channels write into in place. Either
-    # toggle alone still leaves screen_collector/mic_probe themselves gated on their OWN flag.
-    observation_store: ObservationStore | None = None
-    current_activity: CurrentActivity | None = None
-    screen_collector: ScreenActivityCollector | None = None
-    mic_probe: MicInCallProbe | None = None
-    if config.wombat_observe_screen or config.wombat_observe_mic:
-        observation_store = ObservationStore(dsn)
-        current_activity = CurrentActivity()
-    if config.wombat_observe_screen:
-        assert observation_store is not None and current_activity is not None, (
-            "assemble_runtime: wombat_observe_screen true must have constructed the shared "
-            "observation_store/current_activity pair above"
-        )
-        screen_collector = ScreenActivityCollector(
-            store=observation_store,
-            current_activity=current_activity,
-            tz=tz,
-            clock=_utc_now,
-        )
-    if config.wombat_observe_mic:
-        assert observation_store is not None and current_activity is not None, (
-            "assemble_runtime: wombat_observe_mic true must have constructed the shared "
-            "observation_store/current_activity pair above"
-        )
-        mic_probe = MicInCallProbe(
-            store=observation_store,
-            current_activity=current_activity,
-            tz=tz,
-            clock=_utc_now,
-        )
 
     return RuntimeBundle(
         engine=engine,
