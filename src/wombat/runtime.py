@@ -116,7 +116,15 @@ def _read_params_overlay(dsn: str) -> dict[str, str]:
             exc_info=True,
         )
         return {}
-    return {key: str(value) for key, value in raw.items() if key in PARAMS_APP_EDITABLE}
+    # TK-315 (ISS-31 1): a deliberately-cleared setting (empty/None value) is not an error — drop
+    # it from the overlay silently so load_operating_params falls back to wombat_params.yaml for
+    # that key; genuinely-garbage (non-empty, invalid) values still overlay through and warn once
+    # in params.py, unchanged.
+    return {
+        key: str(value)
+        for key, value in raw.items()
+        if key in PARAMS_APP_EDITABLE and value is not None and str(value) != ""
+    }
 
 
 def _sweeper_clock(bundle: RuntimeBundle) -> Callable[[], datetime]:

@@ -417,6 +417,50 @@ async def test_assemble_runtime_gate_stage_holds_immediate_voice_during_quiet_ho
     assert out_of_window_decision == canned_decision
 
 
+async def test_assemble_runtime_gate_stage_quiet_hours_logs_only_on_state_change(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-315 (ISS-31 3): repeated in-window evaluates log the entering INFO exactly once, and
+    repeated out-of-window evaluates (after having been in-window) log the leaving INFO exactly
+    once -- hold decisions unaffected (proven by the sibling test above)."""
+    canned_decision = GateDecision(action=GateAction.HOLD, items=())
+
+    def _fake_make_gate_evaluator(**kwargs: object) -> object:
+        async def _evaluate(
+            items: list[GateItem], presence: PresenceSnapshot | None
+        ) -> GateDecision:
+            return canned_decision
+
+        return _evaluate
+
+    monkeypatch.setattr(bootstrap, "make_gate_evaluator", _fake_make_gate_evaluator)
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_quiet_hours_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = cast(GateStage, graph.get("gate"))
+    item = GateItem(item_id="i1", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    with caplog.at_level(logging.INFO):
+        monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(23, 0))
+        await stage._evaluate([item], _ACTIVE_PRESENCE)
+        await stage._evaluate([item], _ACTIVE_PRESENCE)
+        await stage._evaluate([item], _ACTIVE_PRESENCE)
+        assert sum("quiet hours active" in r.message for r in caplog.records) == 1
+
+        caplog.clear()
+        monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(12, 0))
+        await stage._evaluate([item], _ACTIVE_PRESENCE)
+        await stage._evaluate([item], _ACTIVE_PRESENCE)
+        assert sum("quiet hours ended" in r.message for r in caplog.records) == 1
+
+
 # --- TK-166 (CR-1, Q-83): replay_pending is the ONE eager-read boot-replay flag -----------------
 
 

@@ -957,6 +957,11 @@ def assemble_runtime(
         clock=_epoch_now,
     )
 
+    # TK-315 (ISS-31 3): mutable single-slot state so the wrapper below logs its INFO line only
+    # on a window state CHANGE, not on every evaluate pass (hold behavior itself is
+    # byte-unchanged — this only trims logging volume).
+    _quiet_hours_state: dict[str, bool] = {"active": False}
+
     async def _quiet_hours_gate_evaluate(
         items: list[GateItem], presence: PresenceSnapshot | None
     ) -> GateDecision:
@@ -966,15 +971,28 @@ def assemble_runtime(
         presence-first call site uses (``gate_stage.py``'s own ``make_gate_evaluator``) then
         degrades that to HOLD, pending set intact (reduce-only, CON-2/CON-3 clean). Out of
         window this is a byte-transparent passthrough — ``presence`` reaches the inner evaluator
-        unchanged."""
-        if in_quiet_hours(
+        unchanged.
+
+        TK-315 (ISS-31 3): the entering/leaving INFO line below fires ONLY on a window state
+        CHANGE (one INFO entering, one INFO leaving), not on every evaluate pass — hold behavior
+        is otherwise identical."""
+        now_active = in_quiet_hours(
             datetime.now(tz).time(), config.wombat_quiet_start, config.wombat_quiet_end
-        ):
+        )
+        if now_active and not _quiet_hours_state["active"]:
             logger.info(
                 "gate: quiet hours active (%s-%s); holding the immediate-voice arm",
                 config.wombat_quiet_start,
                 config.wombat_quiet_end,
             )
+        elif not now_active and _quiet_hours_state["active"]:
+            logger.info(
+                "gate: quiet hours ended (%s-%s); immediate-voice arm resumed",
+                config.wombat_quiet_start,
+                config.wombat_quiet_end,
+            )
+        _quiet_hours_state["active"] = now_active
+        if now_active:
             return await _inner_gate_evaluate(items, None)
         return await _inner_gate_evaluate(items, presence)
 

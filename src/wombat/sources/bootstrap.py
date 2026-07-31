@@ -439,7 +439,11 @@ def build_chat_turn_sink(
                 store.record_turn(str(text), voice, captured_at)
             except Exception:
                 logger.warning(
-                    "source %s: ChatTurnStore.record_turn raised — this turn is dropped from "
+                    # TK-315 (ISS-31 4): named for the actual failing phase — the try block
+                    # above covers BOTH field-projection parsing (e.g. a malformed
+                    # captured_at/received_at) and the store.record_turn call itself, so
+                    # "record_turn raised" mis-attributed parse failures to the store.
+                    "source %s: chat-turn parse-or-store failed — this turn is dropped from "
                     "the ledger, the event still enqueues unaffected",
                     source_id,
                     exc_info=True,

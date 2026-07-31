@@ -184,6 +184,29 @@ def test_read_params_overlay_filters_to_the_eight_keys_and_stringifies_values(
     assert fake.closed is True
 
 
+def test_read_params_overlay_drops_blank_valued_rows_silently(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-315 (ISS-31 1): a deliberately-cleared row (None or "") never reaches the overlay and
+    never warns -- a genuinely-garbage (non-blank) value still overlays through unfiltered (its
+    one WARNING is params.py's load_operating_params concern, out of scope here); valid rows
+    overlay exactly as before."""
+    fake = _FakeSettingsStoreForOverlay(
+        rows={
+            "wombat_param_morning_brief_time": "",
+            "wombat_param_nightly_dream_time": None,
+            "wombat_param_urgency_threshold": 0.8,
+        }
+    )
+    monkeypatch.setattr(runtime, "SettingsStore", lambda dsn: fake)
+
+    with caplog.at_level(logging.WARNING):
+        overlay = runtime._read_params_overlay(_FAKE_DSN)
+
+    assert overlay == {"wombat_param_urgency_threshold": "0.8"}
+    assert caplog.text == ""
+
+
 def test_read_params_overlay_degrades_to_empty_when_construction_raises(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

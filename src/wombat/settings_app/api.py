@@ -102,6 +102,12 @@ _KeyProvider = Literal["elevenlabs", "deepgram", "fish"]
 # rule below is a SEPARATE, PUT-body-level check).
 _HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
+# TK-315 (ISS-31 2): the seconds-bearing HH:MM:SS form, matching the stored convention used by
+# wombat_params.yaml (e.g. "08:30:00") and params._parse_time_of_day (time.fromisoformat). Mirrors
+# _HHMM_PATTERN's blank-is-valid posture — an empty string is how a PUT deliberately clears a
+# previously-set param row (runtime._read_params_overlay then silently drops it, TK-315 ISS-31 1).
+_HHMMSS_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$")
+
 _QUIET_HOURS_PAIRWISE_MESSAGE = (
     "wombat_quiet_start and wombat_quiet_end must both be set or both omitted in the same PUT"
 )
@@ -170,6 +176,16 @@ class SettingsUpdate(BaseModel):
             raise ValueError(f"must be \"HH:MM\" (24-hour, zero-padded) or empty, got {value!r}")
         return value
 
+    # TK-315 (ISS-31 2): _quiet_hours_format's precedent, seconds-bearing form.
+    @field_validator("wombat_param_morning_brief_time", "wombat_param_nightly_dream_time")
+    @classmethod
+    def _params_time_format(cls, value: str | None) -> str | None:
+        if value is not None and value != "" and not _HHMMSS_PATTERN.match(value):
+            raise ValueError(
+                f"must be \"HH:MM:SS\" (24-hour, zero-padded) or empty, got {value!r}"
+            )
+        return value
+
     # TK-304/TK-306 repair (DEC-67g): the pair-wise both-or-neither rule is enforced in the
     # ``PUT /settings`` route AFTER merging this body with the already-stored settings, not here
     # at the per-request-body level — a touched-fields-only PUT that changes only one of the two
@@ -180,8 +196,10 @@ class SettingsUpdate(BaseModel):
     # hot-apply; ``wombat.runtime.serve()`` reads these once at boot). ge/le mirrors each spec
     # row's ``[min, max]`` band exactly — out-of-band 422s at the door; the boot-time clamp in
     # ``load_operating_params`` is defense-in-depth against a row landing by another path (e.g. a
-    # manual INSERT). The two HH:MM:SS time fields carry no numeric band (any valid time is
-    # admitted at the door); format validity is enforced at boot by the spec's own parser.
+    # manual INSERT). The two HH:MM:SS time fields carry no numeric band, but TK-315 (ISS-31 2)
+    # adds a format validator below (was the only two PARAMS_APP_EDITABLE fields with no door
+    # validation) so garbage 422s here instead of only failing at boot inside
+    # ``load_operating_params``.
     wombat_param_morning_brief_time: str | None = None
     wombat_param_nightly_dream_time: str | None = None
     wombat_param_urgency_threshold: float | None = Field(default=None, ge=0.60, le=0.95)

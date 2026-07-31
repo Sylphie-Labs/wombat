@@ -1251,7 +1251,7 @@ def test_tk308_malformed_captured_at_on_one_event_still_records_the_next_event(
     warnings = [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and "ChatTurnStore.record_turn raised" in r.message
+        if r.levelno == logging.WARNING and "chat-turn parse-or-store failed" in r.message
     ]
     assert len(warnings) == 1
     assert warnings[0].args == ("chat",)
@@ -1279,6 +1279,6 @@ async def test_ac3_raising_chat_turn_store_logs_one_warning_and_event_still_enqu
     warnings = [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and "ChatTurnStore.record_turn raised" in r.message
+        if r.levelno == logging.WARNING and "chat-turn parse-or-store failed" in r.message
     ]
     assert len(warnings) == 1

@@ -825,8 +825,8 @@ def test_put_settings_param_per_class_daily_ceiling_above_maximum_is_422() -> No
 
 
 def test_put_settings_param_time_fields_round_trip() -> None:
-    """The two HH:MM:SS fields carry no numeric band — any string PUTs 200 at the door (format
-    validity is enforced at boot by params.load_operating_params's own parser, not here)."""
+    """The two HH:MM:SS fields carry no numeric band, but TK-315 (ISS-31 2) validates the
+    "HH:MM:SS" format at the door — a well-formed value PUTs 200 and round-trips."""
     client = _client()
     response = client.put(
         "/settings",
@@ -842,6 +842,18 @@ def test_put_settings_param_time_fields_round_trip() -> None:
 
     get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
     assert get_response.json()["settings"]["wombat_param_morning_brief_time"] == "08:15:00"
+
+
+@pytest.mark.parametrize(
+    "field", ["wombat_param_morning_brief_time", "wombat_param_nightly_dream_time"]
+)
+@pytest.mark.parametrize("value", ["25:99:00", "bananas"])
+def test_put_settings_param_time_field_bad_format_is_422(field: str, value: str) -> None:
+    """TK-315 (ISS-31 2): garbage 422s at the door for both time params — previously the only two
+    PARAMS_APP_EDITABLE fields with no door validation."""
+    client = _client()
+    response = client.put("/settings", json={field: value}, headers={"X-Wombat-Token": TOKEN})
+    assert response.status_code == 422
 
 
 def test_get_settings_param_fields_default_to_null_when_unset() -> None:
