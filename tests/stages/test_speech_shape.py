@@ -26,7 +26,11 @@ from wombat.stages.artifacts import (
     speech_output_from_artifact_data,
     speech_output_to_artifact_data,
 )
-from wombat.stages.speech_shape import SpeechShapeStage, _shape_speech_text
+from wombat.stages.speech_shape import (
+    SpeechShapeStage,
+    _sanitize_full_reply_text,
+    _shape_speech_text,
+)
 
 _FIXED_NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 _ITEM_ID = "i-1"
@@ -252,6 +256,32 @@ def test_ac4b_label_prefixed_body_fits_cap_only_after_the_strip() -> None:
     body = "x" * 400
     assert _shape_speech_text(f"Wombat: {body}") == body
     assert len(f"Wombat: {body}") > 400  # the raw text alone would have failed the cap
+
+
+def test_batch_repair_single_word_labels_only_legit_leading_clauses_survive() -> None:
+    """Batch-review repair: the label token class has NO space -- a leading multi-word clause
+    ending in a colon is a sentence opener, not a speaker label, and is never eaten; single-word
+    labels still strip."""
+    assert _shape_speech_text("It costs 5: dollars") == "It costs 5: dollars"
+    text = "By the time we arrive: it will be late"
+    assert _shape_speech_text(text) == text
+    assert _shape_speech_text("Wombat: hi") == "hi"
+
+
+def test_batch_repair_full_reply_path_shares_the_single_word_label_class() -> None:
+    """The SAME single-word-only pattern governs the speak_full_replies sanitize path."""
+    assert _sanitize_full_reply_text("It costs 5: dollars", 400) == "It costs 5: dollars"
+    text = "By the time we arrive: it will be late"
+    assert _sanitize_full_reply_text(text, 400) == text
+    assert _sanitize_full_reply_text("Wombat: hi", 400) == "hi"
+
+
+def test_batch_repair_full_reply_bold_wrapped_label_is_stripped_after_markdown() -> None:
+    """Batch-review repair: '**Wombat**: ...' hides its speaker label under bold markers, so the
+    label strip is RE-APPLIED after _strip_markdown_tokens -- the exposed label is never spoken."""
+    assert (
+        _sanitize_full_reply_text("**Wombat**: bold label then text", 400) == "bold label then text"
+    )
 
 
 async def test_ac1_stage_carries_a_label_stripped_summary_through_run() -> None:

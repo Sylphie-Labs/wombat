@@ -440,6 +440,11 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
             bundle.screen_collector.close()
         if bundle.mic_probe is not None:
             bundle.mic_probe.close()
+        # Batch-review repair: ObservationStore owns its own lazy psycopg connection (TK-310,
+        # Q-46) — closed best-effort beside the other stores above; None (a no-op) unless a
+        # wombat_observe_* toggle constructed it at assemble_runtime time.
+        if bundle.observation_store is not None:
+            bundle.observation_store.close()
 
 
 async def serve() -> None:

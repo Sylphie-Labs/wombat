@@ -57,6 +57,13 @@ TABLE = "wombat_observations"
 # DEC-63 no-knob precedent: pinned retention window, not a setting.
 _OBSERVATION_RETENTION_DAYS = 21
 
+# Batch-review repair (DEC-63 no-knob precedent: pinned, not a setting): a ``CurrentActivity``
+# snapshot whose ``since`` is older than this is treated as STALE by its renderer
+# (``voice.context_prefetch.build_current_activity_context``) — if the poller dies or the machine
+# sleeps, the model is told nothing rather than told a stale window is live (the same
+# absent-not-wrong posture as the renderer's existing app/title-``None`` handling, which stays).
+_STALE_AFTER_SECONDS = 300
+
 
 def ensure_schema(conn: psycopg.Connection[Any]) -> None:
     """Apply the packaged, idempotent ``wombat_observations`` migration on ``conn``.

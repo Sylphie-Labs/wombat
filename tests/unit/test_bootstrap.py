@@ -6,7 +6,7 @@ import inspect
 import logging
 import os
 from collections.abc import Iterator
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -1315,6 +1315,7 @@ class _RaisingActivitySnapshot:
     WARNING (CON-3), never propagating into the shared closure (AC3)."""
 
     title: str | None = "Untitled - Notepad"
+    since: datetime | None = None
     in_call: bool = False
 
     @property
@@ -1365,6 +1366,36 @@ def test_build_current_activity_context_reduces_full_process_path_to_basename() 
     assert result == {"current_activity": "enshrouded.exe - Enshrouded"}
     assert "C:" not in result["current_activity"]
     assert "Users" not in result["current_activity"]
+
+
+def test_build_current_activity_context_long_title_never_cuts_the_in_call_suffix() -> None:
+    """Batch-review repair: the 160-char cap is applied to the app-title part FIRST, then the
+    ' (in a call)' suffix appended whole -- the old order appended first and truncated the suffix
+    itself mid-word on a long title."""
+    activity = CurrentActivity(app="Zoom.exe", title="t" * 300, in_call=True)
+    result = build_current_activity_context(activity)
+    line = result["current_activity"]
+    assert len(line) <= 160
+    assert line.endswith(" (in a call)")
+
+
+def test_build_current_activity_context_old_since_is_stale_and_renders_absent() -> None:
+    """Batch-review repair (fake clock): a snapshot whose ``since`` is older than
+    observations._STALE_AFTER_SECONDS (300) against the injected clock renders ABSENT -- if the
+    poller dies or the machine sleeps, the model is never told a stale window is live. A
+    within-window ``since`` still renders, and ``since=None`` (no age info -- e.g. a hand-rolled
+    snapshot) keeps the pre-repair behavior."""
+    now = datetime(2026, 7, 31, 12, 0, 0, tzinfo=UTC)
+    fresh = CurrentActivity(app="notepad.exe", title="Notes", since=now - timedelta(seconds=299))
+    stale = CurrentActivity(app="notepad.exe", title="Notes", since=now - timedelta(seconds=301))
+    ageless = CurrentActivity(app="notepad.exe", title="Notes", since=None)
+    assert build_current_activity_context(fresh, clock=lambda: now) == {
+        "current_activity": "notepad.exe - Notes"
+    }
+    assert build_current_activity_context(stale, clock=lambda: now) == {}
+    assert build_current_activity_context(ageless, clock=lambda: now) == {
+        "current_activity": "notepad.exe - Notes"
+    }
 
 
 async def test_assemble_runtime_asr_context_hook_omits_current_activity_when_collector_absent(

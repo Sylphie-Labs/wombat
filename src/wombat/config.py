@@ -341,8 +341,12 @@ class WombatConfig(BaseSettings):
     # OPTIONAL (TK-309, DEC-68(b)): the ambient-observability consent gate — three independent
     # per-channel toggles (screen capture, webcam capture, microphone capture), each False by
     # default (consent is opt-in, never assumed) and app-editable so a settings UI can flip them.
-    # Restart-tier (no hot-apply) — nothing reads these fields yet; a later ticket owns wiring
-    # bootstrap.py to actually start/stop the corresponding observation channel.
+    # Restart-tier (no hot-apply) — assemble_runtime reads them once at boot: the toggles now
+    # gate the screen-activity collector (wombat_observe_screen), the in-call mic probe and its
+    # gate-stage in-call wrapper (wombat_observe_mic), and the shared ObservationStore/
+    # CurrentActivity pair (constructed when either of those two is true) — all left unwired
+    # (None / plain passthrough) while the toggles stay False. wombat_observe_webcam still gates
+    # nothing (no webcam channel exists yet).
     wombat_observe_screen: bool = False
     wombat_observe_webcam: bool = False
     wombat_observe_mic: bool = False

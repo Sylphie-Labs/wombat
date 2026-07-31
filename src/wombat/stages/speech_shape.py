@@ -34,8 +34,10 @@ persona-package diff.
 
 LEADING SPEAKER-LABEL STRIP (TK-317, DEC-69a): before the trim/length-check/forbidden loop above,
 ``_shape_speech_text`` applies one ANCHORED, ONE-SHOT strip for a leading "Label: " prefix at
-string START only — a single word-like token (a leading letter, then up to ~32 chars of letters/
-digits/space/apostrophe/hyphen/underscore) followed by a colon and whitespace. STRIP, not reject —
+string START only — a SINGLE word-like token (a leading letter, then up to ~32 chars of letters/
+digits/apostrophe/hyphen/underscore — NO spaces, batch-review repair: a spaced token class ate
+legitimate leading clauses like "It costs 5: dollars") followed by a colon and whitespace.
+STRIP, not reject —
 removing a leading label cannot mangle the remainder, unlike the DEC-55f markdown classes below,
 which still reject the whole text outright and are unmodified by this change. The strip runs
 BEFORE the length check so the remaining body keeps the full ``max_chars`` budget. It is generic
@@ -59,7 +61,9 @@ default-OFF ``speak_full_replies`` flag. When True AND the stage would otherwise
 adapter present, the existing held-chat/voice-turn pass-through gate above unchanged), ``run()``
 SKIPS the shaping model call entirely — ZERO model calls, same as the pass-through above — and
 instead derives the spoken text from the SAME composed text via ``_sanitize_full_reply_text``: the
-TK-317 leading-label strip, then a deterministic markdown/URL token STRIP (never a reject — this
+TK-317 leading-label strip, then a deterministic markdown/URL token STRIP, then the label strip
+RE-APPLIED (batch-review repair: ``**Wombat**: ...`` only exposes its label once the bold markers
+are gone — the pre-markdown pass alone would have spoken it) (never a reject — this
 mode's text IS the user-visible pane reply, so DEC-55f's reject-to-silence posture would recreate
 the exact chat/voice misalignment DEC-69b exists to close), then whitespace collapse, then
 word-boundary truncation at the injected ``max_chars``. A blank-after-sanitize result takes the
@@ -112,10 +116,14 @@ _SPEECH_SHAPE_INSTRUCTION = (
 _MAX_SPEECH_CHARS = 400
 
 # TK-317 (DEC-69a): one anchored, one-shot leading "Label: " strip — a leading letter, then up to
-# ~32 chars of letters/digits/space/apostrophe/hyphen/underscore, then a colon and whitespace, at
-# string START only. Generic by design (no configured-assistant-name dependency); a colon anywhere
-# else in the text is never touched, and only the FIRST leading match is ever removed.
-_LEADING_LABEL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 '_-]{0,31}:\s+")
+# ~32 chars of letters/digits/apostrophe/hyphen/underscore, then a colon and whitespace, at string
+# START only. NO space in the token class (batch-review repair): single-word labels only —
+# 'Wombat:'/'Assistant:' still strip, but a legitimate leading clause ('It costs 5: dollars',
+# 'By the time we arrive: it will be late') is never eaten; the instruction sentence already
+# discourages self-labeling, so multi-word labels are not worth the false positives. Generic by
+# design (no configured-assistant-name dependency); a colon anywhere else in the text is never
+# touched, and only the FIRST leading match is ever removed.
+_LEADING_LABEL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9'_-]{0,31}:\s+")
 
 # DEC-55f no-placebo validator: one compiled pattern per enumerated closed token class. ANY match
 # rejects the whole text outright (see the module docstring) — never a partial strip/rewrite.
@@ -207,11 +215,14 @@ def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
 def _sanitize_full_reply_text(raw_text: str, max_chars: int) -> str | None:
     """TK-318 (DEC-69b): the wombat_speak_full_replies=True path's deterministic sanitize —
     ``raw_text`` (the SAME composed text ``compose`` produced) run through the TK-317 leading-
-    label strip, then ``_strip_markdown_tokens``, then whitespace collapse, then word-boundary
-    truncation at ``max_chars``. ``None`` iff the result is blank after sanitizing — the stage's
-    existing degrade branch handles that (never raise, never verbatim markdown)."""
+    label strip, then ``_strip_markdown_tokens``, then the label strip RE-APPLIED (batch-review
+    repair: ``**Wombat**: ...`` only exposes its leading label once the bold markers are gone),
+    then whitespace collapse, then word-boundary truncation at ``max_chars``. ``None`` iff the
+    result is blank after sanitizing — the stage's existing degrade branch handles that (never
+    raise, never verbatim markdown)."""
     unlabeled = _LEADING_LABEL_PATTERN.sub("", raw_text, count=1)
     token_stripped = _strip_markdown_tokens(unlabeled)
+    token_stripped = _LEADING_LABEL_PATTERN.sub("", token_stripped, count=1)
     collapsed = _FULL_REPLY_WHITESPACE_RUN_RE.sub(" ", token_stripped).strip()
     if not collapsed:
         return None
