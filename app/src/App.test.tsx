@@ -481,6 +481,39 @@ describe("App (TK-305 AC2: voice view gains cloud STT model / local ASR model / 
   });
 });
 
+describe("App (TK-318 AC: voice view gains the Speak full replies row)", () => {
+  it("renders defaulting to Off and PUTs the touched flag with the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoVoice();
+    await screen.findByLabelText("STT provider");
+
+    expect((screen.getByLabelText("Speak full replies") as HTMLSelectElement).value).toBe("off");
+
+    fireEvent.change(screen.getByLabelText("Speak full replies"), { target: { value: "on" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({ wombat_speak_full_replies: true });
+    });
+
+    expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+  });
+
+  it("renders On when the stored value is true", async () => {
+    installFakeApi({ ...baseSettings(), wombat_speak_full_replies: true });
+    render(<App />);
+    gotoVoice();
+
+    expect(await screen.findByLabelText("Speak full replies")).toBeTruthy();
+    expect((screen.getByLabelText("Speak full replies") as HTMLSelectElement).value).toBe("on");
+  });
+});
+
 describe("App (TK-305 AC3: out-of-bounds numeric input 422s and reverts)", () => {
   it("surfaces the 422 via the save-error line and reverts to the stored value on reload", async () => {
     const { calls } = installFakeApi();

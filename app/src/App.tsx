@@ -57,6 +57,8 @@ interface FormState {
   wombat_asr_model: AsrModel;
   wombat_reply_window_seconds: number;
   wombat_spoken_reply_max_chars: number;
+  // TK-318 (DEC-69b): the pane's-actual-reply voice opt-in - a real bool, defaulting False.
+  wombat_speak_full_replies: boolean;
   wombat_persona_brevity: Brevity;
   wombat_persona_warmth: Warmth;
   wombat_persona_directness: Directness;
@@ -129,6 +131,7 @@ const DEFAULTS: FormState = {
   wombat_asr_model: "base",
   wombat_reply_window_seconds: 120,
   wombat_spoken_reply_max_chars: 400,
+  wombat_speak_full_replies: false,
   wombat_persona_brevity: "terse",
   wombat_persona_warmth: "reserved",
   wombat_persona_directness: "plain",
@@ -169,6 +172,8 @@ const RESTART_FIELDS: readonly FormField[] = [
   "wombat_asr_model",
   "wombat_reply_window_seconds",
   "wombat_spoken_reply_max_chars",
+  // TK-318 (DEC-69b): restart-tier (SpeechShapeStage reads it once at construction).
+  "wombat_speak_full_replies",
   // TK-306 (DEC-67i second half): all ten new System-view fields are restart-tier - the
   // briefing's binding ruling, no hot-apply for any of them.
   "wombat_param_morning_brief_time",
@@ -276,6 +281,8 @@ function toFormState(settings: SettingsFields): FormState {
       settings.wombat_reply_window_seconds ?? DEFAULTS.wombat_reply_window_seconds,
     wombat_spoken_reply_max_chars:
       settings.wombat_spoken_reply_max_chars ?? DEFAULTS.wombat_spoken_reply_max_chars,
+    wombat_speak_full_replies:
+      settings.wombat_speak_full_replies ?? DEFAULTS.wombat_speak_full_replies,
     wombat_persona_brevity: settings.wombat_persona_brevity ?? DEFAULTS.wombat_persona_brevity,
     wombat_persona_warmth: settings.wombat_persona_warmth ?? DEFAULTS.wombat_persona_warmth,
     wombat_persona_directness:
@@ -358,6 +365,9 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
   }
   if (touched.has("wombat_spoken_reply_max_chars")) {
     patch.wombat_spoken_reply_max_chars = formState.wombat_spoken_reply_max_chars;
+  }
+  if (touched.has("wombat_speak_full_replies")) {
+    patch.wombat_speak_full_replies = formState.wombat_speak_full_replies;
   }
   if (touched.has("wombat_persona_brevity")) {
     patch.wombat_persona_brevity = formState.wombat_persona_brevity;
@@ -716,6 +726,15 @@ export function App() {
                         value={formState.wombat_spoken_reply_max_chars}
                         onChange={(e) =>
                           updateField("wombat_spoken_reply_max_chars", Number(e.target.value))
+                        }
+                      />
+                      <Select
+                        id="speak-full-replies"
+                        label="Speak full replies"
+                        options={ON_OFF_OPTIONS}
+                        value={formState.wombat_speak_full_replies ? "on" : "off"}
+                        onChange={(e) =>
+                          updateField("wombat_speak_full_replies", e.target.value === "on")
                         }
                       />
                     </Panel>

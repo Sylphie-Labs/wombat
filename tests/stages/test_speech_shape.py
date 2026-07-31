@@ -279,6 +279,95 @@ def test_ac2_default_max_chars_keeps_the_400_char_behavior() -> None:
     assert _shape_speech_text(over_limit) is None
 
 
+# --- TK-318 (DEC-69b): wombat_speak_full_replies opt-in ---------------------------------------
+
+
+def test_speak_full_replies_defaults_to_false() -> None:
+    stage = SpeechShapeStage(config=_config(), voice_enabled=False, adapter_present=False)
+    assert stage._speak_full_replies is False
+
+
+async def test_ac2_speak_full_replies_on_zero_model_calls_composed_text_modulo_whitespace() -> (
+    None
+):
+    model = FakeModel(response=_response("should never be used"))
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=True, adapter_present=True, speak_full_replies=True
+    )
+    ctx = _ctx(model, compose_output=_compose_output_artifact("Plain   reply\ntext."))
+
+    result = await stage.run(ctx)
+
+    assert model.calls == []
+    assert isinstance(result, Transition)
+    assert result.to == "speak"
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text == "Plain reply text."
+    assert degraded is False
+
+
+async def test_ac3_speak_full_replies_on_strips_markdown_tokens_and_leading_label() -> None:
+    model = FakeModel(response=_response("should never be used"))
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=True, adapter_present=True, speak_full_replies=True
+    )
+    raw = (
+        "Wombat: **Important** update, see [this link](https://example.com) and run "
+        "`some code`.\n# Heading\n- bullet one\n1. numbered one"
+    )
+    ctx = _ctx(model, compose_output=_compose_output_artifact(raw))
+
+    result = await stage.run(ctx)
+
+    assert model.calls == []
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is not None
+    assert degraded is False
+    for token in ("Wombat:", "**", "[this link]", "](", "https://", "`", "# ", "- ", "1. "):
+        assert token not in text
+    assert "Important" in text
+    assert "this link" in text
+
+
+async def test_ac4_speak_full_replies_on_over_cap_truncates_at_word_boundary() -> None:
+    model = FakeModel(response=_response("should never be used"))
+    stage = SpeechShapeStage(
+        config=_config(),
+        voice_enabled=True,
+        adapter_present=True,
+        speak_full_replies=True,
+        max_chars=50,
+    )
+    words = ("word " * 30).strip()
+    ctx = _ctx(model, compose_output=_compose_output_artifact(words))
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is not None
+    assert len(text) <= 50
+    assert not text.endswith(" ")
+    assert degraded is False
+
+
+async def test_ac5_speak_full_replies_on_sanitize_to_empty_degrades_without_raising() -> None:
+    model = FakeModel(response=_response("should never be used"))
+    stage = SpeechShapeStage(
+        config=_config(), voice_enabled=True, adapter_present=True, speak_full_replies=True
+    )
+    ctx = _ctx(model, compose_output=_compose_output_artifact("https://example.com/only-a-link"))
+
+    result = await stage.run(ctx)
+
+    assert model.calls == []
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text is None
+    assert degraded is True
+
+
 def test_ac2_injected_max_chars_800_passes_a_600_char_reply_whole() -> None:
     text = "x" * 600
     assert _shape_speech_text(text, max_chars=800) == text

@@ -903,6 +903,38 @@ def test_assemble_runtime_carries_configured_reply_window_and_speech_cap(
     assert getattr(speech_shape_stage, "_max_chars") == 800  # noqa: B009
 
 
+# --- TK-318 (DEC-69b): wombat_speak_full_replies threads to the speech_shape construction site ----
+
+
+def test_assemble_runtime_carries_configured_speak_full_replies(tmp_path: Path) -> None:
+    """AC6: the configured wombat_speak_full_replies flag reaches the constructed
+    SpeechShapeStage byte-identically (construction-site test)."""
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_brief_path": str(tmp_path / "brief.txt"),
+            "wombat_speak_full_replies": True,
+        }
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+
+    speech_shape_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speech_shape")
+    assert getattr(speech_shape_stage, "_speak_full_replies") is True  # noqa: B009
+
+
+def test_build_speech_shape_stage_default_preserves_speak_full_replies_off() -> None:
+    stage = bootstrap.build_speech_shape_stage(
+        config=_config(), dsn=_FAKE_DSN, tz=ZoneInfo("UTC"), adapter_present=False
+    )
+    assert stage._speak_full_replies is False
+
+
 # --- TK-289 (DEC-64 gap A, half 2): the ASR context_hook -> LastSpokenRegister wiring -------------
 
 

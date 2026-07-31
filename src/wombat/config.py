@@ -77,6 +77,10 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     # stays operator .env-tier (the wombat_chat_handshake_file precedent) — a settings UI
     # toggle has no business relocating where the drop-dir watcher points.
     "wombat_voice_enabled",
+    # TK-318 (DEC-69b): opts a voice turn into speaking the pane's actual composed reply
+    # (sanitized, never the shaped-model-summary mouth) - app-editable, restart-tier
+    # (SpeechShapeStage reads it once at bootstrap construction; no hot-apply).
+    "wombat_speak_full_replies",
     # TK-275 (DEC-58 c/d): the one-shot-captured push-to-talk binding
     # ("key:<code>"/"mouse:<button>", "" = unbound) - app-editable so the Electron settings UI
     # can persist it; the Python runtime never reads this field (the renderer, TK-276, is the
@@ -216,6 +220,14 @@ class WombatConfig(BaseSettings):
     # construction.
     wombat_brief_path: str | None = None
     wombat_voice_enabled: bool = False
+
+    # OPTIONAL (TK-318, DEC-69b): Jim's "I am ok with listening to the full response" - opts a
+    # voice turn into speaking the pane's actual composed reply (through a deterministic
+    # strip-not-reject sanitize under the spoken cap) instead of the DEC-55 shaped-model-summary
+    # mouth. Default False keeps today's shaped-summary path byte-identical.
+    # ``stages.speech_shape.SpeechShapeStage`` reads it once at bootstrap construction
+    # (restart-tier, no hot-apply).
+    wombat_speak_full_replies: bool = False
 
     # OPTIONAL (TK-275, DEC-58 c/d): the one-shot-captured push-to-talk binding, persisted
     # through the app-editable settings tier. "" (default) means unbound. Deliberately a plain

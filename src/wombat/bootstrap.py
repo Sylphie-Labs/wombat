@@ -575,6 +575,8 @@ def build_speech_shape_stage(
         # TK-303 (DEC-67e): the DEC-64 spoken-reply length cap, restart-tier from the settings
         # table/env (no hot-apply).
         max_chars=config.wombat_spoken_reply_max_chars,
+        # TK-318 (DEC-69b): the pane's-actual-reply voice opt-in, restart-tier (no hot-apply).
+        speak_full_replies=config.wombat_speak_full_replies,
     )
 
 

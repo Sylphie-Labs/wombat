@@ -557,6 +557,35 @@ def test_put_settings_observe_fields_non_bool_is_422(field: str) -> None:
     assert response.status_code == 422
 
 
+def test_put_settings_wombat_speak_full_replies_round_trips() -> None:
+    """TK-318 (DEC-69b): the newly-admitted bool field writes true, writes false, and reads back."""
+    client = _client()
+    response = client.put(
+        "/settings", json={"wombat_speak_full_replies": True}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_speak_full_replies"] is True
+
+    response = client.put(
+        "/settings", json={"wombat_speak_full_replies": False}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_speak_full_replies"] is False
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_speak_full_replies"] is False
+
+
+def test_put_settings_wombat_speak_full_replies_non_bool_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_speak_full_replies": ["not", "a", "bool"]},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
 def test_put_settings_wombat_ptt_binding_round_trips() -> None:
     """TK-275 (DEC-58 c/d): the newly-admitted str field writes and reads back."""
     client = _client()

@@ -55,6 +55,9 @@ export interface SettingsFields {
   // TK-224 (Q-111(b)): the newly-admitted app-editable field - a bootstrap-read bool gating
   // voice delivery (wombat.bootstrap), so a save PUTting it carries the DEC-32 restart notice.
   wombat_voice_enabled: boolean | null;
+  // TK-318 (DEC-69b): opts a voice turn into speaking the pane's actual composed reply
+  // (sanitized, never the shaped-model-summary mouth) - restart-tier, default off.
+  wombat_speak_full_replies: boolean | null;
   // TK-275 (DEC-58 c/d): the one-shot-captured push-to-talk binding
   // ("key:<code>"/"mouse:<button>", "" = unbound) - the renderer is the sole consumer, so no
   // restart notice accompanies a PUT of this field.

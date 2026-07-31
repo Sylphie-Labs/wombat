@@ -53,6 +53,19 @@ TK-279 (DEC-60b, supersedes DEC-57 IN PART — voice origin only): the pass-thro
 the SAME composed-output artifact) falls through to the real shaping call exactly as a surfaced
 item would; a held TYPED chat (``voice_turn=False``) stays byte-identical to the pre-TK-279
 quiet pass-through above.
+
+TK-318 (DEC-69b), Jim verbatim: "I am ok with listening to the full response" — an opt-in,
+default-OFF ``speak_full_replies`` flag. When True AND the stage would otherwise shape (voice on,
+adapter present, the existing held-chat/voice-turn pass-through gate above unchanged), ``run()``
+SKIPS the shaping model call entirely — ZERO model calls, same as the pass-through above — and
+instead derives the spoken text from the SAME composed text via ``_sanitize_full_reply_text``: the
+TK-317 leading-label strip, then a deterministic markdown/URL token STRIP (never a reject — this
+mode's text IS the user-visible pane reply, so DEC-55f's reject-to-silence posture would recreate
+the exact chat/voice misalignment DEC-69b exists to close), then whitespace collapse, then
+word-boundary truncation at the injected ``max_chars``. A blank-after-sanitize result takes the
+SAME degrade branch as every other speech-production failure in this stage (``speech_text=None``,
+``degraded=True`` — never raise, never verbatim markdown). OFF (the default) is byte-identical to
+today — every line below this paragraph is unreachable when ``speak_full_replies=False``.
 """
 
 from __future__ import annotations
@@ -141,6 +154,70 @@ def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS)
     return stripped
 
 
+# TK-318 (DEC-69b): the deterministic STRIP (never reject) token classes for the
+# wombat_speak_full_replies=True path — same enumerated markdown/URL surface as
+# ``_FORBIDDEN_PATTERNS`` above, but each is REMOVED rather than triggering a whole-text reject
+# (see the module docstring: the text here IS the user-visible pane reply, so reject-to-silence
+# would recreate the exact chat/voice misalignment DEC-69b exists to close). Markdown links are
+# reduced to their link text FIRST, before the bare-URL drop, so a link's own URL never survives
+# as a dangling bare URL.
+_FULL_REPLY_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_FULL_REPLY_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_FULL_REPLY_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_FULL_REPLY_ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_([^_\n]+)_(?!\w)")
+_FULL_REPLY_ITALIC_ASTERISK_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
+_FULL_REPLY_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", re.MULTILINE)
+_FULL_REPLY_BACKTICK_RE = re.compile(r"`")
+_FULL_REPLY_BULLET_RE = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+_FULL_REPLY_NUMBERED_RE = re.compile(r"^\s*\d+\.\s+", re.MULTILINE)
+_FULL_REPLY_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+
+def _strip_markdown_tokens(text: str) -> str:
+    """TK-318 (DEC-69b): one deterministic pass removing every enumerated markdown/URL token
+    class — a link becomes its own text, a bare URL is dropped, bold/italic/heading/backtick
+    markers are removed, bullet/numbered list markers are removed. Content-independent (no intent
+    inspection, mirrors ``compose.brief_template._sanitize_display_text``'s deterministic
+    posture) and STRIP-not-reject, unlike ``_FORBIDDEN_PATTERNS`` above."""
+    stripped = _FULL_REPLY_LINK_RE.sub(r"\1", text)
+    stripped = _FULL_REPLY_URL_RE.sub("", stripped)
+    stripped = _FULL_REPLY_BOLD_RE.sub(r"\1", stripped)
+    stripped = _FULL_REPLY_ITALIC_UNDERSCORE_RE.sub(r"\1", stripped)
+    stripped = _FULL_REPLY_ITALIC_ASTERISK_RE.sub(r"\1", stripped)
+    stripped = _FULL_REPLY_HEADING_RE.sub("", stripped)
+    stripped = _FULL_REPLY_BACKTICK_RE.sub("", stripped)
+    stripped = _FULL_REPLY_BULLET_RE.sub("", stripped)
+    stripped = _FULL_REPLY_NUMBERED_RE.sub("", stripped)
+    return stripped
+
+
+def _truncate_at_word_boundary(text: str, max_chars: int) -> str:
+    """``text`` (already within-budget if <= ``max_chars``) else cut at ``max_chars`` and back off
+    to the last preceding space, so the result never lands mid-word — a single word longer than
+    ``max_chars`` is returned cut exactly at the cap (no boundary exists to back off to)."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        truncated = truncated[:last_space]
+    return truncated.rstrip()
+
+
+def _sanitize_full_reply_text(raw_text: str, max_chars: int) -> str | None:
+    """TK-318 (DEC-69b): the wombat_speak_full_replies=True path's deterministic sanitize —
+    ``raw_text`` (the SAME composed text ``compose`` produced) run through the TK-317 leading-
+    label strip, then ``_strip_markdown_tokens``, then whitespace collapse, then word-boundary
+    truncation at ``max_chars``. ``None`` iff the result is blank after sanitizing — the stage's
+    existing degrade branch handles that (never raise, never verbatim markdown)."""
+    unlabeled = _LEADING_LABEL_PATTERN.sub("", raw_text, count=1)
+    token_stripped = _strip_markdown_tokens(unlabeled)
+    collapsed = _FULL_REPLY_WHITESPACE_RUN_RE.sub(" ", token_stripped).strip()
+    if not collapsed:
+        return None
+    return _truncate_at_word_boundary(collapsed, max_chars)
+
+
 class SpeechShapeStage:
     """Produces the spoken-channel summary via a SECOND DeepSeek mouth call; degrades to no
     speech (never composed text) on any failure (TK-267, DEC-55)."""
@@ -158,6 +235,7 @@ class SpeechShapeStage:
         spend_ledger: DailySpendLedger | None = None,
         daily_token_ceiling: int | None = None,
         max_chars: int = _MAX_SPEECH_CHARS,
+        speak_full_replies: bool = False,
     ) -> None:
         # Mirrors ComposeStage's AC3: fail at CONSTRUCTION when this mouth WILL be called (voice
         # on + adapter present) but the shared deepseek profile has no key to build against.
@@ -173,6 +251,9 @@ class SpeechShapeStage:
         # TK-303 (DEC-67e): injected max_chars, defaulting to the pinned _MAX_SPEECH_CHARS —
         # bootstrap.build_speech_shape_stage threads config.wombat_spoken_reply_max_chars here.
         self._max_chars = max_chars
+        # TK-318 (DEC-69b): default-OFF — bootstrap.build_speech_shape_stage threads
+        # config.wombat_speak_full_replies here.
+        self._speak_full_replies = speak_full_replies
         # Built ONCE — the FIXED prompt (DEC-55) plus Mouth.COMPOSE's guard suffix, appended
         # verbatim via the read-only persona.expression seam (no fifth 'speech' mouth, DEC-55e).
         self._system_instruction = " ".join(
@@ -200,6 +281,29 @@ class SpeechShapeStage:
                     produced_by=self.name,
                     provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                     data=speech_output_to_artifact_data(item_id, item_kind, None, False),
+                ),
+            )
+
+        if self._speak_full_replies:
+            # TK-318 (DEC-69b): ZERO model calls — the pane's actual composed text, deterministic-
+            # sanitized under the spoken cap, IS the spoken text. A blank-after-sanitize result
+            # takes the same degrade branch as every other speech-production failure below.
+            full_reply_text = _sanitize_full_reply_text(composed_text, self._max_chars)
+            full_reply_degraded = full_reply_text is None
+            if full_reply_degraded:
+                logger.warning(
+                    "speech_shape: wombat_speak_full_replies sanitize produced no speech text "
+                    "(blank after stripping); degrading to no speech"
+                )
+            return Transition(
+                to="speak",
+                output=Artifact(
+                    kind=SPEECH_OUTPUT,
+                    produced_by=self.name,
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                    data=speech_output_to_artifact_data(
+                        item_id, item_kind, full_reply_text, full_reply_degraded
+                    ),
                 ),
             )
 

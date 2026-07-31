@@ -932,6 +932,57 @@ def test_load_config_env_wins_over_true_pg_row_for_observe_screen(
     assert config.wombat_observe_screen is False
 
 
+# --- TK-318 (DEC-69b): wombat_speak_full_replies joins the app-editable tier ------------------
+
+
+def test_wombat_speak_full_replies_defaults_to_false() -> None:
+    """AC1: fresh install (no env, no pg) -> False; app-editable."""
+    config = WombatConfig(deepseek_api_key="k", deepseek_base_url="https://example.invalid")
+    assert config.wombat_speak_full_replies is False
+    assert "wombat_speak_full_replies" in APP_EDITABLE_FIELDS
+
+
+@_requires_pg
+def test_load_config_table_accepts_speak_full_replies(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2: a pg row true + env unset -> True (table-sourced)."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_speak_full_replies": True})
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_speak_full_replies is True
+
+
+@_requires_pg
+def test_load_config_env_wins_over_true_pg_row_for_speak_full_replies(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2: DEC-43 precedence pinned — env 'false' wins over a true pg row."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_speak_full_replies": True})
+    finally:
+        store.close()
+    monkeypatch.setenv("WOMBAT_SPEAK_FULL_REPLIES", "false")
+
+    config = load_config()
+
+    assert config.wombat_speak_full_replies is False
+
+
 # --- TK-241 AC5 (v2.64): suite hermeticity — closes the CLASS of collection-time DB hazards ---
 
 

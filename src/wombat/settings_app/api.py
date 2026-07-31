@@ -147,6 +147,10 @@ class SettingsUpdate(BaseModel):
     # APP_EDITABLE_FIELDS — a bool, not a Literal, so it is exempt from the mirror test's
     # vocabulary check (there is no vocabulary to drift).
     wombat_voice_enabled: bool | None = None
+    # TK-318 (DEC-69b): mirrors WombatConfig.wombat_speak_full_replies - a plain bool, not a
+    # Literal, so it is exempt from the mirror test's vocabulary check (there is no vocabulary to
+    # drift). Restart-tier (no hot-apply).
+    wombat_speak_full_replies: bool | None = None
     # TK-275 (DEC-58 c/d): mirrors WombatConfig.wombat_ptt_binding - a plain str, not a Literal,
     # so it is exempt from the mirror test's vocabulary check (there is no vocabulary to drift).
     wombat_ptt_binding: str | None = None
