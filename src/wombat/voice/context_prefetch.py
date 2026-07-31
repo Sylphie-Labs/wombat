@@ -49,7 +49,12 @@ snapshot renders absent, never as live; Opus-verify repair: the clock is ``refre
 LAST SUCCESSFUL POLL beat, never ``since``/segment-open time — a window held focused past 300s
 under a healthy poller keeps rendering) -> no key. ANY exception
 reading the snapshot's fields -> ``{}`` plus exactly ONE loud warning (CON-3 parity with the two
-builders above).
+builders above). Round-4 repair (N1): the rendered line is sanitized
+(``_sanitize_combined_activity_line`` — collapse whitespace incl. embedded newlines, neutralize
+every literal ``;``) BEFORE truncation/suffix, at this function's own return — the genuine single
+egress every call path (including the toggle-off/no-screenpipe default) passes through — so a
+hostile foreground-window title can never forge a fake ``key: value`` field through compose's
+semicolon-joined ``format_payload_fields``, on ANY path, not just the screenpipe-enriched one.
 
 ``build_current_activity_screen_hint(current_activity, screenpipe_client, clock=...)`` (TK-323,
 DEC-70g) is a FOURTH sibling grounding builder that composes AROUND
@@ -67,20 +72,38 @@ timeout — the ISS-30 finding-3 accepted posture) over the trailing
 name — the arc's own fixtures use ``"VSCode"`` — never the Windows process image basename
 ``current_activity.app`` reduces to, e.g. ``"Code.exe"``; filtering server-side on the wrong
 vocabulary silently returned zero items in production even with matching content on screen).
-ORCHESTRATOR RULING (TK-323 round-3 repair, ABSENT-NOT-WRONG): among the items returned, only
-those whose ``app_name`` NORMALIZED-MATCHES (lowercase, trailing ``.exe`` stripped, either side
-containing the other — ``_apps_match``) the current foreground app are eligible; if none match,
+ORCHESTRATOR RULING (TK-323 round-3 repair, ABSENT-NOT-WRONG; round-4 repair tightened the match
+itself): among the items returned, only those whose ``app_name`` NORMALIZED-MATCHES (lowercase,
+trailing ``.exe`` stripped, EXACT match after normalizing, plus a small pinned alias table for
+known vocabulary splits — ``_apps_match``) the current foreground app are eligible; if none match,
 NO snippet is emitted at all (never a different app's newest capture mis-attributed to this one).
+Round-3's normalized-CONTAINMENT match over-matched unrelated apps sharing a substring (e.g.
+``'Internet Explorer'`` containing ``'explorer.exe'``'s reduced form, or ``'Mail'`` containing
+``'ai.exe'``'s) — round-4 replaces containment with exact-match-after-normalize plus the alias
+table, still resolving the one genuine vocabulary split this arc exists for (``Code.exe`` <->
+``VSCode``) without re-admitting unrelated apps.
 The NEWEST matching item (by ``captured_at``) becomes the suffix `` | on screen: <snippet>``, the
 snippet truncated so the COMBINED line stays within ``_MAX_ACTIVITY_LINE_CHARS`` (the base
 app-title/in-call line is NEVER itself cut here — only the snippet gives, and if no room is left
 for even one snippet character the suffix is dropped entirely); the FINAL combined string (base
 line + suffix + snippet) is then sanitized as ONE whole (``_sanitize_combined_activity_line``) and
-re-capped, since the base line's title is itself raw/untrusted (Opus-verify repair, round 3). No
+re-capped — defense in depth over an already-sanitized base line (round-4 repair: the base builder
+now sanitizes its own line at the genuine single egress, see below), covering any future component
+this combined line ever grows. No
 item, no MATCHING item, an empty/whitespace-only snippet text, or ANY exception anywhere in the
 enrichment attempt all degrade to the base builder's dict returned BYTE-IDENTICALLY
 (absent-not-wrong); an exception additionally logs exactly ONE loud warning (CON-3 parity with the
 three sibling builders above) — this function never lets an exception escape.
+
+ROUND-4 REPAIR (N1): the whole-line sanitizer previously ran ONLY on this enriched success path,
+so every OTHER path out of ``build_current_activity_context`` — ``screenpipe_client`` is ``None``
+(toggle off, the DEFAULT config), no items, no matching item, or an empty snippet — returned the
+base line RAW, letting a hostile foreground-window TITLE containing ``'; '`` forge a fake
+``key: value`` field through compose's semicolon-joined ``format_payload_fields`` even with
+screenpipe off. The sanitizer now runs inside ``build_current_activity_context`` itself, on the
+value that actually enters the payload dict — the genuine single egress — so every path, including
+the toggle-off default, is covered; this function's own combined-line sanitize above is now
+defense in depth over an already-clean base rather than the only guard.
 """
 
 from __future__ import annotations
@@ -287,19 +310,33 @@ def _normalize_app_for_match(value: str) -> str:
     return value.strip().lower().removesuffix(".exe")
 
 
+# TK-323 round-4 repair (N2): round-3's normalized-CONTAINMENT match over-matched unrelated apps
+# that merely share a substring after normalizing -- e.g. ('Internet Explorer', 'explorer.exe'),
+# ('QRCode Studio', 'Code.exe'), ('Teams of Rivals - Kindle', 'Teams.exe'), ('Mail', 'ai.exe') all
+# matched, re-admitting wrong-app content attributed to the foreground app (the exact failure mode
+# ABSENT-NOT-WRONG exists to prevent). Replaced with exact-match-after-normalize PLUS this small
+# pinned alias table for the one genuine known vocabulary split this arc exists for: screenpipe's
+# OS app DISPLAY name ("VSCode") vs the Windows process image basename ("Code.exe" -> "code" after
+# normalizing). Module-private and frozen (never operator-tunable, DEC-63 no-knob precedent) --
+# maps normalized process name -> normalized screenpipe app name.
+_APP_MATCH_ALIASES: dict[str, str] = {"code": "vscode"}
+
+
 def _apps_match(item_app: str, current_app_basename: str) -> bool:
-    """ORCHESTRATOR RULING (binding, TK-323 round-3 repair): restore correct screen-hint
-    attribution via ABSENT-NOT-WRONG with normalized containment matching, after round-1 deleted
-    the server-side ``app_name`` filter outright with no ruling (the newest capture from ANY
-    app/monitor was being attributed to the foreground app — wrong-not-absent). Containment
-    either direction, after normalizing both sides, handles ``"code" in "vscode"``
-    (``Code.exe`` <-> ``"VSCode"``) and ``"chrome" in "chrome"`` (``chrome.exe`` <-> ``"Chrome"``).
+    """ORCHESTRATOR RULING (binding, TK-323 round-4 repair, supersedes round-3's containment
+    match): exact match after normalizing (lowercase, strip trailing ``.exe``, strip whitespace)
+    PLUS the ``_APP_MATCH_ALIASES`` table above -- checked BOTH directions (``item_app`` vs
+    ``current_app_basename`` may land on either side of the alias mapping depending on call site),
+    so ``("VSCode", "Code.exe")`` still matches via the alias while none of the round-3
+    over-match pairs above (which share only a substring, never an exact or aliased identity) do.
     An empty side (never matches) guards a blank/garbage app value from matching everything."""
     a = _normalize_app_for_match(item_app)
     b = _normalize_app_for_match(current_app_basename)
     if not a or not b:
         return False
-    return a in b or b in a
+    if a == b:
+        return True
+    return _APP_MATCH_ALIASES.get(a) == b or _APP_MATCH_ALIASES.get(b) == a
 
 
 def _sanitize_combined_activity_line(text: str) -> str:
@@ -379,7 +416,13 @@ def build_current_activity_context(
         return {}
     if app is None or title is None or stale:
         return {}
-    line = f"{_process_basename(app)} - {title}"
+    # N1 (round-4 repair): sanitize the RAW app-title line here, at the genuine single egress —
+    # every caller of this function (toggle-off default included) gets a clean line, not just the
+    # screenpipe-enriched path in build_current_activity_screen_hint. current_activity.title is a
+    # raw, untrusted foreground-window title (e.g. from Windows) and could otherwise carry a
+    # literal ';' that forges a fake key: value field through compose's semicolon-joined
+    # format_payload_fields.
+    line = _sanitize_combined_activity_line(f"{_process_basename(app)} - {title}")
     if in_call:
         line = line[: _MAX_ACTIVITY_CHARS - len(_IN_CALL_SUFFIX)] + _IN_CALL_SUFFIX
     return {"current_activity": line[:_MAX_ACTIVITY_CHARS]}

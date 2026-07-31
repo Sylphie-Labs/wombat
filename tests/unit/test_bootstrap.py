@@ -92,7 +92,19 @@ def _reset_singleton() -> Iterator[None]:
 
 
 def _config() -> WombatConfig:
-    return WombatConfig(deepseek_api_key="sk-test", deepseek_base_url="https://api.deepseek.com")
+    # N3 (round-4 repair): pin wombat_voice_enabled=False explicitly -- pydantic-settings still
+    # reads a real operator .env/process-env UNDER this constructor call (env_file=".env"
+    # resolves relative to CWD, and nothing here chdirs off the repo root), so an operator with
+    # WOMBAT_VOICE_ENABLED=true set would otherwise leak a real TTS adapter construction into
+    # every test in this module that calls assemble_runtime -- audibly speaking through the real
+    # `python -m wombat.sinks._local_speak_child` subprocess on every pg-armed run. Pinning it
+    # here (rather than relying on the field's own False default) makes every test in this module
+    # voice-off regardless of the operator's environment.
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_voice_enabled=False,
+    )
 
 
 # TK-290: pg-gated wiring case uses ONLY a throwaway WOMBAT_TEST_PG_DSN Postgres (same convention
