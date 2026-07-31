@@ -622,6 +622,68 @@ def test_put_settings_reply_window_and_speech_cap_within_bounds_round_trip() -> 
     assert response.json()["settings"]["wombat_spoken_reply_max_chars"] == 800
 
 
+# --- TK-304 (DEC-67g): wombat_quiet_start/wombat_quiet_end pair-wise PUT validation ------------
+
+
+def test_put_settings_quiet_hours_valid_pair_is_200_and_persists() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_start": "22:00", "wombat_quiet_end": "07:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_quiet_start"] == "22:00"
+    assert response.json()["settings"]["wombat_quiet_end"] == "07:00"
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"]["wombat_quiet_start"] == "22:00"
+    assert get_response.json()["settings"]["wombat_quiet_end"] == "07:00"
+
+
+def test_put_settings_quiet_hours_both_blank_is_200() -> None:
+    """Both blank ("" - feature off) is a valid pair, not a violation of the pair-wise rule."""
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_start": "", "wombat_quiet_end": ""},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_quiet_start"] == ""
+    assert response.json()["settings"]["wombat_quiet_end"] == ""
+
+
+def test_put_settings_quiet_hours_malformed_value_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_start": "25:99", "wombat_quiet_end": "07:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_quiet_hours_only_start_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_start": "22:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+def test_put_settings_quiet_hours_only_end_is_422() -> None:
+    client = _client()
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_end": "07:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
 # --- TK-302 (DEC-67d/h): the eight wombat_param_* operating-parameter overlay keys -------------
 
 

@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import tzlocal
 from dotenv import dotenv_values
-from pydantic import Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import Field, SecretStr, StringConstraints, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
@@ -44,6 +44,13 @@ class ConfigurationError(RuntimeError):
 
 # Declared in the order they are reported as missing (AC2 names the FIRST missing one).
 REQUIRED_ENV: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL")
+
+# TK-304 (DEC-67g): the DEC-64 quiet-hours HH:MM format — zero-padded 24-hour, or the empty
+# string (feature off). Embedded in the type ANNOTATION itself (not a separate field_validator)
+# so ``_SettingsTableSource``'s own ``TypeAdapter(annotation)`` pre-filter (below) catches a
+# malformed table row exactly like every closed-vocabulary ``Literal`` field already does —
+# dropped with a warning, falling back to the default, rather than crashing load_config().
+_HHMM_OR_BLANK = Annotated[str, StringConstraints(pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")]
 
 # The documented admitted-field schema for the app-editable settings tier (TK-196, Q-106(b),
 # ported to the DEC-43 wombat_settings table by TK-241): keys named here are the ONLY ones the
@@ -81,6 +88,11 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     "wombat_reply_window_seconds",
     "wombat_spoken_reply_max_chars",
     "wombat_asr_model",
+    # TK-304 (DEC-67g): the quiet-hours window that holds the immediate-voice arm
+    # (wombat.gate.quiet_hours.in_quiet_hours) — restart-tier (assemble_runtime resolves it
+    # once at boot, no hot-apply). "" (either field) means the feature is off.
+    "wombat_quiet_start",
+    "wombat_quiet_end",
 )
 
 
@@ -133,7 +145,17 @@ class _SettingsTableSource(PydanticBaseSettingsSource):
         filtered: dict[str, Any] = {}
         for key, value in _TABLE_SETTINGS_HOLDER.items():
             if key in APP_EDITABLE_FIELDS:
-                annotation = self.settings_cls.model_fields[key].annotation
+                field_info = self.settings_cls.model_fields[key]
+                # TK-304: fold FieldInfo.metadata (e.g. a StringConstraints pattern — pydantic
+                # strips ``Annotated`` wrappers off ``.annotation`` itself) back in so a
+                # constrained-but-not-Literal field (``wombat_quiet_start``/``wombat_quiet_end``)
+                # gets the SAME table-tier format check every closed-vocabulary Literal field
+                # already gets — behavior-preserving for every existing field (empty metadata).
+                annotation = (
+                    Annotated[field_info.annotation, *field_info.metadata]
+                    if field_info.metadata
+                    else field_info.annotation
+                )
                 adapter = _type_adapter_for(key, annotation)
                 try:
                     adapter.validate_python(value)
@@ -221,6 +243,15 @@ class WombatConfig(BaseSettings):
     # SettingsUpdate PUT validation (wombat.settings_app.api) exactly.
     wombat_reply_window_seconds: float = Field(default=120.0, ge=30, le=600)
     wombat_spoken_reply_max_chars: int = Field(default=400, ge=200, le=1200)
+
+    # OPTIONAL (TK-304, DEC-67g): the quiet-hours window that holds the immediate-voice arm
+    # (``wombat.gate.quiet_hours.in_quiet_hours``, wired at the ``bootstrap.assemble_runtime``
+    # gate_stage construction site). "" (either field) means the feature is off; a non-blank
+    # value must be zero-padded 24-hour "HH:MM" (see ``_HHMM_OR_BLANK`` above) — an out-of-format
+    # value fails ``load_config`` loudly (env tier) or is dropped with a warning (table tier),
+    # same as every other admitted field. Restart-tier (no hot-apply).
+    wombat_quiet_start: _HHMM_OR_BLANK = ""
+    wombat_quiet_end: _HHMM_OR_BLANK = ""
 
     # OPTIONAL (TK-187, DEC-28): voice/persona config surface — provider selection, key
     # overrides, voice id, and assistant name. Selecting a provider here is a structural

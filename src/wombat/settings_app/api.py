@@ -43,12 +43,13 @@ key 422s (``SettingsUpdate`` has no such field, ``extra="forbid"``).
 from __future__ import annotations
 
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import tzlocal
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
 from wombat.external_store import ExternalItemStore
@@ -96,6 +97,15 @@ KEY_PROVIDERS: tuple[str, ...] = ("elevenlabs", "deepgram", "fish")
 
 _KeyProvider = Literal["elevenlabs", "deepgram", "fish"]
 
+# TK-304 (DEC-67g): mirrors wombat.config._HHMM_OR_BLANK's pattern — zero-padded 24-hour "HH:MM",
+# or blank ("" - unset within a single field's own validator; the pair-wise "both-or-neither"
+# rule below is a SEPARATE, PUT-body-level check).
+_HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+_QUIET_HOURS_PAIRWISE_MESSAGE = (
+    "wombat_quiet_start and wombat_quiet_end must both be set or both omitted in the same PUT"
+)
+
 
 class SettingsUpdate(BaseModel):
     """Mirror of ``WombatConfig``'s app-editable fields (``wombat.config.APP_EDITABLE_FIELDS``)
@@ -140,6 +150,29 @@ class SettingsUpdate(BaseModel):
     wombat_reply_window_seconds: float | None = Field(default=None, ge=30, le=600)
     wombat_spoken_reply_max_chars: int | None = Field(default=None, ge=200, le=1200)
     wombat_asr_model: Literal["tiny", "base", "small", "medium"] | None = None
+    # TK-304 (DEC-67g): mirrors WombatConfig.wombat_quiet_start/wombat_quiet_end - plain strs,
+    # not Literals (exempt from the mirror test's vocabulary check). "" turns the feature off;
+    # a non-blank value must be "HH:MM" (validated below); the pair-wise both-or-neither-set
+    # rule is enforced by the model_validator below (a single field's own format is otherwise
+    # independently valid).
+    wombat_quiet_start: str | None = None
+    wombat_quiet_end: str | None = None
+
+    @field_validator("wombat_quiet_start", "wombat_quiet_end")
+    @classmethod
+    def _quiet_hours_format(cls, value: str | None) -> str | None:
+        if value is not None and value != "" and not _HHMM_PATTERN.match(value):
+            raise ValueError(f"must be \"HH:MM\" (24-hour, zero-padded) or empty, got {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _quiet_hours_pairwise(self) -> SettingsUpdate:
+        # "Set" means present in THIS PUT body (not None) - a PUT that omits both is a no-op for
+        # this pair, always fine. Exactly one present is the incoherent partial-window case the
+        # pair-wise rule rejects (RULING v2.172 r6's DEC-67g door check).
+        if (self.wombat_quiet_start is None) != (self.wombat_quiet_end is None):
+            raise ValueError(_QUIET_HOURS_PAIRWISE_MESSAGE)
+        return self
     # TK-302 (DEC-67d/h): the eight DEC-67(d) app-editable OperatingParams overlay keys —
     # ``wombat.params.PARAMS_APP_EDITABLE``'s spec, mirrored here VERBATIM. Restart-tier (no
     # hot-apply; ``wombat.runtime.serve()`` reads these once at boot). ge/le mirrors each spec

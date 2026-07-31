@@ -685,6 +685,98 @@ def test_load_config_rejects_unknown_persona_humor_env_var_naming_it_unchanged(
     assert "WOMBAT_PERSONA_HUMOR" in str(exc_info.value)
 
 
+# --- TK-304 (DEC-67g): wombat_quiet_start/wombat_quiet_end -------------------------------------
+
+
+def test_load_config_quiet_hours_defaults_to_blank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+
+    config = load_config()
+
+    assert config.wombat_quiet_start == ""
+    assert config.wombat_quiet_end == ""
+    assert "wombat_quiet_start" in APP_EDITABLE_FIELDS
+    assert "wombat_quiet_end" in APP_EDITABLE_FIELDS
+
+
+def test_load_config_reads_quiet_hours_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_QUIET_START", "22:00")
+    monkeypatch.setenv("WOMBAT_QUIET_END", "07:00")
+
+    config = load_config()
+
+    assert config.wombat_quiet_start == "22:00"
+    assert config.wombat_quiet_end == "07:00"
+
+
+def test_load_config_rejects_malformed_quiet_start_naming_the_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("WOMBAT_QUIET_START", "25:99")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_config()
+
+    assert "WOMBAT_QUIET_START" in str(exc_info.value)
+
+
+@_requires_pg
+def test_load_config_table_drops_malformed_quiet_end_with_warning(
+    fresh_settings_table: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC4 (table tier): a malformed table-sourced value is DROPPED with one warning, falling
+    back to the field default, rather than crashing load_config() (the DEC-43 CON-3 posture —
+    mirrors ``test_load_config_rejects_unknown_asr_model_naming_the_var``'s table-tier sibling
+    for the closed-vocabulary fields)."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_quiet_end": "25:99"})
+    finally:
+        store.close()
+
+    with caplog.at_level(logging.WARNING):
+        config = load_config()
+
+    assert config.wombat_quiet_end == ""  # dropped, falls back to the default
+    assert "wombat_quiet_end" in caplog.text
+
+
+@_requires_pg
+def test_load_config_table_accepts_quiet_hours(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_quiet_start": "22:00", "wombat_quiet_end": "07:00"})
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_quiet_start == "22:00"
+    assert config.wombat_quiet_end == "07:00"
+
+
 # --- TK-228 (DEC-40): resolve_wombat_zone — WOMBAT_TIMEZONE, tzlocal fallback, NO silent UTC -----
 
 

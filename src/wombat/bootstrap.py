@@ -176,10 +176,11 @@ from .external_store import ExternalItemStore
 from .gate.ceiling import CeilingLedger, FlushDayLatch
 from .gate.decay import DayRollover
 from .gate.gate import gate_item_from_queue_item
-from .gate.models import GateAction, GateDecision, ItemKind
+from .gate.models import GateAction, GateDecision, GateItem, ItemKind
 from .gate.pending_journal_pg import PgPendingJournal
 from .gate.pending_set import PendingSet
 from .gate.pipeline import Gate
+from .gate.quiet_hours import in_quiet_hours
 from .gate.trigger import effective_urgency_threshold
 from .integrations.gcal.token_store import TokenStore as GcalTokenStore
 from .integrations.gmail.draft_composer import (
@@ -235,7 +236,7 @@ from .sources.bootstrap import (
     build_source_registry,
 )
 from .sources.chat_source import ChatSource
-from .sources.presence import make_presence_provider
+from .sources.presence import PresenceSnapshot, make_presence_provider
 from .sources.registry import SourceRegistry
 from .sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from .stages.brief_compose_stage import BriefComposeStage
@@ -925,13 +926,36 @@ def assemble_runtime(
         batch_size=_DRAIN_BATCH_SIZE,
         poll_interval_seconds=_DRAIN_POLL_INTERVAL_SECONDS,
     )
+    _inner_gate_evaluate = make_gate_evaluator(
+        gate=gate,
+        staleness_ceiling_s=op.presence_staleness_ceiling_seconds,
+        confidence_floor=op.presence_confidence_floor,
+        clock=_epoch_now,
+    )
+
+    async def _quiet_hours_gate_evaluate(
+        items: list[GateItem], presence: PresenceSnapshot | None
+    ) -> GateDecision:
+        """TK-304 (DEC-67g, RULING v2.172 r6): holds the immediate-voice arm across
+        ``config.wombat_quiet_start``-``config.wombat_quiet_end`` by forcing ``presence=None``
+        into the inner evaluator — the SAME canonical ``presence_hold`` predicate every other
+        presence-first call site uses (``gate_stage.py``'s own ``make_gate_evaluator``) then
+        degrades that to HOLD, pending set intact (reduce-only, CON-2/CON-3 clean). Out of
+        window this is a byte-transparent passthrough — ``presence`` reaches the inner evaluator
+        unchanged."""
+        if in_quiet_hours(
+            datetime.now(tz).time(), config.wombat_quiet_start, config.wombat_quiet_end
+        ):
+            logger.info(
+                "gate: quiet hours active (%s-%s); holding the immediate-voice arm",
+                config.wombat_quiet_start,
+                config.wombat_quiet_end,
+            )
+            return await _inner_gate_evaluate(items, None)
+        return await _inner_gate_evaluate(items, presence)
+
     gate_stage = GateStage(
-        evaluate=make_gate_evaluator(
-            gate=gate,
-            staleness_ceiling_s=op.presence_staleness_ceiling_seconds,
-            confidence_floor=op.presence_confidence_floor,
-            clock=_epoch_now,
-        ),
+        evaluate=_quiet_hours_gate_evaluate,
         presence_provider=presence_provider,
         absorb_feedback=absorb_feedback,
         stamp_resolution=stamp_resolution,

@@ -8,7 +8,7 @@ import os
 from collections.abc import Iterator
 from datetime import UTC, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -45,6 +45,7 @@ from wombat.external_store import (
 from wombat.external_store import (
     ensure_schema as ensure_external_items_schema,
 )
+from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
 from wombat.params import load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact, build_brief_schedule_pathway
@@ -53,8 +54,10 @@ from wombat.queue import QueueItem
 from wombat.scratchpad import ScratchpadStore
 from wombat.sources.base import SourceEvent
 from wombat.sources.chat_source import ChatSource
+from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.stages.brief_timer_stage import BriefTimerStage
+from wombat.stages.gate_stage import GateStage
 from wombat.substrate import cold_boot_bundle
 from wombat.user_facts import UserFactsStore
 from wombat.voice.reply_context import LastSpokenRegister
@@ -317,6 +320,98 @@ def test_assemble_runtime_threads_wombat_user_name_into_live_persona() -> None:
         tz=ZoneInfo("UTC"),
     )
     assert "Jim" in bundle.live_persona.instruction(Mouth.CHAT)
+
+
+# --- TK-304 (DEC-67g): the quiet-hours gate_stage wrapper (RULING v2.172 r6) --------------------
+
+_ACTIVE_PRESENCE = PresenceSnapshot(
+    state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=0.0
+)
+
+
+def _quiet_hours_config() -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_quiet_start="22:00",
+        wombat_quiet_end="07:00",
+    )
+
+
+class _FixedNow(datetime):
+    """A ``datetime`` stand-in whose ``now(tz)`` always returns the same fixed instant —
+    monkeypatched over ``bootstrap.datetime`` so the wrapper's own ``datetime.now(tz)`` call
+    resolves deterministically (late-bound module-global lookup, the same technique every other
+    bootstrap-module fake-clock swap in this file uses)."""
+
+    _fixed: datetime
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+        return cls._fixed
+
+
+def _fixed_now_at(hour: int, minute: int) -> type[_FixedNow]:
+    fixed = _FixedNow(2026, 1, 1, hour, minute, tzinfo=UTC)
+
+    class _Bound(_FixedNow):
+        pass
+
+    _Bound._fixed = fixed
+    return _Bound
+
+
+async def test_assemble_runtime_gate_stage_holds_immediate_voice_during_quiet_hours(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC2: at the bootstrap wrapper level (gate_stage.py itself byte-untouched, out of scope)
+    — the presence-hold test pattern applied one level up. A spy stands in for the inner
+    ``make_gate_evaluator`` result (the real Gate/PendingSet machinery is gate_stage.py's own
+    already-tested responsibility) so this test proves EXACTLY the wrapper's reduce-only
+    contract: quiet hours active forces ``presence=None`` into the inner evaluator (the SAME
+    canonical presence_hold predicate then degrades that to HOLD -- no immediate-voice
+    surfacing, the item stays pending); out of window the wrapper is a byte-transparent
+    passthrough (a later out-of-window pass reaches the inner evaluator with the REAL presence,
+    which is how it surfaces)."""
+    received_presence: list[PresenceSnapshot | None] = []
+    canned_decision = GateDecision(action=GateAction.HOLD, items=())
+
+    def _fake_make_gate_evaluator(**kwargs: object) -> object:
+        async def _evaluate(
+            items: list[GateItem], presence: PresenceSnapshot | None
+        ) -> GateDecision:
+            received_presence.append(presence)
+            return canned_decision
+
+        return _evaluate
+
+    monkeypatch.setattr(bootstrap, "make_gate_evaluator", _fake_make_gate_evaluator)
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_quiet_hours_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = cast(GateStage, graph.get("gate"))
+    item = GateItem(item_id="i1", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    # --- in-window (23:30 UTC, inside 22:00-07:00): presence is forced to None -------------
+    monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(23, 30))
+    with caplog.at_level(logging.INFO):
+        in_window_decision = await stage._evaluate([item], _ACTIVE_PRESENCE)
+    assert received_presence[-1] is None
+    assert in_window_decision == canned_decision
+    assert "quiet hours" in caplog.text
+
+    # --- out-of-window (12:00 UTC): byte-transparent passthrough ----------------------------
+    monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(12, 0))
+    out_of_window_decision = await stage._evaluate([item], _ACTIVE_PRESENCE)
+    assert received_presence[-1] is _ACTIVE_PRESENCE
+    assert out_of_window_decision == canned_decision
 
 
 # --- TK-166 (CR-1, Q-83): replay_pending is the ONE eager-read boot-replay flag -----------------
