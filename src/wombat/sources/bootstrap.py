@@ -77,6 +77,16 @@ recording at all. This module only ever imports ``wombat.persona.feedback`` — 
 ``wombat.behavior.event_log`` itself; the ``recorder`` closure (built by ``bootstrap.py``, over
 the ONE shared ``RuntimeBundle.behavior_event_log`` instance) is handed in fully assembled.
 
+TK-322 (DEC-70a/e, RULING r2): ``_maybe_register_screenpipe`` registers ``ScreenpipeEventSource``
+(``sources/screenpipe_source.py``) under id ``"screenpipe"`` following the EXACT SAME loud-skip
+pattern as ``_maybe_register_gcal``/``_maybe_register_asr`` above, iff
+``config.wombat_observe_screenpipe`` is true; otherwise ONE loud log naming
+``WOMBAT_OBSERVE_SCREENPIPE`` and the source is skipped (never raised) — the toggle off is the
+shipped default (DEC-70c), so the source is structurally never constructed. When wired, this
+function builds its OWN ``ScreenpipeClient(config.wombat_screenpipe_url)`` internally; an
+optional ``client`` kwarg lets tests inject a fake/degraded client instead. Registration-not-
+rewrite (DEC-5/TK-161): ``SourceRegistry``/``sources/base.py`` are untouched.
+
 TK-245 (DEC-45(c)/(d), ruling v2.68 r6): ``build_external_item_sink`` builds the ``SourceRegistry``
 ``sink`` seam — an explicit, per-source WHITELIST projection into ``wombat_external_items``. Only
 ``gcal``/``gmail`` events are ever projected; any other source id is silently ignored (no
@@ -120,12 +130,14 @@ from wombat.integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
+from wombat.integrations.screenpipe.client import ScreenpipeClient
 from wombat.persona.commands import apply, parse_persona_command
 from wombat.persona.feedback import FeedbackToken, detect_feedback_token
 from wombat.persona.live import LivePersona
 from wombat.sources.asr import ASRSource
 from wombat.sources.base import InputSource, SourceEvent
 from wombat.sources.registry import Enqueuer, Sink, SourceRegistry
+from wombat.sources.screenpipe_source import ScreenpipeEventSource
 from wombat.user_model.feedback_source import FeedbackInputSource
 from wombat.voice.select import build_transcriber
 
@@ -137,6 +149,8 @@ DEFAULT_GCAL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_GMAIL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_ASR_POLL_INTERVAL_SECONDS = 2.0
+# TK-322 (RULING r5): the screenpipe source's own polling cadence.
+DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS = 30.0
 
 
 def _utc_now() -> datetime:
@@ -662,6 +676,38 @@ def _maybe_register_asr(
     )
 
 
+def _maybe_register_screenpipe(
+    registry: SourceRegistry,
+    config: WombatConfig,
+    *,
+    poll_interval_seconds: float,
+    clock: Callable[[], datetime],
+    client: ScreenpipeClient | None = None,
+) -> None:
+    """TK-322 (DEC-70a/e, RULING r2): register ``ScreenpipeEventSource`` under id
+    ``"screenpipe"`` iff ``config.wombat_observe_screenpipe`` is true — the SAME loud-skip
+    pattern as ``_maybe_register_gcal``/``_maybe_register_asr`` above. False (the shipped
+    default, DEC-70c) skips loudly and the source is never constructed — structurally inert.
+    ``client`` is test-only injection; production always builds its OWN
+    ``ScreenpipeClient(config.wombat_screenpipe_url)``."""
+    if not config.wombat_observe_screenpipe:
+        logger.warning(
+            "screenpipe source not wired: WOMBAT_OBSERVE_SCREENPIPE is false — skipping the "
+            "screen-activity channel (boot continues without it)"
+        )
+        return
+    screenpipe_client = (
+        client if client is not None else ScreenpipeClient(config.wombat_screenpipe_url)
+    )
+    registry.register(
+        ScreenpipeEventSource(
+            client=screenpipe_client,
+            poll_interval_seconds=poll_interval_seconds,
+            clock=clock,
+        )
+    )
+
+
 def build_source_registry(
     config: WombatConfig,
     queue: Enqueuer,
@@ -672,6 +718,7 @@ def build_source_registry(
     gmail_poll_interval_seconds: float = DEFAULT_GMAIL_POLL_INTERVAL_SECONDS,
     feedback_poll_interval_seconds: float = DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS,
     asr_poll_interval_seconds: float = DEFAULT_ASR_POLL_INTERVAL_SECONDS,
+    screenpipe_poll_interval_seconds: float = DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS,
     gcal_token_store: GcalTokenStore | None = None,
     gmail_token_store: GmailTokenStore | None = None,
     live_persona: LivePersona | None = None,
@@ -681,6 +728,7 @@ def build_source_registry(
     chat_turn_store: ChatTurnStore | None = None,
     turn_hook: Callable[[str, str, str], None] | None = None,
     context_hook: Callable[[], Mapping[str, str]] | None = None,
+    screenpipe_client: ScreenpipeClient | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
     of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
@@ -690,11 +738,12 @@ def build_source_registry(
     more sources registered.
 
     ``tz``/``clock`` are injected (no config field is read internally here beyond the Google
-    OAuth client id/secret, ``wombat_feedback_file``, and ``wombat_asr_drop_dir``/
-    ``wombat_asr_model``) — callers supply the wombat civil-local tz (DEC-21) and, in tests, a
-    fake clock. ``gcal_token_store``/``gmail_token_store`` default to the real OS-keyring
-    ``TokenStore`` adapters; tests inject in-memory fakes so this function never touches the
-    real vault outside the live smokes.
+    OAuth client id/secret, ``wombat_feedback_file``, ``wombat_asr_drop_dir``/
+    ``wombat_asr_model``, and ``wombat_observe_screenpipe``/``wombat_screenpipe_url``) —
+    callers supply the wombat civil-local tz (DEC-21) and, in tests, a fake clock.
+    ``gcal_token_store``/``gmail_token_store`` default to the real OS-keyring ``TokenStore``
+    adapters; tests inject in-memory fakes so this function never touches the real vault
+    outside the live smokes.
 
     ``live_persona``/``speak`` (TK-212) thread into ``_maybe_register_asr`` ONLY, to build the
     ASR pre-queue persona-command interception hook (``make_persona_command_hook``); both default
@@ -720,6 +769,10 @@ def build_source_registry(
     ``context_hook`` (TK-289, DEC-64 gap A half 2) threads into ``_maybe_register_asr`` ONLY,
     straight through to ``ASRSource``; defaults ``None``, which constructs today's ``ASRSource``
     exactly.
+
+    ``screenpipe_client`` (TK-322) is test-only injection for ``_maybe_register_screenpipe``;
+    defaults ``None``, which constructs a real ``ScreenpipeClient`` over
+    ``config.wombat_screenpipe_url`` when ``config.wombat_observe_screenpipe`` is true.
     """
     # Built BEFORE the registry itself so the sink (which needs the SAME TriageRules instance,
     # loaded at most once) can be threaded into the SourceRegistry constructor (TK-245).
@@ -765,6 +818,13 @@ def build_source_registry(
         persona_feedback_recorder=persona_feedback_recorder,
         turn_hook=turn_hook,
         context_hook=context_hook,
+    )
+    _maybe_register_screenpipe(
+        registry,
+        config,
+        poll_interval_seconds=screenpipe_poll_interval_seconds,
+        clock=clock,
+        client=screenpipe_client,
     )
     return registry
 
@@ -861,6 +921,7 @@ __all__ = [
     "DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS",
     "DEFAULT_GCAL_POLL_INTERVAL_SECONDS",
     "DEFAULT_GMAIL_POLL_INTERVAL_SECONDS",
+    "DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS",
     "BriefFetches",
     "GmailWithReplyIntents",
     "build_brief_fetches",

@@ -105,6 +105,17 @@ def _make_config(
     )
 
 
+def _make_screenpipe_config(*, observe_screenpipe: bool) -> WombatConfig:
+    """TK-322: a dedicated config-builder for the screenpipe toggle tests below — kept SEPARATE
+    from ``_make_config`` above so that helper's ``**_CONFIGURED``-style call sites (a uniform
+    ``dict[str, str]`` unpack) never mix with a differently-typed keyword param."""
+    return WombatConfig(
+        deepseek_api_key=SecretStr("unused-in-this-test"),
+        deepseek_base_url="https://unused.example",
+        wombat_observe_screenpipe=observe_screenpipe,
+    )
+
+
 _CONFIGURED = {"client_id": "test-client-id", "client_secret": "test-client-secret"}
 
 
@@ -566,6 +577,98 @@ def test_asr_source_not_wired_when_faster_whisper_not_installed(
 
     assert not _is_registered(registry, "asr")
     assert "faster-whisper" in caplog.text.lower()
+    assert consent_calls == []
+
+
+# ------------------------------------------------------------------ TK-322: screenpipe wiring
+
+
+def test_screenpipe_source_not_wired_when_toggle_is_false(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC(c): ``wombat_observe_screenpipe`` false (the shipped default, DEC-70c) -> the source
+    is NEVER constructed, ``source_ids`` omits it, and exactly one loud-skip log line names the
+    toggle."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_screenpipe_config(observe_screenpipe=False)
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "screenpipe")
+    assert "WOMBAT_OBSERVE_SCREENPIPE" in caplog.text
+    assert consent_calls == []
+
+
+def test_screenpipe_source_wired_when_toggle_is_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC(c): ``wombat_observe_screenpipe`` true constructs and registers the source under id
+    ``"screenpipe"``. No network call happens here — the default url (127.0.0.1) is loopback,
+    so ``ScreenpipeClient`` construction alone never touches a socket."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_screenpipe_config(observe_screenpipe=True)
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+
+    assert _is_registered(registry, "screenpipe")
+    assert consent_calls == []
+
+
+def test_screenpipe_source_uses_the_injected_client_when_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The optional ``screenpipe_client`` kwarg (test-only injection) is threaded straight
+    through to the constructed ``ScreenpipeEventSource``: the REAL ``ScreenpipeClient`` is
+    proven never constructed at all (monkeypatched to raise) when an injected client is
+    supplied, yet the source still registers cleanly."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_screenpipe_config(observe_screenpipe=True)
+
+    def _raising_screenpipe_client(base_url: str) -> Any:
+        raise AssertionError("the real ScreenpipeClient must never be constructed here")
+
+    monkeypatch.setattr(
+        sources_bootstrap_module, "ScreenpipeClient", _raising_screenpipe_client
+    )
+
+    class _FakeScreenpipeClient:
+        def search(
+            self,
+            start: datetime,
+            end: datetime,
+            *,
+            app_name: str | None = None,
+            limit: int | None = None,
+        ) -> list[Any]:
+            return []
+
+    injected = _FakeScreenpipeClient()
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        screenpipe_client=injected,  # type: ignore[arg-type]
+    )
+
+    assert _is_registered(registry, "screenpipe")
     assert consent_calls == []
 
 
