@@ -44,6 +44,7 @@ import json
 import os
 import threading
 import time as _time
+import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -69,10 +70,14 @@ from wombat.integrations.screenpipe.client import ScreenpipeClient
 from wombat.params import load_operating_params
 from wombat.queue import QueueItem
 from wombat.schema_preflight import ensure_all_schemas
+from wombat.sinks.speak import SpeakSink
+from wombat.sinks.tts_adapter import Pyttsx3Adapter
 from wombat.sources.presence import PresenceSnapshot, PresenceState
 from wombat.sources.screenpipe_source import ScreenpipeEventSource
 from wombat.stages.gate_stage import GateStage
 from wombat.user_facts import UserFactsStore
+from wombat.voice.select import FallbackTTSAdapter
+from wombat.voice.tts import DeepgramAuraTTSAdapter, ElevenLabsTTSAdapter, FishAudioTTSAdapter
 
 _PG_DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
 
@@ -208,6 +213,22 @@ def _reset_tables(dsn: str, tables: tuple[str, ...]) -> None:
         conn.commit()
 
 
+class _RecordingSpeakAdapter:
+    """A hermetic stand-in for the drain graph's real TTS adapter (F7 batch-review repair) —
+    records every ``speak()`` call instead of ever reaching real local/cloud audio output.
+    Injected directly at the ``SpeakSink`` stage seam, AFTER ``assemble_runtime`` returns
+    (mirroring this test's own existing ``gate_stage._presence_provider`` override precedent
+    below), as a structural belt-and-suspenders guard on top of this module's own
+    ``wombat_voice_enabled=False`` config pin (``_config()``) — this test must never depend on
+    whatever the operator's own environment happens to carry for voice/TTS credentials."""
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+
 # =================================================================================================
 # (a)/(b): ScreenpipeEventSource derives one event from the fake server -> the REAL gate holds by
 # default with zero model calls -> the same event, payload-forced, surfaces and composes one line.
@@ -262,6 +283,18 @@ async def test_default_hold_then_forced_surface_through_real_gate(tmp_path: Any)
     gate_stage._presence_provider = lambda: PresenceSnapshot(
         state=PresenceState.ACTIVE, confidence=1.0, idle_ms=0, taken_at=_time.time()
     )
+
+    # F7 batch-review repair: this test builds the REAL composition root and composes a real line
+    # through the generic mouth (part (b) below) — hermetically neuter audio at the SpeakSink
+    # stage seam (belt-and-suspenders on top of _config()'s own wombat_voice_enabled=False) so
+    # this test can NEVER reach real local/cloud TTS regardless of the operator's own environment.
+    speak_stage = cast(SpeakSink, bundle.pathways.get(bundle.drain_pathway_id).get("speak"))
+    recording_speak_adapter = _RecordingSpeakAdapter()
+    speak_stage._adapter = recording_speak_adapter
+    # Pin the hermeticity: no REAL TTS adapter type is reachable anywhere in this bundle's object
+    # graph (voice is off by config, so none should ever have been constructed in the first
+    # place — this proves it, rather than merely asserting on the one seam above).
+    assert _find_real_tts_adapter(bundle) is None
 
     shared_model = FakeModel(
         response=ModelResponse(
@@ -431,16 +464,24 @@ def _all_slot_names(cls: type) -> list[str]:
     return names
 
 
-def _find_screenpipe_client(root: object) -> ScreenpipeClient | None:
-    """A bounded, cycle-safe walk of the wombat/cogworx-owned object graph rooted at ``root``.
+def _walk_object_graph(root: object) -> Iterator[object]:
+    """A bounded, cycle-safe walk of the wombat/cogworx-owned object graph rooted at ``root``,
+    yielding EVERY object visited — the shared traversal both ``_find_screenpipe_client`` and
+    ``_find_real_tts_adapter`` filter over.
 
-    DEC-70a custody: ``ScreenpipeClient`` is the ONE class that ever talks to screenpipe, and it
-    is referenced ONLY from wombat/cogworx-authored objects (never a third-party SDK/stdlib
-    object) — so this walk descends into builtin containers plus any object whose type lives in
-    the ``wombat``/``cogworx`` package tree, and treats everything else (psycopg connections,
-    locks, provider clients, zoneinfo, ...) as an opaque leaf. That keeps the walk both SAFE (no
-    sockets/locks/huge module ``__globals__`` ever get descended into) and properly bounded (a
-    visited-id set guards cycles; a depth cap is a pure safety net, never expected to bite).
+    Descends into builtin containers plus any object whose type lives in the ``wombat``/
+    ``cogworx`` package tree, and treats everything else (psycopg connections, locks, provider
+    clients, zoneinfo, ...) as an opaque leaf. That keeps the walk both SAFE (no sockets/locks/huge
+    module ``__globals__`` ever get descended into) and properly bounded (a visited-id set guards
+    cycles; a depth cap is a pure safety net, never expected to bite).
+
+    F6 batch-review repair: a FUNCTION's own type (``types.FunctionType``) reports module
+    ``'builtins'`` — never ``'wombat'``/``'cogworx'`` — so the module-allowlist check below would
+    always skip it, and any wombat/cogworx object captured ONLY as a closure's free variable (e.g.
+    ``bootstrap.py``'s ``asr_context_hook``, which closes over ``screenpipe_client``) would stay
+    permanently invisible to this walk. Closures are therefore ALWAYS descended, regardless of the
+    module allowlist that still gates every other (typed) object; the visited-id set above still
+    guards cycles (a closure can reference itself or another closure that loops back).
     """
     visited: set[int] = set()
     stack: list[tuple[object, int]] = [(root, 0)]
@@ -454,9 +495,7 @@ def _find_screenpipe_client(root: object) -> ScreenpipeClient | None:
         if obj_id in visited:
             continue
         visited.add(obj_id)
-
-        if isinstance(obj, ScreenpipeClient):
-            return obj
+        yield obj
 
         if isinstance(obj, (list, tuple, set, frozenset)):
             stack.extend((item, depth + 1) for item in obj)
@@ -465,6 +504,18 @@ def _find_screenpipe_client(root: object) -> ScreenpipeClient | None:
             for key, value in obj.items():
                 stack.append((key, depth + 1))
                 stack.append((value, depth + 1))
+            continue
+
+        if isinstance(obj, types.FunctionType):
+            # F6: closures are ALWAYS descended (see the docstring above) — never gated by the
+            # module allowlist below, which a function's own type would always fail.
+            if obj.__closure__:
+                for cell in obj.__closure__:
+                    try:
+                        contents = cell.cell_contents
+                    except ValueError:
+                        continue  # an empty cell (not yet bound) — nothing to descend
+                    stack.append((contents, depth + 1))
             continue
 
         module_name = type(obj).__module__ or ""
@@ -483,6 +534,38 @@ def _find_screenpipe_client(root: object) -> ScreenpipeClient | None:
                 continue
             stack.append((value, depth + 1))
 
+
+def _find_screenpipe_client(root: object) -> ScreenpipeClient | None:
+    """DEC-70a custody: ``ScreenpipeClient`` is the ONE class that ever talks to screenpipe —
+    the first instance reachable from ``root`` via ``_walk_object_graph``, or ``None``."""
+    for obj in _walk_object_graph(root):
+        if isinstance(obj, ScreenpipeClient):
+            return obj
+    return None
+
+
+# The concrete TTS adapter types this repo can ever construct (F7 batch-review repair) — the
+# LOCAL default (``Pyttsx3Adapter``), the three cloud providers (``voice/tts.py``), and the
+# cloud-primary/local-fallback wrapper (``voice/select.py``). ``TTSAdapter`` itself is a bare
+# ``Protocol`` (no ``@runtime_checkable``), so reachability is pinned against these CONCRETE
+# classes rather than an ``isinstance`` check against the Protocol.
+_REAL_TTS_ADAPTER_TYPES: tuple[type, ...] = (
+    Pyttsx3Adapter,
+    FishAudioTTSAdapter,
+    ElevenLabsTTSAdapter,
+    DeepgramAuraTTSAdapter,
+    FallbackTTSAdapter,
+)
+
+
+def _find_real_tts_adapter(root: object) -> object | None:
+    """F7 batch-review repair: the first REAL (non-fake) TTS adapter instance reachable from
+    ``root`` via ``_walk_object_graph`` — including through closures (F6) — or ``None``. Used to
+    pin this module's own audio hermeticity: this test suite must never construct/reach a real
+    local or cloud TTS adapter, regardless of the operator's own environment."""
+    for obj in _walk_object_graph(root):
+        if isinstance(obj, _REAL_TTS_ADAPTER_TYPES):
+            return obj
     return None
 
 
@@ -501,3 +584,24 @@ def test_all_four_observe_toggles_off_constructs_no_screenpipe_client_anywhere()
 
     found = _find_screenpipe_client(bundle)
     assert found is None, f"a ScreenpipeClient instance was reachable in the graph: {found!r}"
+
+
+def test_f6_closure_walk_is_non_vacuous_finds_the_client_through_a_closure() -> None:
+    """Proves the F6 closure-descending repair actually WORKS (not silently vacuous) — isolated
+    from the real composition root's own incidental wiring (which happens to ALSO reach a
+    ``ScreenpipeClient`` via a plain typed attribute through ``sources/bootstrap.py``'s registered
+    ``ScreenpipeEventSource``, TK-322 — that path would make a toggle-ON assemble_runtime control
+    pass vacuously even WITHOUT the closure-descent fix, proving nothing about it specifically).
+
+    This is the toggle-ON control for closures precisely: a real ``ScreenpipeClient`` captured
+    ONLY as a function's free variable, reachable through NO container/attribute/slot anywhere —
+    the ONLY path to it is the closure cell itself. The pre-F6 walk (which never descended
+    function closures at all, since a function's own type reports module 'builtins', never
+    'wombat') would find nothing here even with the client very much alive in the graph."""
+    client = ScreenpipeClient("http://127.0.0.1:1")
+
+    def _closure_over_client() -> None:
+        _ = client  # captured as a free variable -- lives ONLY in this function's __closure__
+
+    found = _find_screenpipe_client(_closure_over_client)
+    assert found is client, "the closure-descending walk failed to find the live client"

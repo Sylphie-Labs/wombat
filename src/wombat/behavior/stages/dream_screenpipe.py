@@ -188,6 +188,19 @@ def _normalize(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
+def _sanitize_display(text: str) -> str:
+    """Collapse every whitespace run (spaces, tabs, AND newlines) to a single space, then
+    neutralize every literal ``;`` to ``,`` — the ONE shared egress-sanitization helper applied to
+    any raw screenpipe ``app``/``title`` text before it ever reaches the projection or the model
+    (post-batch-review repair, round 3). ``run()`` joins projection lines with ``"\\n"``
+    (``_build_projection``'s docstring, DEC-70f), so an untrusted title carrying an interior
+    newline would otherwise forge extra prompt lines — a 3-item projection rendering as 4 lines —
+    that could pass this stage's own custody filters (``_parse_candidates``) straight into a
+    durable ``source='behavior'`` fact. Applied BEFORE the existing per-line
+    ``_MAX_PROJECTION_LINE_CHARS`` clamp (``candidate_lines`` below), never after."""
+    return " ".join(text.split()).replace(";", ",")
+
+
 def _daypart_of(hour: int) -> str | None:
     for name, start_hour, end_hour in _DAYPARTS:
         if start_hour <= hour < end_hour:
@@ -212,13 +225,13 @@ def _build_projection(items: list[ScreenpipeItem], tz: ZoneInfo) -> list[str]:
         if not app_norm:
             continue
         app_counts[app_norm] = app_counts.get(app_norm, 0) + 1
-        app_display.setdefault(app_norm, item.app.strip())
+        app_display.setdefault(app_norm, _sanitize_display(item.app))
 
         title_norm = _normalize(item.title)
         if title_norm:
             title_key = (app_norm, title_norm)
             title_counts[title_key] = title_counts.get(title_key, 0) + 1
-            title_display.setdefault(title_key, item.title.strip())
+            title_display.setdefault(title_key, _sanitize_display(item.title))
 
         daypart = _daypart_of(item.captured_at.astimezone(tz).hour)
         if daypart is not None:

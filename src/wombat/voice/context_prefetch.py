@@ -62,19 +62,25 @@ emitted no ``current_activity`` key (absent/stale snapshot — that gate lives e
 builder, never re-implemented here): returns the base result untouched, no search call. Otherwise
 ONE inline, synchronous ``screenpipe_client.search`` call (rides the client's own pinned short
 timeout — the ISS-30 finding-3 accepted posture) over the trailing
-``_SCREEN_HINT_LOOKBACK_SECONDS``, UNFILTERED by app (ISS-37-RIDER batch-review repair:
-screenpipe's own ``app_name`` field is the OS app display name — the arc's own fixtures use
-``"VSCode"`` — never the Windows process image basename ``current_activity.app`` reduces to,
-e.g. ``"Code.exe"``; filtering server-side on the wrong vocabulary silently returned zero items
-in production even with matching content on screen); the NEWEST returned
-item (by ``captured_at``) becomes the suffix `` | on screen: <snippet>``, the snippet truncated so
-the COMBINED line stays within ``_MAX_ACTIVITY_LINE_CHARS`` (the base app-title/in-call line is
-NEVER itself cut here — only the snippet gives, and if no room is left for even one snippet
-character the suffix is dropped entirely). No item, an empty/whitespace-only snippet text, or ANY
-exception anywhere in the enrichment attempt all degrade to the base builder's dict returned
-BYTE-IDENTICALLY (absent-not-wrong); an exception additionally logs exactly ONE loud warning
-(CON-3 parity with the three sibling builders above) — this function never lets an exception
-escape.
+``_SCREEN_HINT_LOOKBACK_SECONDS``, searched WITHOUT the server-side ``app_name`` param
+(ISS-37-RIDER batch-review repair: screenpipe's own ``app_name`` field is the OS app display
+name — the arc's own fixtures use ``"VSCode"`` — never the Windows process image basename
+``current_activity.app`` reduces to, e.g. ``"Code.exe"``; filtering server-side on the wrong
+vocabulary silently returned zero items in production even with matching content on screen).
+ORCHESTRATOR RULING (TK-323 round-3 repair, ABSENT-NOT-WRONG): among the items returned, only
+those whose ``app_name`` NORMALIZED-MATCHES (lowercase, trailing ``.exe`` stripped, either side
+containing the other — ``_apps_match``) the current foreground app are eligible; if none match,
+NO snippet is emitted at all (never a different app's newest capture mis-attributed to this one).
+The NEWEST matching item (by ``captured_at``) becomes the suffix `` | on screen: <snippet>``, the
+snippet truncated so the COMBINED line stays within ``_MAX_ACTIVITY_LINE_CHARS`` (the base
+app-title/in-call line is NEVER itself cut here — only the snippet gives, and if no room is left
+for even one snippet character the suffix is dropped entirely); the FINAL combined string (base
+line + suffix + snippet) is then sanitized as ONE whole (``_sanitize_combined_activity_line``) and
+re-capped, since the base line's title is itself raw/untrusted (Opus-verify repair, round 3). No
+item, no MATCHING item, an empty/whitespace-only snippet text, or ANY exception anywhere in the
+enrichment attempt all degrade to the base builder's dict returned BYTE-IDENTICALLY
+(absent-not-wrong); an exception additionally logs exactly ONE loud warning (CON-3 parity with the
+three sibling builders above) — this function never lets an exception escape.
 """
 
 from __future__ import annotations
@@ -273,6 +279,44 @@ def _process_basename(path: str) -> str:
     return tail or path
 
 
+def _normalize_app_for_match(value: str) -> str:
+    """Lowercase, strip whitespace, strip a trailing ``.exe`` — the read-side counterpart of the
+    ISS-37-RIDER search-side repair's own vocabulary bridge (screenpipe's ``app_name`` is an OS
+    app DISPLAY name, e.g. ``"VSCode"``; ``current_activity.app`` is a Windows process image
+    name/path, e.g. ``"Code.exe"`` or ``"C:/.../Code.exe"``)."""
+    return value.strip().lower().removesuffix(".exe")
+
+
+def _apps_match(item_app: str, current_app_basename: str) -> bool:
+    """ORCHESTRATOR RULING (binding, TK-323 round-3 repair): restore correct screen-hint
+    attribution via ABSENT-NOT-WRONG with normalized containment matching, after round-1 deleted
+    the server-side ``app_name`` filter outright with no ruling (the newest capture from ANY
+    app/monitor was being attributed to the foreground app — wrong-not-absent). Containment
+    either direction, after normalizing both sides, handles ``"code" in "vscode"``
+    (``Code.exe`` <-> ``"VSCode"``) and ``"chrome" in "chrome"`` (``chrome.exe`` <-> ``"Chrome"``).
+    An empty side (never matches) guards a blank/garbage app value from matching everything."""
+    a = _normalize_app_for_match(item_app)
+    b = _normalize_app_for_match(current_app_basename)
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
+def _sanitize_combined_activity_line(text: str) -> str:
+    """Collapse every whitespace run (including embedded newlines) to a single space, then
+    neutralize every literal ``;`` to ``,`` — applied to the WHOLE combined ``current_activity``
+    string (base app-title/in-call line + the screen-hint prefix + the snippet) as the LAST step
+    before it enters the payload dict (Opus-verify repair, round 3). Round 2 sanitized only the
+    SNIPPET; the base line's TITLE (sourced from ``CurrentActivity``, itself built from a raw,
+    untrusted foreground-window title) rides the SAME combined line unsanitized, so a literal
+    ``;`` in a title could still forge a fake ``key: value`` field through compose's
+    semicolon-joined ``format_payload_fields`` renderer even with the snippet itself clean.
+    Sanitizing the single assembled string — rather than each component separately, which is how
+    rounds 1-2 kept missing a sibling — covers the title, the snippet, and any future component
+    added to this line at ONE egress point."""
+    return " ".join(text.split()).replace(";", ",")
+
+
 def _sanitize_snippet(text: str) -> str:
     """Collapse ALL whitespace runs (spaces, tabs, and newlines) to a single space, strip the
     ends, THEN neutralize every literal ``;`` (Opus-verify repair). OCR text is UNTRUSTED (any
@@ -354,12 +398,16 @@ def build_current_activity_screen_hint(
     byte-identical). ``screenpipe_client`` is ``None``, or the base call emitted no
     ``current_activity`` key: returns the base dict untouched, no search call, no read of
     ``current_activity`` beyond what the base call already did. Otherwise makes ONE inline
-    ``screenpipe_client.search`` call over ``[now - _SCREEN_HINT_LOOKBACK_SECONDS, now]``,
-    UNFILTERED by app (batch-review repair — screenpipe's ``app_name`` vocabulary does not match
-    the Windows process basename this module renders; see the module docstring); the newest item
-    (by ``captured_at``) becomes the suffix
-    `` | on screen: <snippet>``, the snippet truncated so the combined line stays within
-    ``_MAX_ACTIVITY_LINE_CHARS`` (the base line is never itself cut here). No item, an
+    ``screenpipe_client.search`` call over ``[now - _SCREEN_HINT_LOOKBACK_SECONDS, now]``, WITHOUT
+    the server-side ``app_name`` param (batch-review repair — screenpipe's ``app_name`` vocabulary
+    does not match the Windows process basename this module renders), then selects only among
+    RETURNED items whose ``app_name`` normalized-matches the current foreground app
+    (``_apps_match``, TK-323 round-3 ORCHESTRATOR RULING — absent-not-wrong, never a different
+    app's capture mis-attributed); see the module docstring. The newest MATCHING item (by
+    ``captured_at``) becomes the suffix `` | on screen: <snippet>``, the snippet truncated so the
+    combined line stays within ``_MAX_ACTIVITY_LINE_CHARS`` (the base line is never itself cut
+    here), and the WHOLE combined line is then sanitized as one string
+    (``_sanitize_combined_activity_line``) and re-capped. No item, no MATCHING item, an
     empty/whitespace-only snippet, no room left for even one snippet char, or ANY exception —
     degrades to the base dict returned byte-identically (an exception additionally logs exactly
     ONE loud warning, CON-3 parity with the sibling builders above). ``clock`` is passed through
@@ -378,7 +426,15 @@ def build_current_activity_screen_hint(
         items = screenpipe_client.search(start, now)
         if not items:
             return base
-        newest = max(items, key=lambda item: item.captured_at)
+        # ORCHESTRATOR RULING (TK-323 round-3 repair): ABSENT-NOT-WRONG attribution — select only
+        # among items whose app_name normalized-matches the CURRENT foreground app; if none match,
+        # emit no snippet at all rather than attributing a different app's newest capture to this
+        # one (see _apps_match above).
+        app_basename = _process_basename(app)
+        matching_items = [item for item in items if _apps_match(item.app, app_basename)]
+        if not matching_items:
+            return base
+        newest = max(matching_items, key=lambda item: item.captured_at)
         snippet = _sanitize_snippet(newest.text_snippet)
         if not snippet:
             return base
@@ -394,7 +450,12 @@ def build_current_activity_screen_hint(
             exc_info=True,
         )
         return base
-    return {"current_activity": enriched_line}
+    # Opus-verify repair (round 3): sanitize the WHOLE combined line (base title + suffix +
+    # snippet), not just the snippet, then RE-APPLY the pinned cap — sanitization only ever
+    # shortens text (whitespace-collapse), so this can only tighten the bound already enforced
+    # above, never violate it.
+    sanitized_line = _sanitize_combined_activity_line(enriched_line)[:_MAX_ACTIVITY_LINE_CHARS]
+    return {"current_activity": sanitized_line}
 
 
 def _gcal_line(row: dict[str, Any], tz: ZoneInfo) -> str:

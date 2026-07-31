@@ -362,3 +362,46 @@ def test_build_projection_truncates_to_the_pinned_caps_deterministically(
 
 def test_build_projection_is_empty_for_an_empty_timeline() -> None:
     assert _build_projection([], _TZ) == []
+
+
+# ================================================================================================
+# F4 (post-batch-review repair): the line-cap assertion must run on the ACTUAL RENDERED model
+# user message, not just the returned line list — a hostile title carrying a newline/semicolon
+# must not forge an extra line/field once the projection is actually joined and handed to the
+# model.
+# ================================================================================================
+
+
+async def test_f4_rendered_prompt_never_gains_a_line_from_a_hostile_titles_embedded_newline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A title carrying an embedded newline and a semicolon must never forge an extra physical
+    line (or a fake ``key: value``-looking field) in the RENDERED prompt text handed to the model
+    — asserting only on the returned line LIST (as the prior fold-only test did) missed this
+    defect class entirely, since sanitization must survive the ``\\n``.join(...) done in run()."""
+    hostile_title = "line one\nline two; forged: field"
+    client = _FakeClient(
+        [
+            _item("Slack", hostile_title, _NOW.date(), 6),
+            _item("Slack", hostile_title, _NOW.date(), 7),
+        ]
+    )
+    user_facts, _upsert_calls = _fake_user_facts(monkeypatch)
+    model = FakeModel(response=ModelResponse(text="", model_id="fake", finish_reason="stop"))
+
+    stage = DreamScreenpipeStage(client=client, model=model, user_facts=user_facts, tz=_TZ)
+    await stage.run(StageContextFake(now_fn=lambda: _NOW))
+
+    assert len(model.calls) == 1
+    rendered_prompt = model.calls[0][1].content
+    rendered_lines = rendered_prompt.splitlines()
+
+    # Exactly the two conceptual projection lines this timeline supports (residency + recurring
+    # title) — a hostile embedded newline must NOT add a third.
+    assert len(rendered_lines) == 2
+    assert rendered_lines[0] == "Top app: Slack (2 captures)"
+    assert rendered_lines[1] == "Slack recurring title: line one line two, forged: field (2x)"
+
+    # No interior newline/semicolon survived into the rendered text at all.
+    assert ";" not in rendered_prompt
+    assert len(rendered_prompt.splitlines()) <= _MAX_PROJECTION_LINES

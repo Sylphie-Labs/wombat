@@ -38,7 +38,7 @@ from wombat.queue import ensure_schema as ensure_queue_schema
 from wombat.rating.params import EventClass, default_params_for
 from wombat.sources.base import SourceEvent
 from wombat.sources.registry import SourceRegistry
-from wombat.sources.screenpipe_source import ScreenpipeEventSource
+from wombat.sources.screenpipe_source import _MAX_RETRY_WINDOW_S, ScreenpipeEventSource
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
 from wombat.sources.seen_ledger import ensure_schema as ensure_seen_events_schema
 from wombat.user_model.user_model import resolve_event_class_for_item
@@ -165,6 +165,28 @@ class _DegradedOnceClient:
             return []
         self.last_search_degraded = False
         return [item for item in self._items if start <= item.captured_at < end]
+
+
+class _AlwaysDegradedClient:
+    """A fake client that reproduces a PERSISTENT ``ScreenpipeClient`` outage (DEC-70i degrade
+    shape) — never raises, always returns ``[]``, always sets ``last_search_degraded = True``.
+    Records every ``(start, end)`` window it was called with (F5 regression)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[datetime, datetime]] = []
+        self.last_search_degraded = False
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        self.calls.append((start, end))
+        self.last_search_degraded = True
+        return []
 
 
 def _item(app: str, title: str, ref: str, offset_s: float) -> ScreenpipeItem:
@@ -440,6 +462,22 @@ async def test_iss37_rider_m5_search_cursor_holds_through_a_non_raising_degrade(
     # was never lost.
     assert client.calls[1] == (_BASE, _BASE + timedelta(seconds=20))
     assert client.last_search_degraded is False
+
+
+async def test_f5_retried_window_never_exceeds_the_pinned_max_under_persistent_degrade() -> None:
+    """ISS-37-RIDER: a permanently degraded client must never let the retried window
+    (now - cursor) grow without bound — it is clamped to _MAX_RETRY_WINDOW_S (900s/15min) so a
+    bounded outage recovery never re-scans the ENTIRE outage once screenpipe finally recovers."""
+    clock = _FakeClock(_BASE)
+    client = _AlwaysDegradedClient()
+    source = ScreenpipeEventSource(client=client, poll_interval_seconds=30.0, clock=clock)
+
+    # Advance the clock well past the retry-window cap across many consecutive degraded polls.
+    for minutes in range(5, 121, 5):
+        clock.set(_BASE + timedelta(minutes=minutes))
+        assert await source.poll() == []
+        lag = (clock.now - source._search_from).total_seconds()
+        assert lag <= _MAX_RETRY_WINDOW_S
 
 
 # --------------------------------------------------------------------------------------- AC(b)

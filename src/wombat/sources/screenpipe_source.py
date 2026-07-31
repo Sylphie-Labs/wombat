@@ -60,7 +60,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from wombat.integrations.screenpipe.client import _MAX_RESULTS as _SEARCH_RESULT_CAP
@@ -73,6 +73,14 @@ logger = logging.getLogger(__name__)
 _MIN_DWELL_S = 120.0
 _FOCUS_BLOCK_MIN_S = 1500.0
 _MAX_TITLE_CHARS = 160
+
+# ISS-37-RIDER batch-review repair (m5+m3 composition): a PERMANENTLY degraded client never
+# advances ``_search_from`` on its own (the cursor-hold behavior below), so the retried window
+# would otherwise grow without bound across a long outage. Bounded outage recovery — once
+# ``now - _search_from`` exceeds this, the cursor is advanced to ``now - _MAX_RETRY_WINDOW_S``
+# instead of holding forever, so the NEXT successful poll only ever re-scans a bounded 15-minute
+# tail, never the whole outage.
+_MAX_RETRY_WINDOW_S = 900.0
 
 _EVENT_CLASS = "screen_activity"
 
@@ -174,11 +182,13 @@ class ScreenpipeEventSource:
                 "to no events",
                 exc_info=True,
             )
+            self._clamp_retry_window(now)
             return []
         degraded = getattr(self._client, "last_search_degraded", False)
         if not degraded:
             self._search_from = now
         else:
+            self._clamp_retry_window(now)
             logger.debug(
                 "screenpipe source: search degraded for window %s-%s — retrying the same "
                 "window next poll instead of advancing the cursor",
@@ -196,6 +206,16 @@ class ScreenpipeEventSource:
             return []
         self._derive_failure_warned = False
         return events
+
+    def _clamp_retry_window(self, now: datetime) -> None:
+        """ISS-37-RIDER m5+m3 composition (batch-review repair): a permanently degraded client
+        never advances ``_search_from`` on its own, so a persistent outage would otherwise let the
+        retried window (``now - _search_from``) grow without bound. Bounded outage recovery — the
+        window is held through an ordinary retry, but once the gap exceeds ``_MAX_RETRY_WINDOW_S``
+        (15 min) the cursor is advanced to ``now - _MAX_RETRY_WINDOW_S`` so the NEXT successful
+        poll only ever re-scans a bounded tail rather than the entire outage."""
+        if (now - self._search_from).total_seconds() > _MAX_RETRY_WINDOW_S:
+            self._search_from = now - timedelta(seconds=_MAX_RETRY_WINDOW_S)
 
     def _derive(self, items: list[ScreenpipeItem], *, truncated: bool) -> list[SourceEvent]:
         events: list[SourceEvent] = []
