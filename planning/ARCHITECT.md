@@ -674,3 +674,13 @@ Jim's direction (ISS-34, verbatim on the record): "screenpipe sounds like what i
 
 **Board 242/250.** Remaining todo exactly TK-326..TK-329 (DEC-72 fish s2.1-pro expressive-TTS arc, revised v2.183) → TK-330..TK-333 (DEC-73 voice-latency phase 1 streaming, minted v2.184), chained. NEXT: orchestrator dispatches TK-326..329. validate PASS (316 nodes, 269 governance); gate_check analyze PASS.
 
+
+## 2026-07-31 — DEC-72 batch dispatched (contract v2.187): TK-326..TK-329 selected + two pre-build rulings; TK-330..333 deferred to the final whole-arc batch
+
+**Batch (board 242/250):** L1 TK-326 (fish model header + env-tier `wombat_fish_model`, default `s2.1-pro`) ∥ TK-327 (voice/expressive.py TAG_DEFINITIONS + emission-policy validator, reject-to-silence on ANY out-of-set bracketed token) — file-disjoint, verified; L2 TK-328 (key-gated enablement at the constructed-adapter seam + fallback tag strip); L3 TK-329 (arc closer e2e + WOMBAT_TEST_FISH_LIVE armed ear-proof incl. [break] efficacy). TK-330..333 (DEC-73 streaming) deliberately deferred: they chain behind TK-329 and deserve one coherent whole-arc review batch — the board closes at 250/250 when it lands.
+
+**Ruling r1 (TK-328 wiring shape):** additive `build_tts_adapter_with_info(config, key_store) -> (adapter, TTSBuildInfo{fish_primary, fish_model})` in select.py; existing `build_tts_adapter` becomes a thin wrapper (call sites bootstrap.py:566/:624 byte-identical); assemble_runtime (bootstrap.py:1178) computes `expressive_tags = fish_primary AND fish_model in EXPRESSIVE_FISH_MODELS` and threads a new default-False kwarg through `build_speech_shape_stage` (:570). `EXPRESSIVE_FISH_MODELS` (frozenset s2-pro/s2.1-pro/s2.1-pro-free) lives in expressive.py beside TAG_DEFINITIONS — one policy module, DEC-72d enumerated-not-prefix.
+
+**Ruling r2 (leveling + ports):** L1 326∥327, L2 328, L3 329; throwaway-pg 5452/5453/5454/5455; live pg 5436 never contacted.
+
+**Seams re-verified live for the briefings:** no model header sent today (tts.py:96-109); the `[break] (see below)` adjacency genuinely rejects via the link pattern (speech_shape.py:136); instruction built once at ctor (speech_shape.py:275); `_shape_speech_text` (:143) is the one validator seam; FallbackTTSAdapter fallback branch (select.py:88-97) is the one strip site; full-replies path stays DEF-18 tag-free, untouched.
