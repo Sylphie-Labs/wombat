@@ -274,14 +274,20 @@ def _process_basename(path: str) -> str:
 
 
 def _sanitize_snippet(text: str) -> str:
-    """Collapse ALL whitespace runs (spaces, tabs, and — critically — newlines) to a single
-    space and strip the ends (TK-323 batch-review repair). OCR text is UNTRUSTED (any webpage
-    or email visible on screen, DEC-70f taint) rendered inline into a semicolon-joined
-    ``key: value`` prompt line (``compose.py``); a bare ``.strip()`` leaves interior newlines
-    intact, letting a crafted on-screen string forge additional grounding lines (e.g. a fake
-    ``known_user_context: ...`` line). Splitting on, then rejoining, whitespace makes a forged
-    newline structurally impossible to smuggle through this field."""
-    return " ".join(text.split())
+    """Collapse ALL whitespace runs (spaces, tabs, and newlines) to a single space, strip the
+    ends, THEN neutralize every literal ``;`` (Opus-verify repair). OCR text is UNTRUSTED (any
+    webpage or email visible on screen, DEC-70f taint) rendered inline by
+    ``format_payload_fields`` (``compose/templates.py``), which joins ``key: value`` pairs on the
+    literal separator ``"; "`` — NOT a newline. The round-1 repair only collapsed whitespace, so
+    a snippet containing ``"; known_user_context: ..."`` still rendered byte-indistinguishable
+    from a genuine additional grounding field once ``format_payload_fields`` joined this field in
+    among the others; collapsing whitespace alone never touches that separator. Stripping every
+    ``;`` (not just the exact ``"; "`` pair — a bare ``;`` immediately before/after a whitespace
+    run this function itself just normalized would otherwise still reconstitute the separator)
+    makes forging an additional ``key: value`` pair structurally impossible through this field,
+    regardless of which renderer (newline-joined or semicolon-joined) ends up composing it."""
+    collapsed = " ".join(text.split())
+    return collapsed.replace(";", ",")
 
 
 def build_current_activity_context(
