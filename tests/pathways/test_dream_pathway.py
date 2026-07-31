@@ -1,10 +1,12 @@
-"""TK-297 — the ``build_dream_pathway`` graph-shape proof (EP-13, DEC-65g).
+"""TK-297/TK-299 — the ``build_dream_pathway`` graph-shape proof (EP-13/EP-37, DEC-65g/DEC-66).
 
 Not pg-gated (mirrors ``test_dream_persona_stage.py``'s own AC4 engine-drive idiom): a REAL
 ``Engine`` drives ``wombat.dream`` end-to-end over ``_PassthroughStage`` doubles for every stage
-EXCEPT ``DreamFactsStage`` (a real one, over in-memory/monkeypatched collaborators) — proving the
-landed graph order is exactly ``dream_consolidate -> dream_outcome -> dream_tune -> dream_persona
--> dream_facts -> dream_behavior_log -> dream_window -> dream_pattern -> dream_run`` (AC4).
+EXCEPT ``DreamFactsStage`` and ``DreamDeriveStage`` (real ones, over in-memory/monkeypatched
+collaborators, the latter given a ``None`` ``ExternalItemStore`` so it derives zero facts and
+still transitions cleanly) — proving the landed graph order is exactly ``dream_consolidate ->
+dream_outcome -> dream_tune -> dream_persona -> dream_facts -> dream_derive -> dream_behavior_log
+-> dream_window -> dream_pattern -> dream_run`` (AC4/AC5).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 
 from tests.support.stage_context_fake import FakeModel
+from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.chat_turns import ChatTurnStore
 from wombat.pathways.dream_pathway import (
@@ -60,7 +63,7 @@ class _PassthroughStage:
         )
 
 
-async def test_ac4_the_landed_graph_walks_all_nine_stages_in_order_to_completion(
+async def test_ac4_the_landed_graph_walks_all_ten_stages_in_order_to_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A real DreamFactsStage over a zero-turns ChatTurnStore (lazy — never actually connects) so
@@ -78,12 +81,21 @@ async def test_ac4_the_landed_graph_walks_all_nine_stages_in_order_to_completion
         user_facts=UserFactsStore(_UNREACHABLE_DSN),
     )
 
+    # A real DreamDeriveStage over a None ExternalItemStore (AC3's degrade shape) — zero rows in,
+    # zero facts derived, zero UserFactsStore calls made, still transitions on with NO model call
+    # (this stage never calls one).
+    derive_stage = DreamDeriveStage(
+        external_items=None,
+        user_facts=UserFactsStore(_UNREACHABLE_DSN),
+    )
+
     dream_graph = build_dream_pathway(
         _PassthroughStage(name="dream_consolidate", to="dream_outcome"),
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
         _PassthroughStage(name="dream_tune", to="dream_persona"),
         _PassthroughStage(name="dream_persona", to="dream_facts"),
         facts_stage,
+        derive_stage,
         _PassthroughStage(name="dream_behavior_log", to="dream_window"),
         _PassthroughStage(name="dream_window", to="dream_pattern"),
         _PassthroughStage(name="dream_pattern", to="dream_run"),
@@ -121,6 +133,7 @@ async def test_ac4_the_landed_graph_walks_all_nine_stages_in_order_to_completion
         "dream_tune",
         "dream_persona",
         "dream_facts",
+        "dream_derive",
         "dream_behavior_log",
         "dream_window",
         "dream_pattern",

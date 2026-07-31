@@ -191,6 +191,27 @@ class _PassthroughFactsStage:
     tests)."""
 
     name: str = "dream_facts"
+    transitions: tuple[str, ...] = ("dream_derive",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_derive",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughDeriveStage:
+    """TK-299 mechanical reshape: ``wombat.dream``'s new sixth stage — always transitions straight
+    onward; it carries none of ``DreamDeriveStage``'s own read/derive behavior (TK-299 owns that,
+    out of scope for the TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_derive"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -338,6 +359,7 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
             _PassthroughTuneStage(),
             _PassthroughPersonaStage(),
             _PassthroughFactsStage(),
+            _PassthroughDeriveStage(),
             _PassthroughBehaviorLogStage(),
             _PassthroughWindowStage(),
             _PassthroughPatternStage(),

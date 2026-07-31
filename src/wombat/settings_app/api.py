@@ -157,6 +157,11 @@ class SettingsUpdate(BaseModel):
     # single field's own format is otherwise independently valid).
     wombat_quiet_start: str | None = None
     wombat_quiet_end: str | None = None
+    # TK-309 (DEC-68(b)): mirrors WombatConfig.wombat_observe_screen/webcam/mic — plain bools,
+    # not Literals (exempt from the mirror test's vocabulary check), each defaulting False.
+    wombat_observe_screen: bool | None = None
+    wombat_observe_webcam: bool | None = None
+    wombat_observe_mic: bool | None = None
 
     @field_validator("wombat_quiet_start", "wombat_quiet_end")
     @classmethod

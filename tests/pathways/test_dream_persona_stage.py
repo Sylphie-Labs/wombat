@@ -479,7 +479,8 @@ async def test_ac4_engine_drive_completes_even_when_the_event_log_raises(
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
         _PassthroughStage(name="dream_tune", to="dream_persona"),
         persona_stage,
-        _PassthroughStage(name="dream_facts", to="dream_behavior_log"),
+        _PassthroughStage(name="dream_facts", to="dream_derive"),
+        _PassthroughStage(name="dream_derive", to="dream_behavior_log"),
         _PassthroughStage(name="dream_behavior_log", to="dream_window"),
         _PassthroughStage(name="dream_window", to="dream_pattern"),
         _PassthroughStage(name="dream_pattern", to="dream_run"),
@@ -510,9 +511,10 @@ async def test_ac4_engine_drive_completes_even_when_the_event_log_raises(
 
     assert final.status is RunStatus.COMPLETED
     stage_names = [step.stage_name for step in final.steps]
-    assert stage_names[-6:] == [
+    assert stage_names[-7:] == [
         "dream_persona",
         "dream_facts",
+        "dream_derive",
         "dream_behavior_log",
         "dream_window",
         "dream_pattern",

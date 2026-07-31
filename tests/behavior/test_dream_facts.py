@@ -135,7 +135,7 @@ async def test_ac1_mixed_proposal_lands_at_most_five_new_facts_dropping_the_rest
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_derive"
     assert result.output.data == {"new_facts": 5}
 
     # Exactly the first 5 of the 7 valid lines landed (duplicate consumed no cap slot).
@@ -185,7 +185,7 @@ async def test_ac2_zero_turns_makes_no_model_call_and_transitions_unchanged(
     result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_derive"
     assert result.output.data == {"new_facts": 0}
     assert model.calls == []
     assert upsert_calls == []
@@ -212,7 +212,7 @@ async def test_ac3_raising_chat_turn_store_is_caught_loud_and_still_transitions(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_derive"
     assert result.output.data == {"new_facts": 0}
     assert model.calls == []
     assert upsert_calls == []
@@ -231,7 +231,7 @@ async def test_ac3_raising_model_is_caught_loud_and_still_transitions(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_derive"
     assert result.output.data == {"new_facts": 0}
     assert upsert_calls == []
     assert any(r.levelno == logging.ERROR for r in caplog.records)
@@ -257,7 +257,7 @@ async def test_ac3_raising_upsert_fact_mid_batch_loses_only_that_one_fact(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_derive"
     # The 2nd candidate's upsert raised — the 1st and 3rd still landed (no corruption beyond the
     # one failed write); new_facts counts only the SUCCESSFUL upserts.
     assert result.output.data == {"new_facts": 2}

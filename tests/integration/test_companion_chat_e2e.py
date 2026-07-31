@@ -495,7 +495,7 @@ async def test_ac_a_through_e_companion_chat_getting_to_know_arc(
             dream_ctx = StageContextFake(now_fn=lambda: _FIXED_NOW)
             dream_result = await dream_stage.run(dream_ctx)
             assert isinstance(dream_result, Transition)
-            assert dream_result.to == "dream_behavior_log"
+            assert dream_result.to == "dream_derive"
             assert dream_result.output is not None
             assert dream_result.output.data["new_facts"] == 2
 

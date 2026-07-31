@@ -211,6 +211,62 @@ def test_ac2_validator_accepts_plain_spoken_text() -> None:
     assert _shape_speech_text(clean) == clean
 
 
+# --- TK-317 (DEC-69a): anchored one-shot leading speaker-label strip ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected"),
+    [
+        pytest.param("wombat: answer is here", "answer is here", id="lowercase-wombat"),
+        pytest.param(
+            "Wombat: The meeting is at 3pm.", "The meeting is at 3pm.", id="capitalized-wombat"
+        ),
+        pytest.param("Steward: on my way", "on my way", id="steward"),
+        pytest.param("assistant: plain reply", "plain reply", id="assistant"),
+    ],
+)
+def test_ac1_leading_speaker_label_is_stripped_and_remainder_is_byte_identical(
+    raw_text: str, expected: str
+) -> None:
+    assert _shape_speech_text(raw_text) == expected
+
+
+def test_ac2b_non_leading_colon_is_never_touched() -> None:
+    # the colon here sits well past the ~32-char leading-label window, so it is left alone.
+    text = "This sentence runs on for quite a while before its only colon: untouched"
+    assert _shape_speech_text(text) == text
+
+
+def test_ac2b_double_label_strips_exactly_one() -> None:
+    assert _shape_speech_text("A: B: rest") == "B: rest"
+
+
+def test_ac3b_bold_leading_label_still_rejects_to_none() -> None:
+    # DEC-55f markdown reject-to-silence posture stands: '**' isn't a letter, so the TK-317 strip
+    # never fires here, and the unmodified forbidden loop rejects the bold marker as before.
+    assert _shape_speech_text("**Wombat**: bold label") is None
+
+
+def test_ac4b_label_prefixed_body_fits_cap_only_after_the_strip() -> None:
+    # the strip must run BEFORE the length check so the remaining body keeps the full budget.
+    body = "x" * 400
+    assert _shape_speech_text(f"Wombat: {body}") == body
+    assert len(f"Wombat: {body}") > 400  # the raw text alone would have failed the cap
+
+
+async def test_ac1_stage_carries_a_label_stripped_summary_through_run() -> None:
+    model = FakeModel(response=_response("Wombat: The meeting is at 3pm."))
+    stage = SpeechShapeStage(config=_config(), voice_enabled=True, adapter_present=True)
+    ctx = _ctx(model)
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Transition)
+    _item_id, _item_kind, text, degraded = speech_output_from_artifact_data(result.output.data)
+    assert text == "The meeting is at 3pm."
+    assert degraded is False
+
+
 # --- TK-303 (DEC-67e): max_chars is injectable, defaulting to _MAX_SPEECH_CHARS -------------------
 
 

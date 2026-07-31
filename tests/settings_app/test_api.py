@@ -525,6 +525,38 @@ def test_put_settings_wombat_voice_enabled_non_bool_is_422() -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["wombat_observe_screen", "wombat_observe_webcam", "wombat_observe_mic"],
+)
+def test_put_settings_observe_fields_round_trip(field: str) -> None:
+    """TK-309 (DEC-68b): each newly-admitted bool field writes true, writes false, and reads
+    back — GET round-trips the latest value."""
+    client = _client()
+    response = client.put("/settings", json={field: True}, headers={"X-Wombat-Token": TOKEN})
+    assert response.status_code == 200
+    assert response.json()["settings"][field] is True
+
+    response = client.put("/settings", json={field: False}, headers={"X-Wombat-Token": TOKEN})
+    assert response.status_code == 200
+    assert response.json()["settings"][field] is False
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"][field] is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["wombat_observe_screen", "wombat_observe_webcam", "wombat_observe_mic"],
+)
+def test_put_settings_observe_fields_non_bool_is_422(field: str) -> None:
+    client = _client()
+    response = client.put(
+        "/settings", json={field: ["not", "a", "bool"]}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert response.status_code == 422
+
+
 def test_put_settings_wombat_ptt_binding_round_trips() -> None:
     """TK-275 (DEC-58 c/d): the newly-admitted str field writes and reads back."""
     client = _client()

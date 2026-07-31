@@ -13,7 +13,8 @@ zero I/O at construction). ``upsert_fact(fact_key, fact, source)`` upserts one r
 caller-supplied ``fact_key`` (TK-297 derives it deterministically from normalized fact text): a
 re-upsert of the same ``fact_key`` updates ``fact``/``source``/``updated_at`` while
 ``first_seen_at`` stays write-once (ON CONFLICT DO UPDATE deliberately omits it).
-``list_facts(limit)`` returns the ``limit`` most recently updated rows, ``updated_at`` DESC.
+``list_facts(limit)`` returns the ``limit`` rows, told-tier facts first (DEC-66 crowd-out guard:
+``source = 'told'`` sorts ahead of every other tier), ``updated_at`` DESC within each tier.
 ``delete_fact(fact_key)`` removes exactly that row. ``count()`` returns the total row count.
 
 HARD CAP (DEC-63 no-knob precedent): ``_MAX_FACTS = 200`` is a pinned module constant, not a
@@ -152,14 +153,15 @@ class UserFactsStore:
         conn.commit()
 
     def list_facts(self, limit: int) -> list[dict[str, Any]]:
-        """Return the ``limit`` most recently updated rows, ``updated_at`` DESC."""
+        """Return the ``limit`` rows, told-tier facts first (DEC-66 crowd-out guard), then
+        ``updated_at`` DESC within each tier."""
         conn = self._connection()
         with conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT fact_key, fact, source, first_seen_at, updated_at
                 FROM {TABLE}
-                ORDER BY updated_at DESC
+                ORDER BY CASE WHEN source = 'told' THEN 0 ELSE 1 END, updated_at DESC
                 LIMIT %s
                 """,
                 (limit,),

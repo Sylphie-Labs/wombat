@@ -875,6 +875,63 @@ def test_wombat_singleton_port_reads_from_env(monkeypatch: pytest.MonkeyPatch) -
     assert config.wombat_singleton_port == 54321
 
 
+# --- TK-309 (DEC-68b): wombat_observe_screen/webcam/mic join the app-editable tier -----------
+
+
+def test_wombat_observe_fields_default_to_false() -> None:
+    """AC1: fresh install (no env, no pg) -> all three False; each is app-editable."""
+    config = WombatConfig(deepseek_api_key="k", deepseek_base_url="https://example.invalid")
+    assert config.wombat_observe_screen is False
+    assert config.wombat_observe_webcam is False
+    assert config.wombat_observe_mic is False
+    for name in ("wombat_observe_screen", "wombat_observe_webcam", "wombat_observe_mic"):
+        assert name in APP_EDITABLE_FIELDS
+
+
+@_requires_pg
+def test_load_config_table_accepts_observe_fields(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2: a pg row true + env unset -> True (table-sourced), siblings stay at their False
+    default."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_observe_screen": True})
+    finally:
+        store.close()
+
+    config = load_config()
+
+    assert config.wombat_observe_screen is True
+    assert config.wombat_observe_webcam is False
+    assert config.wombat_observe_mic is False
+
+
+@_requires_pg
+def test_load_config_env_wins_over_true_pg_row_for_observe_screen(
+    fresh_settings_table: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2: DEC-43 precedence pinned — env 'false' wins over a true pg row."""
+    assert _PG_DSN is not None
+    monkeypatch.chdir(tmp_path)
+    _set_required_env(monkeypatch)
+    _set_dsn(monkeypatch, _PG_DSN)
+    store = SettingsStore(_PG_DSN)
+    try:
+        store.put({"wombat_observe_screen": True})
+    finally:
+        store.close()
+    monkeypatch.setenv("WOMBAT_OBSERVE_SCREEN", "false")
+
+    config = load_config()
+
+    assert config.wombat_observe_screen is False
+
+
 # --- TK-241 AC5 (v2.64): suite hermeticity — closes the CLASS of collection-time DB hazards ---
 
 

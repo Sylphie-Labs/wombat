@@ -1,14 +1,16 @@
 """build_dream_pathway — the wombat.dream pathway (TK-46 scaffold, TK-175 outcome pass, TK-47
 consolidation sweep, TK-49 tuner pass, TK-111 behavior-log pass, TK-112 window-detect pass, TK-113
-pattern-detect pass, TK-297 facts pass, Q-33/Q-85/Q-90/Q-91/Q-98/Q-99e/Q-99f, DEC-12/DEC-23).
+pattern-detect pass, TK-297 facts pass, TK-299 derive pass, Q-33/Q-85/Q-90/Q-91/Q-98/Q-99e/Q-99f,
+DEC-12/DEC-23/DEC-66).
 
 MIRRORS ``brief_pathway.py``'s posture: pure graph assembly, no bootstrap import (avoids an import
-cycle — ``bootstrap.py`` imports this module, not the reverse). TK-297 (superseding TK-214's shape)
+cycle — ``bootstrap.py`` imports this module, not the reverse). TK-299 (superseding TK-297's shape)
 RULES the dream graph's end-state: ``dream_consolidate`` (entry, TK-47) -> ``dream_outcome``
 (TK-175) -> ``dream_tune`` (TK-49) -> ``dream_persona`` (TK-214) -> ``dream_facts`` (TK-297) ->
-``dream_behavior_log`` (TK-111) -> ``dream_window`` (TK-112) -> ``dream_pattern`` (TK-113) ->
-``dream_run`` (terminal) — TK-52's later recurrence/fence inserts UPSTREAM of ``dream_consolidate``
-so ``dream_run`` stays the ONE reachable terminal and TK-46's isolation proofs keep passing.
+``dream_derive`` (TK-299) -> ``dream_behavior_log`` (TK-111) -> ``dream_window`` (TK-112) ->
+``dream_pattern`` (TK-113) -> ``dream_run`` (terminal) — TK-52's later recurrence/fence inserts
+UPSTREAM of ``dream_consolidate`` so ``dream_run`` stays the ONE reachable terminal and TK-46's
+isolation proofs keep passing.
 
 ``DreamConsolidationStage`` (TK-47, EP-13) is the nightly consolidation sweep: it drives
 cog-worx's ``CoherenceReconciler`` + ``ClaimExtractor`` sweepers to drain, off-path (S1) model
@@ -531,7 +533,8 @@ class DreamPersonaStage:
     ``events_between`` read, a malformed matrix apply, a ``live_persona.set`` failure) is caught,
     logged ERROR, and the stage STILL transitions onward to ``dream_facts`` (TK-297, EP-13 — this
     stage's downstream neighbor since the getting-to-know pass was inserted between the
-    persona-tuner pass and ``dream_behavior_log``; mirrors ``DreamTuneStage``'s own
+    persona-tuner pass and ``dream_behavior_log``, later resplit by TK-299's ``dream_derive``
+    insertion between ``dream_facts`` and ``dream_behavior_log``; mirrors ``DreamTuneStage``'s own
     never-block-the-terminal posture) — one bad night's persona-tuning pass must never block the
     reachable terminal.
     """
@@ -750,27 +753,31 @@ def build_dream_pathway(
     tune: Stage,
     persona: Stage,
     facts: Stage,
+    derive: Stage,
     behavior_log: Stage,
     window: Stage,
     pattern: Stage,
     terminal: Stage | None = None,
 ) -> StageGraph:
-    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (TK-297
-    end-state, superseding TK-214's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
-    ``dream_tune`` -> ``dream_persona`` -> ``dream_facts`` -> ``dream_behavior_log`` ->
-    ``dream_window`` -> ``dream_pattern`` -> ``dream_run``,
-    TK-47/TK-175/TK-49/TK-214/TK-297/TK-111/TK-112/TK-113).
+    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (TK-299
+    end-state, superseding TK-297's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
+    ``dream_tune`` -> ``dream_persona`` -> ``dream_facts`` -> ``dream_derive`` ->
+    ``dream_behavior_log`` -> ``dream_window`` -> ``dream_pattern`` -> ``dream_run``,
+    TK-47/TK-175/TK-49/TK-214/TK-297/TK-299/TK-111/TK-112/TK-113).
 
-    ``consolidate``, ``outcome``, ``tune``, ``persona``, ``facts``, ``behavior_log``, ``window``,
-    and ``pattern`` are ALL REQUIRED and supplied by the caller (mirrors ``build_brief_pathway``'s
-    all-stages-injected convention) — production callers pass a ``DreamConsolidationStage`` built
-    with its real ``reconciler``/``extractor`` collaborators (TK-54's ``build_dream_substrate``), a
-    ``DreamOutcomeStage`` built with its real ``entity_kg``/``labeler``/``user_id`` collaborators,
-    a ``DreamTuneStage`` built with its real ``RatingTuner``, a ``DreamPersonaStage`` (TK-214)
-    built with its real ``event_log``/``live_persona`` collaborators, a ``DreamFactsStage``
+    ``consolidate``, ``outcome``, ``tune``, ``persona``, ``facts``, ``derive``, ``behavior_log``,
+    ``window``, and ``pattern`` are ALL REQUIRED and supplied by the caller (mirrors
+    ``build_brief_pathway``'s all-stages-injected convention) — production callers pass a
+    ``DreamConsolidationStage`` built with its real ``reconciler``/``extractor`` collaborators
+    (TK-54's ``build_dream_substrate``), a ``DreamOutcomeStage`` built with its real
+    ``entity_kg``/``labeler``/``user_id`` collaborators, a ``DreamTuneStage`` built with its real
+    ``RatingTuner``, a ``DreamPersonaStage`` (TK-214) built with its real
+    ``event_log``/``live_persona`` collaborators, a ``DreamFactsStage``
     (``wombat.behavior.stages.dream_facts``, TK-297) built with its real
-    ``model``/``chat_turns``/``user_facts`` collaborators, a ``DreamBehaviorLogStage`` built with
-    its real ``store``/``entity_kg``/``user_id`` collaborators, a ``WriteWindowSummariesStage``
+    ``model``/``chat_turns``/``user_facts`` collaborators, a ``DreamDeriveStage``
+    (``wombat.behavior.stages.dream_derive``, TK-299) built with its real
+    ``external_items``/``user_facts`` collaborators, a ``DreamBehaviorLogStage`` built with its
+    real ``store``/``entity_kg``/``user_id`` collaborators, a ``WriteWindowSummariesStage``
     (``wombat.behavior.stages.write_window_summaries``, TK-112) built with its real
     ``store``/``writer``/``tz`` collaborators, and a ``PatternDetectorStage`` (``wombat.behavior.
     stages.pattern_detector``, TK-113) built with its real
@@ -783,7 +790,18 @@ def build_dream_pathway(
     """
     dream_terminal = terminal if terminal is not None else DreamScaffoldStage()
     return StageGraph(
-        [consolidate, outcome, tune, persona, facts, behavior_log, window, pattern, dream_terminal],
+        [
+            consolidate,
+            outcome,
+            tune,
+            persona,
+            facts,
+            derive,
+            behavior_log,
+            window,
+            pattern,
+            dream_terminal,
+        ],
         entry=consolidate.name,
     )
 

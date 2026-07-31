@@ -81,6 +81,11 @@ export interface SettingsFields {
   wombat_param_mouth_model_timeout_seconds: number | null;
   wombat_param_mouth_daily_token_ceiling: number | null;
   wombat_param_mouth_max_usd_per_drive: number | null;
+  // TK-309 (DEC-68(b)): the ambient-observability per-channel consent gate - each defaults
+  // False server-side (wombat.config.WombatConfig), restart-tier (no hot-apply).
+  wombat_observe_screen: boolean | null;
+  wombat_observe_webcam: boolean | null;
+  wombat_observe_mic: boolean | null;
 }
 
 // TK-306 (RULING v2.172 r4, `wombat.settings_app.api._timezone_view`, verbatim): the read-only

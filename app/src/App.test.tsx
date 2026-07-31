@@ -21,7 +21,7 @@ import { Header } from "./components/Header";
 const PORT = 41417;
 const TOKEN = "test-token";
 
-type SettingsShape = Record<string, string | number | null>;
+type SettingsShape = Record<string, string | number | boolean | null>;
 
 function baseSettings(): SettingsShape {
   return {
@@ -49,6 +49,9 @@ function baseSettings(): SettingsShape {
     wombat_param_mouth_model_timeout_seconds: null,
     wombat_param_mouth_daily_token_ceiling: null,
     wombat_param_mouth_max_usd_per_drive: null,
+    wombat_observe_screen: null,
+    wombat_observe_webcam: null,
+    wombat_observe_mic: null,
   };
 }
 
@@ -658,6 +661,9 @@ describe("App (TK-306 AC4: storage-unavailable GET degrade)", () => {
       wombat_param_mouth_model_timeout_seconds: null,
       wombat_param_mouth_daily_token_ceiling: null,
       wombat_param_mouth_max_usd_per_drive: null,
+      wombat_observe_screen: null,
+      wombat_observe_webcam: null,
+      wombat_observe_mic: null,
     };
     installFakeApi(nullSettings, { elevenlabs: false, deepgram: false, fish: false });
     render(<App />);
@@ -668,6 +674,47 @@ describe("App (TK-306 AC4: storage-unavailable GET degrade)", () => {
     expect((briefTime as HTMLInputElement).placeholder).toBe("default 07:00");
     expect(screen.getByRole("heading", { name: "Briefs & interruptions" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Limits" })).toBeTruthy();
+  });
+});
+
+describe("App (TK-309 AC4: system view gains the Observation panel)", () => {
+  it("renders below Briefs & interruptions / Limits, defaulting every channel to Off", async () => {
+    installFakeApi();
+    render(<App />);
+    gotoSystem();
+    await screen.findByLabelText("Brief time");
+
+    expect(screen.getByRole("heading", { name: "Observation" })).toBeTruthy();
+    const text = document.body.textContent ?? "";
+    expect(text.indexOf("Limits")).toBeLessThan(text.indexOf("Observation"));
+
+    expect((screen.getByLabelText("Screen") as HTMLSelectElement).value).toBe("off");
+    expect((screen.getByLabelText("Webcam") as HTMLSelectElement).value).toBe("off");
+    expect((screen.getByLabelText("Microphone") as HTMLSelectElement).value).toBe("off");
+
+    // The other System panels stay byte-unchanged (pin).
+    expect(screen.getByRole("heading", { name: "Runtime" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Briefs & interruptions" })).toBeTruthy();
+  });
+
+  it("PUTs only the touched channel and shows the restart notice", async () => {
+    const { calls } = installFakeApi();
+    render(<App />);
+    gotoSystem();
+    await screen.findByLabelText("Brief time");
+
+    fireEvent.change(screen.getByLabelText("Webcam"), { target: { value: "on" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({ wombat_observe_webcam: true });
+    });
+
+    expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
   });
 });
 

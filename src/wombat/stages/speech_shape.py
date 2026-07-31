@@ -32,6 +32,17 @@ NO fifth 'speech' persona mouth (DEC-55e, deferred): the prompt is a FIXED modul
 ``persona.expression.guard_suffix(Mouth.COMPOSE)`` appended verbatim (a read-only import) — zero
 persona-package diff.
 
+LEADING SPEAKER-LABEL STRIP (TK-317, DEC-69a): before the trim/length-check/forbidden loop above,
+``_shape_speech_text`` applies one ANCHORED, ONE-SHOT strip for a leading "Label: " prefix at
+string START only — a single word-like token (a leading letter, then up to ~32 chars of letters/
+digits/space/apostrophe/hyphen/underscore) followed by a colon and whitespace. STRIP, not reject —
+removing a leading label cannot mangle the remainder, unlike the DEC-55f markdown classes below,
+which still reject the whole text outright and are unmodified by this change. The strip runs
+BEFORE the length check so the remaining body keeps the full ``max_chars`` budget. It is generic
+by design (no configured-assistant-name dependency) and belt-only: ``_SPEECH_SHAPE_INSTRUCTION``
+also asks the model not to open with a name/label, but nothing relies on the model obeying it
+(DEC-27 deterministic-boundary posture).
+
 DEC-57/TK-272: when the composed-output artifact carries ``held_chat=True`` (a chat item the gate
 held for voice purposes only), ``run()`` takes the EXACT SAME voice-off pass-through shape as
 today — ZERO model calls, ``speech_text=None``, ``degraded=False`` — regardless of
@@ -78,13 +89,20 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 _SPEECH_SHAPE_INSTRUCTION = (
     "You summarize one item for the user to be read aloud by text-to-speech. Rewrite it as plain "
     "spoken English, in one or two short, natural sentences. Never use markdown or any other "
-    "formatting. Never read a URL or link aloud — describe it in words instead."
+    "formatting. Never read a URL or link aloud — describe it in words instead. Never begin your "
+    "reply with a name or speaker label followed by a colon."
 )
 
 # DEC-55f: the hard brevity bound a validated speech text must fit within. TK-303 (DEC-67e)
 # unpins this: it stays the DEFAULT (this constant is still its home), but SpeechShapeStage now
 # takes an injected max_chars, threaded from config.wombat_spoken_reply_max_chars at bootstrap.
 _MAX_SPEECH_CHARS = 400
+
+# TK-317 (DEC-69a): one anchored, one-shot leading "Label: " strip — a leading letter, then up to
+# ~32 chars of letters/digits/space/apostrophe/hyphen/underscore, then a colon and whitespace, at
+# string START only. Generic by design (no configured-assistant-name dependency); a colon anywhere
+# else in the text is never touched, and only the FIRST leading match is ever removed.
+_LEADING_LABEL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 '_-]{0,31}:\s+")
 
 # DEC-55f no-placebo validator: one compiled pattern per enumerated closed token class. ANY match
 # rejects the whole text outright (see the module docstring) — never a partial strip/rewrite.
@@ -106,10 +124,15 @@ def _shape_speech_text(raw_text: str | None, max_chars: int = _MAX_SPEECH_CHARS)
     enumerated forbidden token class and within ``max_chars`` (TK-303/DEC-67e: defaults to the
     pinned ``_MAX_SPEECH_CHARS``, injectable so ``SpeechShapeStage`` can carry a configured
     bound); otherwise ``None`` (unsanitizable/overlong/blank -> no speech text, never a rewritten
-    guess)."""
+    guess).
+
+    TK-317 (DEC-69a): FIRST, an anchored one-shot strip removes a leading "Label: " speaker-label
+    prefix (if any) — BEFORE the length check, so the remaining body keeps the full ``max_chars``
+    budget. This is a STRIP, never a reject: a leading label cannot mangle what follows it."""
     if raw_text is None:
         return None
-    stripped = raw_text.strip()
+    unlabeled = _LEADING_LABEL_PATTERN.sub("", raw_text, count=1)
+    stripped = unlabeled.strip()
     if not stripped or len(stripped) > max_chars:
         return None
     for pattern in _FORBIDDEN_PATTERNS:

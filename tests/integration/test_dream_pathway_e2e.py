@@ -42,6 +42,7 @@ from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
 from wombat.behavior.event_log import BehaviorEventLog
 from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
+from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.pattern_detector import PatternDetectorStage
 from wombat.behavior.stages.write_window_summaries import WriteWindowSummariesStage
@@ -166,6 +167,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
             "dream_tune",
             "dream_persona",
             "dream_facts",
+            "dream_derive",
             "dream_behavior_log",
             "dream_window",
             "dream_pattern",
@@ -274,8 +276,8 @@ def _build_stack_with_raising_dream(
     )
 
     # Never reached (the entry always raises first) — throwaway stub outcome/tune/persona/facts/
-    # behavior_log/window/pattern stages merely satisfy build_dream_pathway's now-required args
-    # (TK-47/TK-49/TK-214/TK-297/TK-111/TK-112/TK-113 reshape).
+    # derive/behavior_log/window/pattern stages merely satisfy build_dream_pathway's now-required
+    # args (TK-47/TK-49/TK-214/TK-297/TK-299/TK-111/TK-112/TK-113 reshape).
     stub_entity_kg = InMemoryEntityKG()
     stub_writer = ObservationWriter(
         entity_kg=stub_entity_kg, scope_registry=ScopeRegistry(), user_id="test-user"
@@ -303,6 +305,9 @@ def _build_stack_with_raising_dream(
         chat_turns=ChatTurnStore(_DSN),
         user_facts=UserFactsStore(_DSN),
     )
+    stub_derive_stage = DreamDeriveStage(
+        external_items=None, user_facts=UserFactsStore(_DSN)
+    )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
@@ -322,6 +327,7 @@ def _build_stack_with_raising_dream(
         stub_tune_stage,
         stub_persona_stage,
         stub_facts_stage,
+        stub_derive_stage,
         stub_behavior_log_stage,
         stub_window_stage,
         stub_pattern_stage,

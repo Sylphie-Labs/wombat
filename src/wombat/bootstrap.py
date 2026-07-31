@@ -120,13 +120,21 @@ this stage owns no closeable resource of its own.
 
 TK-297 (EP-13, DEC-65g): the dream graph's new ``dream_facts`` stage — ``DreamFactsStage``
 (``build_dream_pathway``'s new ``facts`` arg), inserted between ``dream_persona`` and
-``dream_behavior_log`` — composes over the SAME budget-guarded ``dream_substrate.model`` every
-other dream-consolidation call site uses (DEC-23, never a second model/guard) and the
+``dream_derive`` (TK-299's stage, its new downstream neighbor, superseding ``dream_behavior_log``
+as the immediate next stage) — composes over the SAME budget-guarded ``dream_substrate.model``
+every other dream-consolidation call site uses (DEC-23, never a second model/guard) and the
 ``user_facts_store``/``chat_turn_store`` instances (TK-294/TK-295), HOISTED above the dream-stage
 block for this reason — both are Q-46 fully-lazy, zero I/O at construction, so the hoist is
 behavior-neutral. No new ``RuntimeBundle`` field: like ``dream_window_stage`` this stage owns no
 closeable resource of its own (``user_facts_store``/``chat_turn_store`` are exposed separately,
 unchanged).
+
+TK-299 (EP-37, DEC-66): the dream graph's new ``dream_derive`` stage — ``DreamDeriveStage``
+(``build_dream_pathway``'s new ``derive`` arg), inserted between ``dream_facts`` and
+``dream_behavior_log`` — PURE CODE, no model call: composes over the SAME ``external_item_store``
+(TK-245) and ``user_facts_store`` (TK-294) instances built above (never a second connection to
+either table). No new ``RuntimeBundle`` field: like ``dream_facts_stage`` this stage owns no
+closeable resource of its own.
 """
 
 from __future__ import annotations
@@ -160,6 +168,7 @@ from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .behavior.event_log import BehaviorEventLog
+from .behavior.stages.dream_derive import DreamDeriveStage
 from .behavior.stages.dream_facts import DreamFactsStage
 from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.reflection_compose import ReflectionComposeStage
@@ -1277,6 +1286,15 @@ def assemble_runtime(
         chat_turns=chat_turn_store,
         user_facts=user_facts_store,
     )
+    # TK-299 (EP-37, DEC-66): DreamDeriveStage over the SAME external_item_store constructed
+    # above (never a second connection) and the SAME user_facts_store dream_facts_stage just used
+    # (never a second UserFactsStore instance). UNCONDITIONAL (mirrors dream_facts_stage's own
+    # posture) — no external deps beyond what this composition already builds; pure code, no
+    # model.
+    dream_derive_stage = DreamDeriveStage(
+        external_items=external_item_store,
+        user_facts=user_facts_store,
+    )
 
     def _record_persona_feedback(
         token: FeedbackToken, event_key: str, timestamp: datetime
@@ -1330,6 +1348,7 @@ def assemble_runtime(
         dream_tune_stage,
         dream_persona_stage,
         dream_facts_stage,
+        dream_derive_stage,
         dream_behavior_log_stage,
         dream_window_stage,
         dream_pattern_stage,

@@ -2,8 +2,9 @@
 admission, RatingTuner-pattern custody).
 
 Inserted into the ``wombat.dream`` graph between ``dream_persona`` (TK-214) and
-``dream_behavior_log`` (TK-111) — the same mechanical splice TK-214 made between ``dream_tune`` and
-``dream_behavior_log`` (``pathways/dream_pathway.py``).
+``dream_derive`` (TK-299, which now sits between this stage and ``dream_behavior_log`` — TK-299's
+own mechanical splice, mirroring the one TK-214 made between ``dream_tune`` and
+``dream_behavior_log`` before this stage existed) (``pathways/dream_pathway.py``).
 
 Keyword-injected collaborators only (``DreamTuneStage``/``DreamPersonaStage`` precedent):
 ``model`` is the SAME budget-guarded ``Model`` every other dream-consolidation call site uses
@@ -166,7 +167,7 @@ class DreamFactsStage:
     docstring for the full read/extract/filter/write contract."""
 
     name: str = "dream_facts"
-    transitions: tuple[str, ...] = ("dream_behavior_log",)
+    transitions: tuple[str, ...] = ("dream_derive",)
 
     def __init__(
         self, *, model: Model, chat_turns: ChatTurnStore, user_facts: UserFactsStore
@@ -241,7 +242,7 @@ class DreamFactsStage:
                     logger.info("dream_facts: accepted new fact fact_key=%s", key)
 
         return Transition(
-            to="dream_behavior_log",
+            to="dream_derive",
             output=Artifact(
                 kind=DREAM_FACTS_REPORT_KIND,
                 produced_by=self.name,

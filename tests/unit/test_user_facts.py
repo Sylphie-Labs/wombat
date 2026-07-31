@@ -7,12 +7,16 @@ skipped LOUDLY. NEVER point this at a live database.
   AC1 ``ensure_all_schemas`` runs twice: ``wombat_user_facts`` exists idempotently as the TENTH
       preflight entry.
   AC2 ``upsert_fact``/``list_facts``/``delete_fact``/``count`` round-trip; a re-upsert of the same
-      ``fact_key`` updates ``fact``/``updated_at`` while ``first_seen_at`` is unchanged; ``list``
-      is ``updated_at`` DESC.
+      ``fact_key`` updates ``fact``/``updated_at`` while ``first_seen_at`` is unchanged; with zero
+      told-tier facts present, ``list`` ordering is ``updated_at`` DESC (byte-identical to
+      pre-TK-316 behavior).
   AC3 at 200 rows (``_MAX_FACTS``), one more NEW ``fact_key`` evicts the oldest-updated row (one
       WARNING via caplog), ``count()`` stays at 200, and the new fact is present.
   AC4 import + construction do zero IO; the module imports nothing from ``wombat.bootstrap`` or
       ``wombat.runtime``.
+  AC5 (TK-316, DEC-66 crowd-out guard) with told/dream/derived facts interleaved by recency,
+      ``list_facts`` returns every told-tier fact first (recency-ordered within the tier), then
+      every remaining fact by recency.
 """
 
 from __future__ import annotations
@@ -114,12 +118,12 @@ def test_ac2_upsert_list_delete_count_round_trip(fresh_table: None) -> None:
 
     store = UserFactsStore(_DSN)
     try:
-        store.upsert_fact("fact-1", "likes tea", "told")
+        store.upsert_fact("fact-1", "likes tea", "derived")
         first_seen = _first_seen_at(_DSN, "fact-1")
         assert store.count() == 1
 
         # Re-upsert the same fact_key: updates fact + updated_at, leaves first_seen_at unchanged.
-        store.upsert_fact("fact-1", "likes green tea", "told")
+        store.upsert_fact("fact-1", "likes green tea", "derived")
         assert store.count() == 1
         assert _first_seen_at(_DSN, "fact-1") == first_seen
 
@@ -128,7 +132,7 @@ def test_ac2_upsert_list_delete_count_round_trip(fresh_table: None) -> None:
         facts = store.list_facts(10)
         assert [row["fact_key"] for row in facts] == ["fact-2", "fact-1"]  # updated_at DESC
         assert facts[1]["fact"] == "likes green tea"
-        assert facts[1]["source"] == "told"
+        assert facts[1]["source"] == "derived"
 
         store.delete_fact("fact-1")
         assert store.count() == 1
@@ -202,3 +206,76 @@ def test_ac4_user_facts_imports_nothing_from_bootstrap_or_runtime() -> None:
             imported_modules.update(f"{node.module}.{alias.name}" for alias in node.names)
     assert not any("bootstrap" in mod for mod in imported_modules)
     assert not any(mod == "runtime" or mod.endswith(".runtime") for mod in imported_modules)
+
+
+# --------------------------------------------------------------------------------------- AC5
+
+
+@_requires_pg
+def test_ac5_list_facts_orders_told_tier_first_then_recency(fresh_table: None) -> None:
+    """TK-316, DEC-66 crowd-out guard: told-tier facts always sort ahead of every other tier;
+    within a tier, ordering is ``updated_at`` DESC."""
+    assert _DSN is not None
+    with psycopg.connect(_DSN) as conn:
+        ensure_schema(conn)
+        conn.commit()
+
+    store = UserFactsStore(_DSN)
+    try:
+        # 20 facts across told/dream/derived, interleaved by insertion order (round-robin).
+        sources = ["told", "dream", "derived"]
+        for i in range(20):
+            source = sources[i % len(sources)]
+            store.upsert_fact(f"fact-{i}", f"fact number {i}", source)
+        assert store.count() == 20
+
+        # Force a deterministic, strictly increasing updated_at across ALL 20 rows (fact-0
+        # oldest, fact-19 newest) so tier vs. recency ordering are cleanly distinguishable.
+        base = datetime.now(UTC) - timedelta(days=1)
+        with psycopg.connect(_DSN) as conn, conn.cursor() as cur:
+            for i in range(20):
+                cur.execute(
+                    "UPDATE wombat_user_facts SET updated_at = %s WHERE fact_key = %s",
+                    (base + timedelta(minutes=i), f"fact-{i}"),
+                )
+            conn.commit()
+
+        told_keys_by_recency = [
+            f"fact-{i}" for i in reversed(range(20)) if sources[i % len(sources)] == "told"
+        ]
+        other_keys_by_recency = [
+            f"fact-{i}" for i in reversed(range(20)) if sources[i % len(sources)] != "told"
+        ]
+
+        result_keys = [row["fact_key"] for row in store.list_facts(15)]
+
+        assert result_keys[: len(told_keys_by_recency)] == told_keys_by_recency
+        assert result_keys[len(told_keys_by_recency) :] == other_keys_by_recency[
+            : 15 - len(told_keys_by_recency)
+        ]
+    finally:
+        store.close()
+
+
+@_requires_pg
+def test_ac5_zero_told_facts_ordering_unchanged(fresh_table: None) -> None:
+    """With no told-tier facts present, ordering stays plain ``updated_at`` DESC (byte-identical
+    to pre-TK-316 behavior)."""
+    assert _DSN is not None
+    with psycopg.connect(_DSN) as conn:
+        ensure_schema(conn)
+        conn.commit()
+
+    store = UserFactsStore(_DSN)
+    try:
+        store.upsert_fact("fact-a", "fact a", "dream")
+        store.upsert_fact("fact-b", "fact b", "derived")
+        store.upsert_fact("fact-c", "fact c", "behavior")
+
+        assert [row["fact_key"] for row in store.list_facts(10)] == [
+            "fact-c",
+            "fact-b",
+            "fact-a",
+        ]
+    finally:
+        store.close()

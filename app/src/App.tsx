@@ -79,6 +79,12 @@ interface FormState {
   wombat_param_mouth_model_timeout_seconds: string;
   wombat_param_mouth_daily_token_ceiling: string;
   wombat_param_mouth_max_usd_per_drive: string;
+  // TK-309 (DEC-68(b)): the ambient-observability consent gate - real bools (the
+  // DEFAULTS-fallback pattern above, not the wombat_param_* placeholder-blank pattern), each
+  // defaulting False.
+  wombat_observe_screen: boolean;
+  wombat_observe_webcam: boolean;
+  wombat_observe_mic: boolean;
 }
 
 type FormField = keyof FormState;
@@ -139,6 +145,10 @@ const DEFAULTS: FormState = {
   wombat_param_mouth_model_timeout_seconds: "",
   wombat_param_mouth_daily_token_ceiling: "",
   wombat_param_mouth_max_usd_per_drive: "",
+  // TK-309 (DEC-68(b)): false, mirroring WombatConfig's own field defaults.
+  wombat_observe_screen: false,
+  wombat_observe_webcam: false,
+  wombat_observe_mic: false,
 };
 
 const PERSONA_FIELDS: readonly FormField[] = [
@@ -171,6 +181,10 @@ const RESTART_FIELDS: readonly FormField[] = [
   "wombat_param_mouth_model_timeout_seconds",
   "wombat_param_mouth_daily_token_ceiling",
   "wombat_param_mouth_max_usd_per_drive",
+  // TK-309 (DEC-68(b)): restart-to-apply, no hot-apply.
+  "wombat_observe_screen",
+  "wombat_observe_webcam",
+  "wombat_observe_mic",
 ];
 
 // wombat.settings_app.api.SettingsUpdate's provider Literal, verbatim.
@@ -221,6 +235,14 @@ const ASR_MODEL_OPTIONS: SelectOption[] = [
   { value: "base", label: "Base" },
   { value: "small", label: "Small" },
   { value: "medium", label: "Medium" },
+];
+
+// TK-309 (DEC-68(b)): the ambient-observability consent toggles' Off/On vocabulary - App.tsx
+// has no toggle/checkbox primitive (DEC-67's extension-only posture forbids minting one), so
+// these ride the existing Select component like every other closed-vocabulary field here.
+const ON_OFF_OPTIONS: SelectOption[] = [
+  { value: "off", label: "Off" },
+  { value: "on", label: "On" },
 ];
 
 const KEY_PROVIDER_LABELS: Record<KeyProvider, string> = {
@@ -295,6 +317,9 @@ function toFormState(settings: SettingsFields): FormState {
       settings.wombat_param_mouth_max_usd_per_drive != null
         ? String(settings.wombat_param_mouth_max_usd_per_drive)
         : "",
+    wombat_observe_screen: settings.wombat_observe_screen ?? DEFAULTS.wombat_observe_screen,
+    wombat_observe_webcam: settings.wombat_observe_webcam ?? DEFAULTS.wombat_observe_webcam,
+    wombat_observe_mic: settings.wombat_observe_mic ?? DEFAULTS.wombat_observe_mic,
   };
 }
 
@@ -395,6 +420,15 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
     patch.wombat_param_mouth_max_usd_per_drive = Number(
       formState.wombat_param_mouth_max_usd_per_drive,
     );
+  }
+  if (touched.has("wombat_observe_screen")) {
+    patch.wombat_observe_screen = formState.wombat_observe_screen;
+  }
+  if (touched.has("wombat_observe_webcam")) {
+    patch.wombat_observe_webcam = formState.wombat_observe_webcam;
+  }
+  if (touched.has("wombat_observe_mic")) {
+    patch.wombat_observe_mic = formState.wombat_observe_mic;
   }
   return patch;
 }
@@ -848,6 +882,37 @@ export function App() {
                         value={formState.wombat_param_mouth_max_usd_per_drive}
                         onChange={(e) =>
                           updateField("wombat_param_mouth_max_usd_per_drive", e.target.value)
+                        }
+                      />
+                    </Panel>
+
+                    <Panel className="flex flex-col gap-4">
+                      <h2 className="text-sm font-semibold">Observation</h2>
+                      <Select
+                        id="observe-screen"
+                        label="Screen"
+                        options={ON_OFF_OPTIONS}
+                        value={formState.wombat_observe_screen ? "on" : "off"}
+                        onChange={(e) =>
+                          updateField("wombat_observe_screen", e.target.value === "on")
+                        }
+                      />
+                      <Select
+                        id="observe-webcam"
+                        label="Webcam"
+                        options={ON_OFF_OPTIONS}
+                        value={formState.wombat_observe_webcam ? "on" : "off"}
+                        onChange={(e) =>
+                          updateField("wombat_observe_webcam", e.target.value === "on")
+                        }
+                      />
+                      <Select
+                        id="observe-mic"
+                        label="Microphone"
+                        options={ON_OFF_OPTIONS}
+                        value={formState.wombat_observe_mic ? "on" : "off"}
+                        onChange={(e) =>
+                          updateField("wombat_observe_mic", e.target.value === "on")
                         }
                       />
                     </Panel>

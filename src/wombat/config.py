@@ -93,6 +93,11 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     # once at boot, no hot-apply). "" (either field) means the feature is off.
     "wombat_quiet_start",
     "wombat_quiet_end",
+    # TK-309 (DEC-68(b)): the ambient-observability per-channel consent gate — screen/webcam/mic
+    # capture, each independently app-editable so a settings UI can flip them without an env var.
+    "wombat_observe_screen",
+    "wombat_observe_webcam",
+    "wombat_observe_mic",
 )
 
 
@@ -320,6 +325,15 @@ class WombatConfig(BaseSettings):
     # documented default and the drain spine/library use/test suite never bind it — only
     # ``main()`` does). Nothing reads this field except ``main()``.
     wombat_singleton_port: int = 63218
+
+    # OPTIONAL (TK-309, DEC-68(b)): the ambient-observability consent gate — three independent
+    # per-channel toggles (screen capture, webcam capture, microphone capture), each False by
+    # default (consent is opt-in, never assumed) and app-editable so a settings UI can flip them.
+    # Restart-tier (no hot-apply) — nothing reads these fields yet; a later ticket owns wiring
+    # bootstrap.py to actually start/stop the corresponding observation channel.
+    wombat_observe_screen: bool = False
+    wombat_observe_webcam: bool = False
+    wombat_observe_mic: bool = False
 
     @classmethod
     def settings_customise_sources(
