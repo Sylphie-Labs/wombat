@@ -303,7 +303,7 @@ from .user_model.outcome_inference import ItemDisposition
 from .user_model.outcome_labeler import OutcomeLabeler
 from .user_model.user_model import UserModel
 from .voice.context_prefetch import (
-    build_current_activity_context,
+    build_current_activity_screen_hint,
     build_user_facts_context,
     build_voice_context,
 )
@@ -1266,12 +1266,24 @@ def assemble_runtime(
     # above applies (closures resolve free variables at call time, well after assemble_runtime
     # returns and current_activity has been assigned, whether to a live CurrentActivity or left
     # None on a toggle-off boot).
+    #
+    # TK-323 (DEC-70g): current_activity_context is now read via
+    # build_current_activity_screen_hint, which composes AROUND build_current_activity_context
+    # (that function is called first, unmodified, inside the new helper — see
+    # voice/context_prefetch.py) and enriches the SAME current_activity key with a bounded
+    # screenpipe snippet. screenpipe_client is constructed further below still (RULING R-A, TK-324)
+    # — the SAME forward-reference safety applies: None on a wombat_observe_screenpipe-off boot,
+    # a live ScreenpipeClient otherwise, resolved at call time.
     def asr_context_hook() -> dict[str, str]:
         text = last_spoken_register.current()
         extra: dict[str, str] = {} if text is None else {"replying_to": text}
         extra.update(build_voice_context(external_item_store, tz=tz, clock=_utc_now))
         extra.update(build_user_facts_context(user_facts_store))
-        extra.update(build_current_activity_context(current_activity))
+        extra.update(
+            build_current_activity_screen_hint(
+                current_activity, screenpipe_client, clock=_utc_now
+            )
+        )
         return extra
 
     if chat_source is not None:
@@ -1466,7 +1478,9 @@ def assemble_runtime(
     # at all). sources/bootstrap.py owns its OWN separate ScreenpipeClient instance for the
     # change-event source (TK-322) — this local is NOT that one, and that module stays untouched.
     # Held in a clearly-named local (not a RuntimeBundle field) so a later prompt-hint ticket can
-    # also read it from this same composition-root scope.
+    # also read it from this same composition-root scope — TK-323 (DEC-70g) is that ticket:
+    # asr_context_hook above reads this SAME instance via build_current_activity_screen_hint,
+    # constructing nothing of its own (RULING R-A).
     screenpipe_client: ScreenpipeClient | None = (
         ScreenpipeClient(config.wombat_screenpipe_url)
         if config.wombat_observe_screenpipe

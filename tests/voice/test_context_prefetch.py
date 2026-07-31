@@ -10,6 +10,15 @@
 
 pg-gated tests use ONLY a throwaway WOMBAT_TEST_PG_DSN Postgres — never the live wombat DB (same
 convention as tests/unit/test_external_store.py).
+
+TK-323 (DEC-70g) acceptance criteria — build_current_activity_screen_hint:
+
+  AC1 toggle on (a live client) + a live CurrentActivity + a fake client returning a content item
+      for the current window: the current_activity key carries the hint suffix, combined line
+      under _MAX_ACTIVITY_LINE_CHARS, key set byte-identical to build_current_activity_context's
+      own (still exactly {"current_activity"}).
+  AC2 client failure / no item / stale snapshot / toggle off (client=None): the result is
+      byte-identical to build_current_activity_context's own render in every case.
 """
 
 from __future__ import annotations
@@ -18,7 +27,7 @@ import inspect
 import logging
 import os
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,13 +35,18 @@ import psycopg
 import pytest
 
 from wombat.external_store import ExternalItem, ExternalItemStore, ensure_schema
+from wombat.integrations.screenpipe.client import ScreenpipeItem
+from wombat.observations import CurrentActivity
 from wombat.voice import context_prefetch
 from wombat.voice.context_prefetch import (
     _GCAL_MAX_CHARS,
     _GCAL_MAX_ITEMS,
     _GMAIL_MAX_CHARS,
+    _MAX_ACTIVITY_LINE_CHARS,
     _MAX_FACTS_CHARS,
     _MAX_FACTS_LINES,
+    build_current_activity_context,
+    build_current_activity_screen_hint,
     build_user_facts_context,
     build_voice_context,
 )
@@ -414,3 +428,169 @@ def test_ac4_no_body_or_body_text_reference_anywhere_in_the_module() -> None:
     assert '"body"' not in source
     assert "'body'" not in source
     assert ".body" not in source
+
+
+# --------------------------------------------------------------- TK-323 (DEC-70g) screen hint
+
+
+def _clock_at(instant: datetime) -> Callable[[], datetime]:
+    return lambda: instant
+
+
+class _FakeScreenpipeClient:
+    """A minimal stand-in satisfying ``ScreenpipeSearchClient`` — records the args each call
+    received so tests can assert the exact window/app_name passed."""
+
+    def __init__(self, *, items: list[ScreenpipeItem] | None = None) -> None:
+        self.items = items or []
+        self.calls: list[tuple[datetime, datetime, str | None]] = []
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        self.calls.append((start, end, app_name))
+        return self.items
+
+
+class _RaisingScreenpipeClient:
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        raise RuntimeError("boom")
+
+
+_HINT_NOW = datetime(2026, 7, 31, 12, 0, 0, tzinfo=UTC)
+
+
+def _screenpipe_item(text: str, captured_at: datetime, ref_id: str = "f1") -> ScreenpipeItem:
+    return ScreenpipeItem(
+        app="notepad.exe",
+        title="Untitled - Notepad",
+        text_snippet=text,
+        captured_at=captured_at,
+        ref_id=ref_id,
+    )
+
+
+def test_ac1_live_snapshot_plus_matching_item_stamps_the_hint_suffix_within_cap() -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    client = _FakeScreenpipeClient(items=[_screenpipe_item("Q3 roadmap draft", _HINT_NOW)])
+
+    result = build_current_activity_screen_hint(activity, client, clock=_clock_at(_HINT_NOW))
+
+    assert set(result.keys()) == {"current_activity"}  # byte-identical key set (drift pin scope)
+    line = result["current_activity"]
+    assert line == "notepad.exe - Untitled - Notepad | on screen: Q3 roadmap draft"
+    assert len(line) <= _MAX_ACTIVITY_LINE_CHARS
+    # search is filtered to the current foreground app's basename, over the trailing window ending
+    # at "now".
+    assert client.calls == [(_HINT_NOW - timedelta(seconds=300), _HINT_NOW, "notepad.exe")]
+
+
+def test_ac1_newest_item_by_captured_at_wins_when_several_are_returned() -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    client = _FakeScreenpipeClient(
+        items=[
+            _screenpipe_item("older text", _HINT_NOW - timedelta(seconds=200), ref_id="old"),
+            _screenpipe_item("newest text", _HINT_NOW - timedelta(seconds=5), ref_id="new"),
+        ]
+    )
+    result = build_current_activity_screen_hint(activity, client, clock=_clock_at(_HINT_NOW))
+    assert result["current_activity"].endswith("| on screen: newest text")
+
+
+def test_ac1_long_snippet_is_truncated_so_the_combined_line_stays_under_the_cap() -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    client = _FakeScreenpipeClient(items=[_screenpipe_item("x" * 400, _HINT_NOW)])
+    result = build_current_activity_screen_hint(activity, client, clock=_clock_at(_HINT_NOW))
+    line = result["current_activity"]
+    assert len(line) <= _MAX_ACTIVITY_LINE_CHARS
+    # the base app/title part is never itself cut -- only the snippet gives.
+    assert line.startswith("notepad.exe - Untitled - Notepad | on screen: ")
+
+
+# --------------------------------------------------------------------------------------- AC2
+
+
+def test_ac2_toggle_off_client_none_yields_the_base_render_byte_identically() -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    base = build_current_activity_context(activity, clock=_clock_at(_HINT_NOW))
+    result = build_current_activity_screen_hint(activity, None, clock=_clock_at(_HINT_NOW))
+    assert result == base
+
+
+def test_ac2_stale_snapshot_yields_base_render_and_never_calls_search() -> None:
+    stale = CurrentActivity(
+        app="notepad.exe",
+        title="Untitled - Notepad",
+        refreshed_at=_HINT_NOW - timedelta(seconds=301),
+    )
+    base = build_current_activity_context(stale, clock=_clock_at(_HINT_NOW))
+    client = _FakeScreenpipeClient(items=[_screenpipe_item("should never be read", _HINT_NOW)])
+
+    result = build_current_activity_screen_hint(stale, client, clock=_clock_at(_HINT_NOW))
+
+    assert result == base == {}
+    assert client.calls == []  # absent snapshot never reaches the search call at all
+
+
+def test_ac2_absent_snapshot_yields_the_base_render_byte_identically() -> None:
+    client = _FakeScreenpipeClient(items=[_screenpipe_item("should never be read", _HINT_NOW)])
+    assert build_current_activity_screen_hint(None, client, clock=_clock_at(_HINT_NOW)) == {}
+    assert client.calls == []
+
+
+def test_ac2_no_matching_item_yields_the_base_render_byte_identically() -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    base = build_current_activity_context(activity, clock=_clock_at(_HINT_NOW))
+    client = _FakeScreenpipeClient(items=[])
+    result = build_current_activity_screen_hint(activity, client, clock=_clock_at(_HINT_NOW))
+    assert result == base
+
+
+def test_ac2_empty_or_whitespace_snippet_yields_the_base_render_byte_identically() -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    base = build_current_activity_context(activity, clock=_clock_at(_HINT_NOW))
+    client = _FakeScreenpipeClient(items=[_screenpipe_item("   ", _HINT_NOW)])
+    result = build_current_activity_screen_hint(activity, client, clock=_clock_at(_HINT_NOW))
+    assert result == base
+
+
+def test_ac2_client_raises_yields_the_base_render_byte_identically_and_exactly_one_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    activity = CurrentActivity(
+        app="notepad.exe", title="Untitled - Notepad", refreshed_at=_HINT_NOW
+    )
+    base = build_current_activity_context(activity, clock=_clock_at(_HINT_NOW))
+    caplog.set_level(logging.WARNING, logger="wombat.voice.context_prefetch")
+
+    result = build_current_activity_screen_hint(
+        activity, _RaisingScreenpipeClient(), clock=_clock_at(_HINT_NOW)
+    )
+
+    assert result == base
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1

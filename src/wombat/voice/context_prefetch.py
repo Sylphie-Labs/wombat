@@ -50,17 +50,39 @@ LAST SUCCESSFUL POLL beat, never ``since``/segment-open time — a window held f
 under a healthy poller keeps rendering) -> no key. ANY exception
 reading the snapshot's fields -> ``{}`` plus exactly ONE loud warning (CON-3 parity with the two
 builders above).
+
+``build_current_activity_screen_hint(current_activity, screenpipe_client, clock=...)`` (TK-323,
+DEC-70g) is a FOURTH sibling grounding builder that composes AROUND
+``build_current_activity_context`` rather than replacing it — that function is called here FIRST,
+unmodified, and stays byte-identical; this one only ever enriches the SAME ``current_activity``
+key with ONE bounded screen-content suffix, never a new payload key. ``screenpipe_client`` is
+``None`` (``wombat_observe_screenpipe`` off, RULING R-A — this function constructs NOTHING, it
+only ever reads the ONE composition-root instance bootstrap.py passes in) or the base builder
+emitted no ``current_activity`` key (absent/stale snapshot — that gate lives entirely in the base
+builder, never re-implemented here): returns the base result untouched, no search call. Otherwise
+ONE inline, synchronous ``screenpipe_client.search`` call (rides the client's own pinned short
+timeout — the ISS-30 finding-3 accepted posture) over the trailing
+``_SCREEN_HINT_LOOKBACK_SECONDS`` filtered to the foreground app's basename; the NEWEST returned
+item (by ``captured_at``) becomes the suffix `` | on screen: <snippet>``, the snippet truncated so
+the COMBINED line stays within ``_MAX_ACTIVITY_LINE_CHARS`` (the base app-title/in-call line is
+NEVER itself cut here — only the snippet gives, and if no room is left for even one snippet
+character the suffix is dropped entirely). No item, an empty/whitespace-only snippet text, or ANY
+exception anywhere in the enrichment attempt all degrade to the base builder's dict returned
+BYTE-IDENTICALLY (absent-not-wrong); an exception additionally logs exactly ONE loud warning
+(CON-3 parity with the three sibling builders above) — this function never lets an exception
+escape.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from wombat.domain.daily_ledger import wombat_today
+from wombat.integrations.screenpipe.client import ScreenpipeItem
 from wombat.observations import _STALE_AFTER_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -82,6 +104,18 @@ _MAX_ACTIVITY_CHARS = 160
 # The in-call marker appended whole (batch-review repair: the app-title part is truncated FIRST so
 # this suffix is never itself cut mid-word by the _MAX_ACTIVITY_CHARS cap).
 _IN_CALL_SUFFIX = " (in a call)"
+
+# TK-323 (DEC-70g): the COMBINED current_activity line cap — base app-title/in-call rendering PLUS
+# the screenpipe suffix — same no-knob precedent (DEC-63), independent of _MAX_ACTIVITY_CHARS
+# above, which still bounds the base builder's own (unmodified) line.
+_MAX_ACTIVITY_LINE_CHARS = 300
+
+# The trailing lookback window searched for a screen-content hint — pinned (DEC-63 no-knob
+# precedent), the "NOW axis" framing: a snippet from the last five minutes of the CURRENT
+# foreground window, never a historical scan.
+_SCREEN_HINT_LOOKBACK_SECONDS = 300
+
+_SCREEN_HINT_SUFFIX_PREFIX = " | on screen: "
 
 
 class VoiceContextStore(Protocol):
@@ -125,6 +159,23 @@ class ActivitySnapshot(Protocol):
 
     @property
     def refreshed_at(self) -> datetime | None: ...
+
+
+class ScreenpipeSearchClient(Protocol):
+    """The structural shape ``build_current_activity_screen_hint`` needs from a screenpipe client
+    — matches ``integrations.screenpipe.client.ScreenpipeClient.search`` exactly (mirrors the
+    ``VoiceContextStore``/``UserFactsContextStore``/``ActivitySnapshot`` Protocol convention
+    above); a test fake only needs to satisfy this shape, never import ``ScreenpipeClient``
+    itself."""
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]: ...
 
 
 def build_voice_context(
@@ -269,6 +320,60 @@ def build_current_activity_context(
     return {"current_activity": line[:_MAX_ACTIVITY_CHARS]}
 
 
+def build_current_activity_screen_hint(
+    current_activity: ActivitySnapshot | None,
+    screenpipe_client: ScreenpipeSearchClient | None,
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> dict[str, str]:
+    """TK-323 (DEC-70g): enrich ``build_current_activity_context``'s SAME ``current_activity`` key
+    with ONE bounded screen-content hint — see the module docstring for the full contract.
+
+    Calls ``build_current_activity_context`` FIRST, unmodified (that function stays
+    byte-identical). ``screenpipe_client`` is ``None``, or the base call emitted no
+    ``current_activity`` key: returns the base dict untouched, no search call, no read of
+    ``current_activity`` beyond what the base call already did. Otherwise makes ONE inline
+    ``screenpipe_client.search`` call over ``[now - _SCREEN_HINT_LOOKBACK_SECONDS, now]`` filtered
+    to the foreground app's basename; the newest item (by ``captured_at``) becomes the suffix
+    `` | on screen: <snippet>``, the snippet truncated so the combined line stays within
+    ``_MAX_ACTIVITY_LINE_CHARS`` (the base line is never itself cut here). No item, an
+    empty/whitespace-only snippet, no room left for even one snippet char, or ANY exception —
+    degrades to the base dict returned byte-identically (an exception additionally logs exactly
+    ONE loud warning, CON-3 parity with the sibling builders above). ``clock`` is passed through
+    unchanged to ``build_current_activity_context`` and reused as the search window's ``now``
+    (injectable for tests only — callers pass nothing, defaulting to aware-UTC now).
+    """
+    base = build_current_activity_context(current_activity, clock=clock)
+    if "current_activity" not in base or screenpipe_client is None or current_activity is None:
+        return base
+    try:
+        app = current_activity.app
+        if app is None:
+            return base
+        now = clock() if clock is not None else datetime.now(UTC)
+        start = now - timedelta(seconds=_SCREEN_HINT_LOOKBACK_SECONDS)
+        items = screenpipe_client.search(start, now, app_name=_process_basename(app))
+        if not items:
+            return base
+        newest = max(items, key=lambda item: item.captured_at)
+        snippet = newest.text_snippet.strip()
+        if not snippet:
+            return base
+        base_line = base["current_activity"]
+        budget = _MAX_ACTIVITY_LINE_CHARS - len(base_line) - len(_SCREEN_HINT_SUFFIX_PREFIX)
+        if budget <= 0:
+            return base
+        enriched_line = base_line + _SCREEN_HINT_SUFFIX_PREFIX + snippet[:budget]
+    except Exception:
+        logger.warning(
+            "build_current_activity_screen_hint: screenpipe search raised — proceeding with the "
+            "base current_activity line, no screen-content hint",
+            exc_info=True,
+        )
+        return base
+    return {"current_activity": enriched_line}
+
+
 def _gcal_line(row: dict[str, Any], tz: ZoneInfo) -> str:
     """One compact line for a gcal row's ``payload`` (the raw ``CalendarEvent.to_payload``
     shape: ``event_id``/``title``/``start``/``end``/``all_day``)."""
@@ -310,9 +415,11 @@ def _render(lines: Iterable[str], *, max_items: int, max_chars: int) -> str:
 
 __all__ = [
     "ActivitySnapshot",
+    "ScreenpipeSearchClient",
     "UserFactsContextStore",
     "VoiceContextStore",
     "build_current_activity_context",
+    "build_current_activity_screen_hint",
     "build_user_facts_context",
     "build_voice_context",
 ]

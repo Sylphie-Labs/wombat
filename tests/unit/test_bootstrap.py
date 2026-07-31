@@ -50,7 +50,7 @@ from wombat.external_store import (
 )
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
-from wombat.integrations.screenpipe.client import ScreenpipeClient
+from wombat.integrations.screenpipe.client import ScreenpipeClient, ScreenpipeItem
 from wombat.observations import CurrentActivity, ObservationStore
 from wombat.observe_screen import ScreenActivityCollector
 from wombat.params import load_operating_params
@@ -1462,6 +1462,175 @@ async def test_assemble_runtime_asr_context_hook_stamps_current_activity_when_to
     op = load_operating_params()
     config = _config().model_copy(
         update={"wombat_asr_drop_dir": str(drop_dir), "wombat_observe_screen": True}
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is not None
+    bundle.current_activity.app = "notepad.exe"
+    bundle.current_activity.title = "Untitled - Notepad"
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+    assert events[0].payload["current_activity"] == "notepad.exe - Untitled - Notepad"
+
+
+# --- TK-323 (DEC-70g): screenpipe content hint merged into the SAME asr_context_hook closure ----
+
+
+class _FakeSearchScreenpipeClient:
+    """Constructed exactly like ``ScreenpipeClient(base_url)`` (RULING R-A — bootstrap.py's own
+    construction call site is unchanged) whose ``search`` returns a fixed content item regardless
+    of the window/app_name passed, so wiring tests never touch a real network."""
+
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        return [
+            ScreenpipeItem(
+                app="notepad.exe",
+                title="Untitled - Notepad",
+                text_snippet="Q3 roadmap draft",
+                captured_at=datetime.now(UTC),
+                ref_id="f1",
+            )
+        ]
+
+
+class _RaisingSearchScreenpipeClient:
+    """Same construction shape as ``_FakeSearchScreenpipeClient`` but whose ``search`` raises --
+    proves the closure's screen-hint enrichment degrades to the byte-identical pre-ticket render
+    rather than ever propagating (CON-3 parity, absent-not-wrong)."""
+
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        raise RuntimeError("boom")
+
+
+async def test_tk323_asr_context_hook_stamps_screen_hint_when_toggle_on_and_client_returns_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC1: with wombat_observe_screen AND wombat_observe_screenpipe both on, and the injected
+    (RULING R-A, TK-324) ScreenpipeClient returning a content item for the current window, the
+    SAME shared asr_context_hook closure stamps current_activity with the bounded ' | on screen:
+    ...' suffix -- the SAME key, a richer line (DEC-70g)."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my plate"),
+    )
+    monkeypatch.setattr(bootstrap, "ScreenpipeClient", _FakeSearchScreenpipeClient)
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-323-live-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_asr_drop_dir": str(drop_dir),
+            "wombat_observe_screen": True,
+            "wombat_observe_screenpipe": True,
+        }
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is not None
+    bundle.current_activity.app = "notepad.exe"
+    bundle.current_activity.title = "Untitled - Notepad"
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+    payload = events[0].payload
+    assert (
+        payload["current_activity"]
+        == "notepad.exe - Untitled - Notepad | on screen: Q3 roadmap draft"
+    )
+    assert len(payload["current_activity"]) <= 300
+
+
+async def test_tk323_asr_context_hook_omits_hint_when_screenpipe_toggle_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2 half: wombat_observe_screen on but wombat_observe_screenpipe left at its default False
+    means screenpipe_client is None on the bundle -- the closure's current_activity render is
+    byte-identical to TK-311's own pre-ticket render, no suffix, no search call possible."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my plate"),
+    )
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-323-toggle-off-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={"wombat_asr_drop_dir": str(drop_dir), "wombat_observe_screen": True}
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is not None
+    bundle.current_activity.app = "notepad.exe"
+    bundle.current_activity.title = "Untitled - Notepad"
+    asr_source = bundle.source_registry._sources["asr"]
+
+    events = await asr_source.poll()
+    assert events[0].payload["current_activity"] == "notepad.exe - Untitled - Notepad"
+
+
+async def test_tk323_asr_context_hook_degrades_when_client_search_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC2 half: both toggles on but the injected client's search raises -- the closure still
+    stamps the byte-identical pre-ticket render (absent-not-wrong), the turn proceeds."""
+    monkeypatch.setattr(
+        sources_bootstrap_module,
+        "build_transcriber",
+        lambda config: _FakeVoiceTranscriber("what's on my plate"),
+    )
+    monkeypatch.setattr(bootstrap, "ScreenpipeClient", _RaisingSearchScreenpipeClient)
+    drop_dir = tmp_path / "drop"
+    drop_dir.mkdir()
+    (drop_dir / "note.wav").write_bytes(b"tk-323-degrade-wiring-bytes")
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_asr_drop_dir": str(drop_dir),
+            "wombat_observe_screen": True,
+            "wombat_observe_screenpipe": True,
+        }
     )
     bundle = bootstrap.assemble_runtime(
         config=config,
