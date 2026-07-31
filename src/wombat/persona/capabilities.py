@@ -8,6 +8,15 @@ place the anti-injection guards live, so no persona strategy/matrix/policy can s
 
 This module exports the constant ONLY — no logic, no IO. Consumers (``persona.expression``,
 ``stages.compose``) import it; nobody duplicates its prose.
+
+TK-325 (DEC-70h, the DEC-70 arc closer) inserts ONE more conditionally-phrased sentence: the
+screenpipe arc (TK-320..TK-324) gives wombat CONTENT-level screen awareness (a live on-screen
+content hint at chat/voice time, TK-323; durable habit/routine facts distilled nightly from the
+screenpipe record, TK-324) — a capability distinct from the TK-312 sentence above, which only
+covers coarse app/window awareness. Phrased "when they have turned on detailed screen capture and
+it appears in what you are given" so it stays TRUE whether ``wombat_observe_screenpipe`` is on or
+off — the same conditional-sibling shape TK-298/TK-312 established, DEC-62's accuracy invariant
+amended for accuracy, never weakened.
 """
 
 from __future__ import annotations
@@ -20,6 +29,8 @@ CAPABILITY_CHARTER = (
     "in what you are given. "
     "You can see which application and window the user is currently working in when they have "
     "turned on screen observation and it appears in what you are given. "
+    "You can also know specific details about what is currently shown on the user's screen when "
+    "they have turned on detailed screen capture and it appears in what you are given. "
     "You cannot set alarms, timers, or "
     "reminders, cannot send email or modify the calendar, and cannot perform any other action on "
     "any device or service. If the user asks for something outside these abilities, say plainly "

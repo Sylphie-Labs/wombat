@@ -15,11 +15,20 @@ it inserts ONE more sentence, again conditionally phrased ("when they have turne
 observation and it appears in what you are given") so it stays TRUE whether the toggle is on or
 off.
 
-This test diffs the CURRENT (imported, live) ``CAPABILITY_CHARTER`` against two hand-pinned
-baselines at SENTENCE granularity — the PRE-TK-298 text, and the POST-TK-298/PRE-TK-312 text (the
-byte-identical string this ticket found in the repo before editing it) — proving in each stage
-that exactly one sentence was inserted and every other sentence, including every "cannot"/"never"
-clause, is byte-identical and untouched (a structural assert, not a human eyeball diff).
+TK-325 (DEC-70h, the DEC-70 screenpipe-arc closer) inserts a THIRD sentence: the charter told the
+model it can see WHICH application/window is active (TK-312) but never that it can also know
+CONTENT-level details about what is on screen (TK-323's live content hint, TK-324's nightly
+distilled habit/routine facts) — a distinct capability from coarse app/window awareness. ONE more
+sentence, again conditionally phrased ("when they have turned on detailed screen capture and it
+appears in what you are given") so it stays TRUE whether ``wombat_observe_screenpipe`` is on or
+off.
+
+This test diffs the CURRENT (imported, live) ``CAPABILITY_CHARTER`` against three hand-pinned
+baselines at SENTENCE granularity — the PRE-TK-298 text, the POST-TK-298/PRE-TK-312 text, and the
+POST-TK-312/PRE-TK-325 text (the byte-identical string this ticket found in the repo before
+editing it) — proving in each stage that exactly one sentence was inserted and every other
+sentence, including every "cannot"/"never" clause, is byte-identical and untouched (a structural
+assert, not a human eyeball diff).
 """
 
 from __future__ import annotations
@@ -70,6 +79,31 @@ _POST_TK298_CHARTER = (
 _INSERTED_SENTENCE_SCREEN = (
     "You can see which application and window the user is currently working in when they have "
     "turned on screen observation and it appears in what you are given."
+)
+
+# The charter exactly as it stood after TK-312 and before TK-325 (verified against the repo
+# pre-TK-325-change, lines 15-27 of src/wombat/persona/capabilities.py) — the third-stage diff
+# oracle below measures the CURRENT (live, imported) charter against this fixed baseline. Never
+# edited by this ticket; it is the "before" snapshot TK-325's insert is taken against.
+_POST_TK312_CHARTER = (
+    "Your abilities are fixed and known. You can converse and answer from what you are given, "
+    "deliver the morning brief from read-only Calendar and Gmail, draft Gmail replies that the "
+    "user must approve, and read web pages when asked. "
+    "You remember personal details the user has shared in earlier conversations when they appear "
+    "in what you are given. "
+    "You can see which application and window the user is currently working in when they have "
+    "turned on screen observation and it appears in what you are given. "
+    "You cannot set alarms, timers, or "
+    "reminders, cannot send email or modify the calendar, and cannot perform any other action on "
+    "any device or service. If the user asks for something outside these abilities, say plainly "
+    "that you can't do that - never say an action was done, is being done, or is scheduled."
+)
+
+# TK-325 (DEC-70h): the ONE sentence this ticket inserts, conditionally phrased so it is TRUE
+# whether wombat_observe_screenpipe is toggled on or off.
+_INSERTED_SENTENCE_SCREENPIPE = (
+    "You can also know specific details about what is currently shown on the user's screen when "
+    "they have turned on detailed screen capture and it appears in what you are given."
 )
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=\. )")
@@ -123,12 +157,23 @@ def test_charter_diff_inserts_exactly_one_sentence_and_touches_nothing_else() ->
 
 
 def test_charter_diff_inserts_the_screen_observation_sentence_and_touches_nothing_else() -> None:
-    # Stage 2 (TK-312, DEC-68(f)): POST-TK-298 baseline -> CURRENT (live) charter. The oracle
-    # enforces shape (one contiguous insert, zero deletes/replaces), not position.
+    # Stage 2 (TK-312, DEC-68(f)): POST-TK-298 baseline -> POST-TK-312/PRE-TK-325 baseline. Both
+    # fixed baselines (never the live import) so this stage's oracle stays scoped to exactly
+    # TK-312's own insertion, unaffected by TK-325's later stage-3 insertion below.
     post_tk298_sentences = _sentences(_POST_TK298_CHARTER)
+    post_tk312_sentences = _sentences(_POST_TK312_CHARTER)
+    _assert_single_contiguous_insert(
+        post_tk298_sentences, post_tk312_sentences, _INSERTED_SENTENCE_SCREEN
+    )
+
+
+def test_charter_diff_inserts_the_screenpipe_content_sentence_and_touches_nothing_else() -> None:
+    # Stage 3 (TK-325, DEC-70h): POST-TK-312 baseline -> CURRENT (live) charter. The oracle
+    # enforces shape (one contiguous insert, zero deletes/replaces), not position.
+    post_tk312_sentences = _sentences(_POST_TK312_CHARTER)
     live_sentences = _sentences(CAPABILITY_CHARTER)
     _assert_single_contiguous_insert(
-        post_tk298_sentences, live_sentences, _INSERTED_SENTENCE_SCREEN
+        post_tk312_sentences, live_sentences, _INSERTED_SENTENCE_SCREENPIPE
     )
 
 
@@ -171,3 +216,18 @@ def test_screen_observation_sentence_is_conditionally_phrased_true_in_both_toggl
     assert "cannot" not in _INSERTED_SENTENCE_SCREEN.lower()
     assert "never" not in _INSERTED_SENTENCE_SCREEN.lower()
     assert _INSERTED_SENTENCE_SCREEN in CAPABILITY_CHARTER
+
+
+def test_screenpipe_content_sentence_is_conditionally_phrased_true_in_both_toggle_worlds() -> None:
+    # TK-325 (DEC-70h): phrased "when they have turned on detailed screen capture and it appears
+    # in what you are given" — never an unconditional claim that the toggle is on, so it stays
+    # TRUE whether wombat_observe_screenpipe is enabled or disabled.
+    assert _INSERTED_SENTENCE_SCREENPIPE == (
+        "You can also know specific details about what is currently shown on the user's screen "
+        "when they have turned on detailed screen capture and it appears in what you are given."
+    )
+    assert "when they have turned on detailed screen capture" in _INSERTED_SENTENCE_SCREENPIPE
+    assert "and it appears in what you are given" in _INSERTED_SENTENCE_SCREENPIPE
+    assert "cannot" not in _INSERTED_SENTENCE_SCREENPIPE.lower()
+    assert "never" not in _INSERTED_SENTENCE_SCREENPIPE.lower()
+    assert _INSERTED_SENTENCE_SCREENPIPE in CAPABILITY_CHARTER
