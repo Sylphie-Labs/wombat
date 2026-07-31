@@ -139,14 +139,28 @@ this stage owns no closeable resource of its own.
 
 TK-314 (EP-37, DEC-68(d)(2)): the dream graph's new ``dream_observe`` stage — ``DreamObserveStage``
 (``build_dream_pathway``'s new ``observe`` arg), inserted between ``dream_derive`` and
-``dream_behavior_log`` — PURE CODE, no model call: composes over the SAME toggle-gated
-``observation_store`` the collectors write (the TK-310/TK-313 block, HOISTED above the dream-stage
-block for exactly this — behavior-neutral, the store is Q-46 fully-lazy and every downstream
-reference is a call-time closure) and the SAME ``user_facts_store`` the other distillation passes
-use. On a toggle-off boot ``observation_store`` is ``None`` and the stage degrades to a one-WARNING
-no-op each night — the graph shape is IDENTICAL either way (structural inertness lives in the
-collectors, not the graph). No new ``RuntimeBundle`` field: like ``dream_derive_stage`` this stage
-owns no closeable resource of its own.
+``dream_screenpipe`` (TK-324's stage, its new downstream neighbor, superseding
+``dream_behavior_log`` as the immediate next stage) — PURE CODE, no model call: composes over the
+SAME toggle-gated ``observation_store`` the collectors write (the TK-310/TK-313 block, HOISTED
+above the dream-stage block for exactly this — behavior-neutral, the store is Q-46 fully-lazy and
+every downstream reference is a call-time closure) and the SAME ``user_facts_store`` the other
+distillation passes use. On a toggle-off boot ``observation_store`` is ``None`` and the stage
+degrades to a one-WARNING no-op each night — the graph shape is IDENTICAL either way (structural
+inertness lives in the collectors, not the graph). No new ``RuntimeBundle`` field: like
+``dream_derive_stage`` this stage owns no closeable resource of its own.
+
+TK-324 (EP-37, DEC-70h): the dream graph's new ``dream_screenpipe`` stage —
+``DreamScreenpipeStage`` (``build_dream_pathway``'s new ``screenpipe`` arg), inserted between
+``dream_observe`` and ``dream_behavior_log`` — composes over a NEW composition-root
+``screenpipe_client`` (a ``ScreenpipeClient`` constructed here iff
+``config.wombat_observe_screenpipe``, ``None`` otherwise — RULING R-A; ``sources/bootstrap.py``
+keeps its OWN separate ``ScreenpipeClient`` instance for the change-event source, TK-322, never
+touched by this ticket), the SAME budget-guarded ``dream_substrate.model`` every other
+dream-consolidation call site uses (DEC-23, never a second model/guard), and the SAME
+``user_facts_store`` the other distillation passes use. On a toggle-off boot ``screenpipe_client``
+is ``None`` and the stage is structurally inert (zero client/model contact) — the graph shape is
+IDENTICAL either way. No new ``RuntimeBundle`` field: like ``dream_observe_stage`` this stage owns
+no closeable resource of its own.
 """
 
 from __future__ import annotations
@@ -183,6 +197,7 @@ from .behavior.event_log import BehaviorEventLog
 from .behavior.stages.dream_derive import DreamDeriveStage
 from .behavior.stages.dream_facts import DreamFactsStage
 from .behavior.stages.dream_observe import DreamObserveStage
+from .behavior.stages.dream_screenpipe import DreamScreenpipeStage
 from .behavior.stages.pattern_detector import PatternDetectorStage
 from .behavior.stages.reflection_compose import ReflectionComposeStage
 from .behavior.stages.write_window_summaries import WriteWindowSummariesStage
@@ -215,6 +230,7 @@ from .integrations.gmail.token_store import GMAIL_KEYRING_ACCOUNT
 from .integrations.gmail.token_store import KeyringTokenStore as GmailKeyringTokenStore
 from .integrations.gmail.token_store import TokenStore as GmailTokenStore
 from .integrations.gmail.triage import load_triage_rules
+from .integrations.screenpipe.client import ScreenpipeClient
 from .kb.loader import load_psychology_kb
 from .kb.schema import ValidationError as KBValidationError
 from .observations import CurrentActivity, ObservationStore
@@ -1444,6 +1460,30 @@ def assemble_runtime(
         user_facts=user_facts_store,
         tz=tz,
     )
+    # TK-324 (EP-37, DEC-70h, RULING R-A): the ONE composition-root ScreenpipeClient instance —
+    # constructed here iff config.wombat_observe_screenpipe (structural inertness: toggle off
+    # leaves this None, so DreamScreenpipeStage below receives None and never contacts screenpipe
+    # at all). sources/bootstrap.py owns its OWN separate ScreenpipeClient instance for the
+    # change-event source (TK-322) — this local is NOT that one, and that module stays untouched.
+    # Held in a clearly-named local (not a RuntimeBundle field) so a later prompt-hint ticket can
+    # also read it from this same composition-root scope.
+    screenpipe_client: ScreenpipeClient | None = (
+        ScreenpipeClient(config.wombat_screenpipe_url)
+        if config.wombat_observe_screenpipe
+        else None
+    )
+    # TK-324 (EP-37, DEC-70h): DreamScreenpipeStage over the SAME budget-guarded
+    # dream_substrate.model every other dream-consolidation call site uses (never a second
+    # model/guard, DEC-23) and the SAME user_facts_store the other distillation passes use (never
+    # a second connection). UNCONDITIONAL splice — the graph shape is pinned identical whether or
+    # not the screenpipe toggle is on; structural inertness lives entirely in screenpipe_client
+    # being None.
+    dream_screenpipe_stage = DreamScreenpipeStage(
+        client=screenpipe_client,
+        model=dream_substrate.model,
+        user_facts=user_facts_store,
+        tz=tz,
+    )
 
     def _record_persona_feedback(
         token: FeedbackToken, event_key: str, timestamp: datetime
@@ -1499,6 +1539,7 @@ def assemble_runtime(
         dream_facts_stage,
         dream_derive_stage,
         dream_observe_stage,
+        dream_screenpipe_stage,
         dream_behavior_log_stage,
         dream_window_stage,
         dream_pattern_stage,

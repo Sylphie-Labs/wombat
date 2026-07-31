@@ -35,7 +35,7 @@ import json
 import logging
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
@@ -76,6 +76,17 @@ def _cap(value: object) -> str:
     return str(value)[:_MAX_TEXT_CHARS]
 
 
+def _parse_captured_at(raw_timestamp: object) -> datetime:
+    """Parse screenpipe's timestamp and normalize to a UTC-AWARE ``datetime`` (ISS-37 m1) — a
+    naive ``fromisoformat`` result (no ``tzinfo``) is treated as UTC rather than left naive, since
+    a mix of naive and aware ``captured_at`` values raises ``TypeError`` in downstream sort/dwell
+    math (``screenpipe_source.py``). An already-aware value is converted to UTC for consistency."""
+    parsed = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _parse_item(raw: dict[str, Any]) -> ScreenpipeItem:
     """Map one screenpipe ``/search`` result (``{"type": "OCR", "content": {...}}``) to a
     ``ScreenpipeItem``. Raises ``KeyError``/``ValueError``/``TypeError`` on a malformed shape —
@@ -85,7 +96,7 @@ def _parse_item(raw: dict[str, Any]) -> ScreenpipeItem:
         app=_cap(content.get("app_name", "")),
         title=_cap(content.get("window_name", "")),
         text_snippet=_cap(content.get("text", "")),
-        captured_at=datetime.fromisoformat(str(content["timestamp"]).replace("Z", "+00:00")),
+        captured_at=_parse_captured_at(content["timestamp"]),
         ref_id=_cap(content.get("frame_id", "")),
     )
 

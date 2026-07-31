@@ -189,6 +189,29 @@ def test_ac_a_health_true_on_a_well_formed_server(fake_server: _FakeScreenpipeSe
     assert fake_server.requested_paths[-1] == "/health"
 
 
+def test_ac_a_naive_timestamp_is_normalized_to_utc_aware(
+    fake_server: _FakeScreenpipeServer,
+) -> None:
+    """ISS-37 m1 regression: a screenpipe timestamp with no ``Z``/offset (naive after
+    ``fromisoformat``) must still come back UTC-aware, matching an item parsed from an
+    explicitly-``Z``-suffixed timestamp for the SAME instant — mixing naive and aware
+    ``captured_at`` values raises ``TypeError`` in downstream sort/dwell math."""
+    naive_item = _ocr_item("Chrome", "Naive", "hello", "frame-naive", _START)
+    naive_item["content"]["timestamp"] = _START.isoformat().replace("+00:00", "")
+    aware_item = _ocr_item("Chrome", "Aware", "hello", "frame-aware", _START)
+    fake_server.search_items = [naive_item, aware_item]
+    client = ScreenpipeClient(fake_server.base_url)
+
+    items = client.search(_START, _END)
+
+    assert len(items) == 2
+    for item in items:
+        assert item.captured_at.tzinfo is not None
+    # Both resolve to the identical UTC instant, and are directly comparable/sortable.
+    assert items[0].captured_at == items[1].captured_at == _START
+    assert sorted(i.captured_at for i in items) == [_START, _START]
+
+
 # --------------------------------------------------------------------------------- AC(b) ---
 
 

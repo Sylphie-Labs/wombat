@@ -4,7 +4,8 @@ into ``source='behavior'`` user facts via closed templates (TK-314, EP-37, DEC-6
 Inserted into the ``wombat.dream`` graph immediately after ``dream_derive`` (TK-299) — the same
 mechanical splice TK-299 made between ``dream_facts`` and ``dream_behavior_log``
 (``pathways/dream_pathway.py``): ``dream_facts`` -> ``dream_derive`` -> ``dream_observe`` ->
-``dream_behavior_log``.
+``dream_screenpipe`` (TK-324's stage, this stage's new downstream neighbor, superseding
+``dream_behavior_log``) -> ``dream_behavior_log``.
 
 Keyword-injected collaborators only (``DreamDeriveStage`` precedent): ``observations`` is
 ``wombat.observations.ObservationStore`` (TK-310), this stage's ONLY read path; ``user_facts`` is
@@ -317,7 +318,7 @@ class DreamObserveStage:
     DEC-68(d)(2)). See the module docstring for the full read/derive/cap/write contract."""
 
     name: str = "dream_observe"
-    transitions: tuple[str, ...] = ("dream_behavior_log",)
+    transitions: tuple[str, ...] = ("dream_screenpipe",)
 
     def __init__(
         self,
@@ -411,7 +412,7 @@ class DreamObserveStage:
                         logger.info("dream_observe: accepted new fact fact_key=%s", fact_key)
 
         return Transition(
-            to="dream_behavior_log",
+            to="dream_screenpipe",
             output=Artifact(
                 kind=DREAM_OBSERVE_REPORT_KIND,
                 produced_by=self.name,

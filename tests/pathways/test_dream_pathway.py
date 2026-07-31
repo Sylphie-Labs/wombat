@@ -1,14 +1,15 @@
-"""TK-297/TK-299/TK-314 — the ``build_dream_pathway`` graph-shape proof (EP-13/EP-37,
-DEC-65g/DEC-66/DEC-68(d)(2)).
+"""TK-297/TK-299/TK-314/TK-324 — the ``build_dream_pathway`` graph-shape proof (EP-13/EP-37,
+DEC-65g/DEC-66/DEC-68(d)(2)/DEC-70h).
 
 Not pg-gated (mirrors ``test_dream_persona_stage.py``'s own AC4 engine-drive idiom): a REAL
 ``Engine`` drives ``wombat.dream`` end-to-end over ``_PassthroughStage`` doubles for every stage
-EXCEPT ``DreamFactsStage``, ``DreamDeriveStage``, and ``DreamObserveStage`` (real ones, over
-in-memory/monkeypatched collaborators — ``DreamDeriveStage`` given a ``None``
-``ExternalItemStore`` and ``DreamObserveStage`` a ``None`` ``ObservationStore``, each's own
-degrade shape, so both derive zero facts and still transition cleanly) — proving the landed graph
-order is exactly ``dream_consolidate -> dream_outcome -> dream_tune -> dream_persona ->
-dream_facts -> dream_derive -> dream_observe -> dream_behavior_log -> dream_window ->
+EXCEPT ``DreamFactsStage``, ``DreamDeriveStage``, ``DreamObserveStage``, and
+``DreamScreenpipeStage`` (real ones, over in-memory/monkeypatched collaborators —
+``DreamDeriveStage`` given a ``None`` ``ExternalItemStore``, ``DreamObserveStage`` a ``None``
+``ObservationStore``, and ``DreamScreenpipeStage`` a ``None`` client, each's own degrade shape, so
+all three derive zero facts and still transition cleanly) — proving the landed graph order is
+exactly ``dream_consolidate -> dream_outcome -> dream_tune -> dream_persona -> dream_facts ->
+dream_derive -> dream_observe -> dream_screenpipe -> dream_behavior_log -> dream_window ->
 dream_pattern -> dream_run`` (AC4/AC5).
 """
 
@@ -30,6 +31,7 @@ from tests.support.stage_context_fake import FakeModel
 from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.dream_observe import DreamObserveStage
+from wombat.behavior.stages.dream_screenpipe import DreamScreenpipeStage
 from wombat.chat_turns import ChatTurnStore
 from wombat.pathways.dream_pathway import (
     DREAM_PATHWAY_ID,
@@ -68,7 +70,7 @@ class _PassthroughStage:
         )
 
 
-async def test_ac4_the_landed_graph_walks_all_eleven_stages_in_order_to_completion(
+async def test_ac4_the_landed_graph_walks_all_twelve_stages_in_order_to_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A real DreamFactsStage over a zero-turns ChatTurnStore (lazy — never actually connects) so
@@ -104,6 +106,15 @@ async def test_ac4_the_landed_graph_walks_all_eleven_stages_in_order_to_completi
         tz=ZoneInfo("UTC"),
     )
 
+    # A real DreamScreenpipeStage over a None ScreenpipeClient (its own toggle-off degrade shape,
+    # TK-324 RULING R-C) — zero client/model contact, still transitions on with NO model call.
+    screenpipe_stage = DreamScreenpipeStage(
+        client=None,
+        model=FakeModel(raises=AssertionError("a None client must never reach the mouth")),
+        user_facts=UserFactsStore(_UNREACHABLE_DSN),
+        tz=ZoneInfo("UTC"),
+    )
+
     dream_graph = build_dream_pathway(
         _PassthroughStage(name="dream_consolidate", to="dream_outcome"),
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
@@ -112,9 +123,28 @@ async def test_ac4_the_landed_graph_walks_all_eleven_stages_in_order_to_completi
         facts_stage,
         derive_stage,
         observe_stage,
+        screenpipe_stage,
         _PassthroughStage(name="dream_behavior_log", to="dream_window"),
         _PassthroughStage(name="dream_window", to="dream_pattern"),
         _PassthroughStage(name="dream_pattern", to="dream_run"),
+    )
+
+    # AC4/AC5, way 1 of 2: REGISTRATION order — StageGraph.names() preserves the exact sequence
+    # build_dream_pathway passed to its constructor (dict insertion order), independent of any
+    # engine run.
+    assert dream_graph.names() == (
+        "dream_consolidate",
+        "dream_outcome",
+        "dream_tune",
+        "dream_persona",
+        "dream_facts",
+        "dream_derive",
+        "dream_observe",
+        "dream_screenpipe",
+        "dream_behavior_log",
+        "dream_window",
+        "dream_pattern",
+        "dream_run",
     )
 
     bundle = cold_boot_bundle()
@@ -143,6 +173,7 @@ async def test_ac4_the_landed_graph_walks_all_eleven_stages_in_order_to_completi
     )
 
     assert final.status is RunStatus.COMPLETED
+    # AC4/AC5, way 2 of 2: GRAPH WALK — the real Engine's actual step-by-step run trace.
     assert [step.stage_name for step in final.steps] == [
         "dream_consolidate",
         "dream_outcome",
@@ -151,6 +182,7 @@ async def test_ac4_the_landed_graph_walks_all_eleven_stages_in_order_to_completi
         "dream_facts",
         "dream_derive",
         "dream_observe",
+        "dream_screenpipe",
         "dream_behavior_log",
         "dream_window",
         "dream_pattern",

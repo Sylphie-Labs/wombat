@@ -45,6 +45,7 @@ from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log
 from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.dream_observe import DreamObserveStage
+from wombat.behavior.stages.dream_screenpipe import DreamScreenpipeStage
 from wombat.behavior.stages.pattern_detector import PatternDetectorStage
 from wombat.behavior.stages.write_window_summaries import WriteWindowSummariesStage
 from wombat.chat_turns import ChatTurnStore
@@ -161,7 +162,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
         assert dream_state is not None
         assert dream_state.pathway_id == bundle.dream_pathway_id
 
-        # TK-297/TK-314: the graph AC — the run walked all eleven stages, in order, COMPLETED.
+        # TK-297/TK-314/TK-324: the graph AC — all twelve stages walked, in order, COMPLETED.
         assert [step.stage_name for step in dream_state.steps] == [
             "dream_consolidate",
             "dream_outcome",
@@ -170,6 +171,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
             "dream_facts",
             "dream_derive",
             "dream_observe",
+            "dream_screenpipe",
             "dream_behavior_log",
             "dream_window",
             "dream_pattern",
@@ -313,6 +315,12 @@ def _build_stack_with_raising_dream(
     stub_observe_stage = DreamObserveStage(
         observations=None, user_facts=UserFactsStore(_DSN), tz=ZoneInfo("UTC")
     )
+    stub_screenpipe_stage = DreamScreenpipeStage(
+        client=None,
+        model=FakeModel(raises=AssertionError("never reached — the entry always raises first")),
+        user_facts=UserFactsStore(_DSN),
+        tz=ZoneInfo("UTC"),
+    )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
@@ -334,6 +342,7 @@ def _build_stack_with_raising_dream(
         stub_facts_stage,
         stub_derive_stage,
         stub_observe_stage,
+        stub_screenpipe_stage,
         stub_behavior_log_stage,
         stub_window_stage,
         stub_pattern_stage,

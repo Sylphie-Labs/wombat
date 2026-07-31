@@ -63,6 +63,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
+from wombat.integrations.screenpipe.client import _MAX_RESULTS as _SEARCH_RESULT_CAP
 from wombat.integrations.screenpipe.client import ScreenpipeItem
 from wombat.sources.base import SourceEvent
 
@@ -136,6 +137,7 @@ class ScreenpipeEventSource:
         self._clock = clock
         self._search_from = clock()
         self._current: _ContextRun | None = None
+        self._derive_failure_warned = False
 
     async def start(self) -> None:
         """No lifecycle setup needed — the injected client is already constructed."""
@@ -152,10 +154,13 @@ class ScreenpipeEventSource:
         method's own merge/derive bookkeeping is additionally wrapped so a bug here degrades to
         ``[]`` rather than killing this source's poll loop (the registry's CRF-4 guard is a
         separate, downstream layer for the enqueue step, not a substitute for this one).
+
+        ISS-37 m5: ``_search_from`` advances ONLY after a successful ``search`` call returns —
+        the pragma-no-cover exception branch below leaves it untouched, so a failed poll retries
+        the SAME window next beat instead of losing it forever.
         """
         now = self._clock()
         start = self._search_from
-        self._search_from = now
         try:
             items = await asyncio.to_thread(self._client.search, start, now)
         except Exception:  # pragma: no cover - client.search is documented to never raise
@@ -165,22 +170,42 @@ class ScreenpipeEventSource:
                 exc_info=True,
             )
             return []
+        self._search_from = now
 
+        # ISS-37 m3: a result count at the client's cap means this window was truncated — the
+        # true tail is unseen, so continuity across the boundary is broken (see `_derive`).
+        truncated = len(items) == _SEARCH_RESULT_CAP
         try:
-            return self._derive(items)
+            events = self._derive(items, truncated=truncated)
         except Exception:
-            logger.warning(
-                "screenpipe source: event derivation raised unexpectedly — degrading this "
-                "poll to no events",
-                exc_info=True,
-            )
+            self._warn_derive_failure_once()
             return []
+        self._derive_failure_warned = False
+        return events
 
-    def _derive(self, items: list[ScreenpipeItem]) -> list[SourceEvent]:
+    def _derive(self, items: list[ScreenpipeItem], *, truncated: bool) -> list[SourceEvent]:
         events: list[SourceEvent] = []
         for item in sorted(items, key=lambda i: i.captured_at):
             self._process_one(item, events)
+        if truncated:
+            # ISS-37 m3: never merge a future poll's items into this run across an unseen gap.
+            # Accepted cost: a missed genuine long block, never an inflated duration_s.
+            self._current = None
         return events
+
+    def _warn_derive_failure_once(self) -> None:
+        """ISS-37 m2: AT MOST one WARNING per consecutive derive-failure streak (mirrors
+        ``ScreenpipeClient``'s own ``_warn_once``/``_rearm`` posture, DEC-70i) — a persistent
+        bookkeeping fault at a 30s poll cadence must not log ~2880 tracebacks/day; a poll that
+        derives successfully (``poll`` resets ``_derive_failure_warned``) re-arms this warning."""
+        if not self._derive_failure_warned:
+            logger.warning(
+                "screenpipe source: event derivation raised unexpectedly — degrading this "
+                "poll to no events; further consecutive failures stay silent until a "
+                "successful poll re-arms this warning",
+                exc_info=True,
+            )
+            self._derive_failure_warned = True
 
     def _process_one(self, item: ScreenpipeItem, events: list[SourceEvent]) -> None:
         if self._current is None:
@@ -198,7 +223,15 @@ class ScreenpipeEventSource:
 
     def _maybe_emit_context_switch(self, events: list[SourceEvent]) -> None:
         run = self._current
-        assert run is not None
+        if run is None:
+            # ISS-37 m4: an explicit guard, not a bare assert — under `python -O` an assert is
+            # stripped and a None run would instead raise AttributeError below, silently
+            # dropping this poll's events. Skip the emit with one loud warning instead.
+            logger.warning(
+                "screenpipe source: _maybe_emit_context_switch called with no current run — "
+                "skipping this emit (internal bookkeeping bug)"
+            )
+            return
         if run.switch_emitted:
             return
         if run.dwell_s() >= _MIN_DWELL_S:
@@ -207,7 +240,13 @@ class ScreenpipeEventSource:
 
     def _maybe_emit_focus_block_end(self, events: list[SourceEvent]) -> None:
         run = self._current
-        assert run is not None
+        if run is None:
+            # ISS-37 m4: see _maybe_emit_context_switch above.
+            logger.warning(
+                "screenpipe source: _maybe_emit_focus_block_end called with no current run — "
+                "skipping this emit (internal bookkeeping bug)"
+            )
+            return
         duration = run.dwell_s()
         if duration >= _FOCUS_BLOCK_MIN_S:
             events.append(self._build_event("focus_block_end", run, duration))

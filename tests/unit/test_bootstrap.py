@@ -28,7 +28,9 @@ from pydantic import SecretStr
 import wombat.sources.bootstrap as sources_bootstrap_module
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
+from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.dream_observe import DreamObserveStage
+from wombat.behavior.stages.dream_screenpipe import DreamScreenpipeStage
 from wombat.bootstrap import (
     _ENGINE_MAX_STEPS,
     MODEL_PROFILE,
@@ -48,6 +50,7 @@ from wombat.external_store import (
 )
 from wombat.gate.models import GateAction, GateDecision, GateItem, ItemKind
 from wombat.gate.pending_set import InMemoryPendingJournal, PendingSet
+from wombat.integrations.screenpipe.client import ScreenpipeClient
 from wombat.observations import CurrentActivity, ObservationStore
 from wombat.observe_screen import ScreenActivityCollector
 from wombat.params import load_operating_params
@@ -1909,11 +1912,12 @@ def test_observe_screen_toggle_true_constructs_the_wired_screen_collector_trio()
 # --- TK-314 (DEC-68(d)(2)): dream_observe splices into the dream graph unconditionally ---------
 
 
-def test_tk314_dream_observe_splices_between_derive_and_behavior_log_none_store_when_off() -> None:
+def test_tk314_dream_observe_splices_between_derive_and_screenpipe_none_store_when_off() -> None:
     """The dream graph carries ``dream_observe`` between ``dream_derive`` and
-    ``dream_behavior_log`` REGARDLESS of the observe toggles (the graph shape is pinned;
-    structural inertness lives in the collectors) — and on a default toggle-off boot the stage's
-    injected ``observations`` is ``None`` (its own one-WARNING nightly no-op degrade shape)."""
+    ``dream_screenpipe`` (TK-324's later splice) REGARDLESS of the observe toggles (the graph
+    shape is pinned; structural inertness lives in the collectors) — and on a default toggle-off
+    boot the stage's injected ``observations`` is ``None`` (its own one-WARNING nightly no-op
+    degrade shape)."""
     op = load_operating_params()
     bundle = bootstrap.assemble_runtime(
         config=_config(),
@@ -1927,7 +1931,7 @@ def test_tk314_dream_observe_splices_between_derive_and_behavior_log_none_store_
     observe_stage = dream_graph.get("dream_observe")
     assert isinstance(observe_stage, DreamObserveStage)
     assert derive_stage.transitions == ("dream_observe",)
-    assert observe_stage.transitions == ("dream_behavior_log",)
+    assert observe_stage.transitions == ("dream_screenpipe",)
     assert observe_stage._observations is None  # toggles off => no store, by construction
 
 
@@ -1952,3 +1956,60 @@ def test_tk314_dream_observe_reads_the_same_toggle_gated_observation_store() -> 
     assert isinstance(observe_stage, DreamObserveStage)
     assert bundle.observation_store is not None
     assert observe_stage._observations is bundle.observation_store
+
+
+# --- TK-324 (DEC-70h): dream_screenpipe splices into the dream graph unconditionally -----------
+
+
+def test_tk324_dream_screenpipe_splices_none_client_when_toggle_off() -> None:
+    """The dream graph carries ``dream_screenpipe`` between ``dream_observe`` and
+    ``dream_behavior_log`` REGARDLESS of ``wombat_observe_screenpipe`` (the graph shape is
+    pinned; structural inertness lives in ``screenpipe_client`` being ``None``) — and on a
+    default toggle-off boot the stage's injected ``client`` is ``None`` (its own
+    zero-client-contact degrade shape, RULING R-C)."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    dream_graph = bundle.pathways.get(bundle.dream_pathway_id)
+    observe_stage = dream_graph.get("dream_observe")
+    screenpipe_stage = dream_graph.get("dream_screenpipe")
+    assert isinstance(screenpipe_stage, DreamScreenpipeStage)
+    assert observe_stage.transitions == ("dream_screenpipe",)
+    assert screenpipe_stage.transitions == ("dream_behavior_log",)
+    assert screenpipe_stage._client is None  # toggle off => no client, by construction
+
+
+def test_tk324_dream_screenpipe_constructs_client_when_toggle_on() -> None:
+    """With ``wombat_observe_screenpipe`` true, ``dream_screenpipe`` is wired over a REAL
+    ``ScreenpipeClient`` pointed at ``config.wombat_screenpipe_url`` (RULING R-A) — and over the
+    SAME budget-guarded model / ``UserFactsStore`` every other dream-consolidation call site uses
+    (never a second model/guard, never a second connection)."""
+    op = load_operating_params()
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_observe_screenpipe=True,
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    dream_graph = bundle.pathways.get(bundle.dream_pathway_id)
+    observe_stage = dream_graph.get("dream_observe")
+    facts_stage = dream_graph.get("dream_facts")
+    screenpipe_stage = dream_graph.get("dream_screenpipe")
+    assert isinstance(observe_stage, DreamObserveStage)
+    assert isinstance(facts_stage, DreamFactsStage)
+    assert isinstance(screenpipe_stage, DreamScreenpipeStage)
+    assert isinstance(screenpipe_stage._client, ScreenpipeClient)
+    assert screenpipe_stage._client._base_url == config.wombat_screenpipe_url
+    assert screenpipe_stage._model is facts_stage._model  # DEC-23: never a second guard
+    assert screenpipe_stage._user_facts is observe_stage._user_facts  # never a second connection

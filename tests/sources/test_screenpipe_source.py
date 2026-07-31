@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -29,11 +30,13 @@ from wombat.gate.gate import gate_item_from_queue_item
 from wombat.gate.models import ScoredItem
 from wombat.gate.scoring import urgency
 from wombat.gate.trigger import is_surfacing_worthy
+from wombat.integrations.screenpipe.client import _MAX_RESULTS as _CLIENT_MAX_RESULTS
 from wombat.integrations.screenpipe.client import ScreenpipeClient, ScreenpipeItem
 from wombat.params import load_operating_params
 from wombat.queue import EnqueueResult, QueueItem, WombatQueue
 from wombat.queue import ensure_schema as ensure_queue_schema
 from wombat.rating.params import EventClass, default_params_for
+from wombat.sources.base import SourceEvent
 from wombat.sources.registry import SourceRegistry
 from wombat.sources.screenpipe_source import ScreenpipeEventSource
 from wombat.sources.seen_ledger import DedupingEnqueuer, SeenLedger
@@ -86,6 +89,50 @@ class _WindowedFakeClient:
         app_name: str | None = None,
         limit: int | None = None,
     ) -> list[ScreenpipeItem]:
+        return [item for item in self._items if start <= item.captured_at < end]
+
+
+class _StaticFakeClient:
+    """A fake ``ScreenpipeClient``-shaped double whose ``search`` ignores the requested window
+    and always returns the SAME fixed item list — used by regression tests that need every poll
+    to see fresh items regardless of the advancing ``_search_from`` cursor."""
+
+    def __init__(self, items: list[ScreenpipeItem]) -> None:
+        self._items = items
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        return list(self._items)
+
+
+class _FlakyOnceClient:
+    """A fake client whose ``search`` raises on its FIRST call only, then serves ``items``
+    windowed exactly like ``_WindowedFakeClient`` — records every ``(start, end)`` it was
+    called with, for asserting on retried windows (ISS-37 m5)."""
+
+    def __init__(self, items: list[ScreenpipeItem]) -> None:
+        self._items = items
+        self._raised = False
+        self.calls: list[tuple[datetime, datetime]] = []
+
+    def search(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        app_name: str | None = None,
+        limit: int | None = None,
+    ) -> list[ScreenpipeItem]:
+        self.calls.append((start, end))
+        if not self._raised:
+            self._raised = True
+            raise RuntimeError("simulated transient client.search failure")
         return [item for item in self._items if start <= item.captured_at < end]
 
 
@@ -227,6 +274,120 @@ async def test_ac_a_title_churn_within_the_same_app_does_not_reset_dwell() -> No
     assert block_end["app"] == "chrome"
     assert block_end["title"] == churning[-1].title[:160]
     assert block_end["duration_s"] == 1500.0
+
+
+# ------------------------------------------------------------------------- ISS-37 regressions
+
+
+async def test_iss37_m2_derive_failure_warns_once_per_streak_and_success_rearms(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistent bug in this module's own derive bookkeeping must log AT MOST one WARNING
+    per consecutive failure streak (not one per poll — ~2880/day at 30s cadence under a
+    persistent fault), and a poll that derives successfully re-arms it."""
+    caplog.set_level(logging.WARNING)
+    clock = _FakeClock(_BASE)
+    client = _StaticFakeClient([_item("chrome", "Tab", "ref-1", 0)])
+    source = ScreenpipeEventSource(client=client, poll_interval_seconds=30.0, clock=clock)
+
+    call_count = 0
+    real_process_one = source._process_one
+
+    def _flaky_process_one(item: ScreenpipeItem, events: list[SourceEvent]) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise RuntimeError("simulated derive bookkeeping bug")
+        real_process_one(item, events)
+
+    monkeypatch.setattr(source, "_process_one", _flaky_process_one)
+
+    clock.set(_BASE + timedelta(seconds=1))
+    assert await source.poll() == []
+    clock.set(_BASE + timedelta(seconds=2))
+    assert await source.poll() == []
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+    # Third poll: process_one now succeeds (call_count == 3) -> re-arms the warning.
+    caplog.clear()
+    clock.set(_BASE + timedelta(seconds=3))
+    await source.poll()
+    assert caplog.records == []
+
+    # Fourth poll: a fresh failure warns again since the prior success re-armed it.
+    call_count = 0
+    caplog.clear()
+    clock.set(_BASE + timedelta(seconds=4))
+    assert await source.poll() == []
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
+async def test_iss37_m3_truncated_window_breaks_context_run_continuity() -> None:
+    """A poll whose result count hits the client's cap means the window was truncated — the
+    run being tracked must not carry into the next poll, so two blocks of the SAME app split
+    by an unseen gap are never merged into one inflated ``duration_s``."""
+    clock = _FakeClock(_BASE + timedelta(seconds=-1))
+    truncating_poll_items = [
+        _item("editor", "main.py", f"ref-cap-{i}", i) for i in range(_CLIENT_MAX_RESULTS)
+    ]
+    later_items = [
+        _item("editor", "main.py", "ref-later-1", 5000),
+        _item("editor", "main.py", "ref-later-2", 5130),
+    ]
+    client = _WindowedFakeClient([*truncating_poll_items, *later_items])
+    source = ScreenpipeEventSource(client=client, poll_interval_seconds=30.0, clock=clock)
+
+    clock.set(_BASE + timedelta(seconds=50))
+    truncating_events = await source.poll()
+    assert truncating_events == []  # dwell (49s) is under the 120s floor within this window
+
+    clock.set(_BASE + timedelta(seconds=5200))
+    payloads = [e.payload for e in await source.poll()]
+
+    switch = next(p for p in payloads if p["event"] == "context_switch")
+    # Had continuity NOT been broken, started_at would be the very first item (offset 0) and
+    # duration_s would be ~5130s. Breaking it means the second poll starts a fresh run.
+    assert switch["started_at"] == (_BASE + timedelta(seconds=5000)).isoformat()
+    assert switch["duration_s"] == 130.0
+
+
+async def test_iss37_m4_none_current_run_skips_emit_with_one_warning_not_a_crash(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Calling the emit helpers with no current run must warn and skip rather than raise — the
+    previous bare ``assert`` is stripped under ``python -O``, turning a None run into a silent
+    ``AttributeError`` (a no-event poll with zero diagnostic trace)."""
+    caplog.set_level(logging.WARNING)
+    clock = _FakeClock(_BASE)
+    source = ScreenpipeEventSource(
+        client=_StaticFakeClient([]), poll_interval_seconds=30.0, clock=clock
+    )
+    assert source._current is None
+
+    events: list[SourceEvent] = []
+    source._maybe_emit_context_switch(events)
+    source._maybe_emit_focus_block_end(events)
+
+    assert events == []
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 2
+
+
+async def test_iss37_m5_search_cursor_only_advances_after_a_successful_search() -> None:
+    """If ``client.search`` itself raises (the defensive, pragma-no-cover branch), the poll
+    cursor must NOT advance — the next poll retries the SAME window instead of silently losing
+    it forever (a screenpipe outage must never cost the missed window)."""
+    clock = _FakeClock(_BASE)
+    client = _FlakyOnceClient([_item("editor", "main.py", "ref-1", 5)])
+    source = ScreenpipeEventSource(client=client, poll_interval_seconds=30.0, clock=clock)
+
+    clock.set(_BASE + timedelta(seconds=10))
+    assert await source.poll() == []
+    assert client.calls == [(_BASE, _BASE + timedelta(seconds=10))]
+
+    clock.set(_BASE + timedelta(seconds=20))
+    await source.poll()
+    # The retried window's start is UNCHANGED from the first, failed attempt.
+    assert client.calls[1] == (_BASE, _BASE + timedelta(seconds=20))
 
 
 # --------------------------------------------------------------------------------------- AC(b)

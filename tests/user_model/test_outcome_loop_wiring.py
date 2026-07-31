@@ -192,13 +192,35 @@ class _PassthroughObserveStage:
     owns its own acceptance criteria in ``tests/behavior/test_dream_observe.py``)."""
 
     name: str = "dream_observe"
+    transitions: tuple[str, ...] = ("dream_screenpipe",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_screenpipe",
+            output=Artifact(
+                kind="wombat.dream_observe_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={"new_facts": 0},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughScreenpipeStage:
+    """TK-324 mechanical reshape (flagged per the ticket's own sanction): a trivial
+    always-transitions-onward double standing in for ``DreamScreenpipeStage`` — this module's ACs
+    are about the outcome pass, never touching a screenpipe client here (TK-324 owns its own
+    acceptance criteria in ``tests/pathways/test_dream_screenpipe_stage.py``)."""
+
+    name: str = "dream_screenpipe"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_behavior_log",
             output=Artifact(
-                kind="wombat.dream_observe_report",
+                kind="wombat.dream_screenpipe_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={"new_facts": 0},
@@ -313,6 +335,7 @@ def _build_engine(*, entity_kg: InMemoryEntityKG, labeler: OutcomeLabeler) -> En
         _PassthroughFactsStage(),
         _PassthroughDeriveStage(),
         _PassthroughObserveStage(),
+        _PassthroughScreenpipeStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),
