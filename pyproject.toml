@@ -21,6 +21,11 @@ dependencies = [
     # Windows (stdlib cannot portably resolve the host's IANA name there) — pure-python, zero
     # egress, returns a real zoneinfo.ZoneInfo (config.resolve_wombat_zone's unset-tz fallback).
     "tzlocal>=5",
+    # DEC-68a (TK-313 dependency ruling): zero-capture WASAPI audio-session enumeration for the
+    # in-call mic probe (observe_mic.py) — pulls comtypes. Raw ctypes-COM WASAPI vtable code
+    # would dwarf the ticket for zero privacy gain; pycaw never opens an audio device, it only
+    # reads session state. Imported LAZILY inside the probe function (non-Windows degrades safe).
+    "pycaw>=20240210",
 ]
 
 [project.optional-dependencies]
@@ -119,6 +124,12 @@ ignore_missing_imports = true
 # separate `types-jsonschema` PyPI package isn't carried here. TK-131's input-schema test is the
 # first place wombat imports jsonschema directly (to assert on jsonschema.ValidationError).
 module = ["jsonschema.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pycaw ships no py.typed marker/stubs (DEC-68a, TK-313) — mypy must not fail to resolve it
+# inside observe_mic.probe_in_call's lazy import (and the test module's own monkeypatch import).
+module = ["pycaw.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

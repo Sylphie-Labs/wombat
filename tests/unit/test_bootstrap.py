@@ -461,6 +461,168 @@ async def test_assemble_runtime_gate_stage_quiet_hours_logs_only_on_state_change
         assert sum("quiet hours ended" in r.message for r in caplog.records) == 1
 
 
+# --- TK-313 (DEC-68(a)/(e)): the in-call mic gate wrapper, composing OVER the quiet-hours wrapper -
+
+
+def _mic_config() -> WombatConfig:
+    return WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_observe_mic=True,
+    )
+
+
+async def test_ac1_mic_wrapper_holds_immediate_voice_when_in_call_then_probe_false_surfaces(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC1: the same presence-hold test pattern as the TK-304 quiet-hours wrapper (a spy stands
+    in for the inner ``make_gate_evaluator`` result). ``current_activity.in_call=True`` forces
+    ``presence=None`` into the inner (quiet-hours) evaluator -- canonical presence_hold -> HOLD,
+    pending set intact; a LATER pass with ``in_call=False`` reaches the inner evaluator with the
+    REAL presence, which is how it surfaces (out of quiet hours here)."""
+    received_presence: list[PresenceSnapshot | None] = []
+    canned_decision = GateDecision(action=GateAction.HOLD, items=())
+
+    def _fake_make_gate_evaluator(**kwargs: object) -> object:
+        async def _evaluate(
+            items: list[GateItem], presence: PresenceSnapshot | None
+        ) -> GateDecision:
+            received_presence.append(presence)
+            return canned_decision
+
+        return _evaluate
+
+    monkeypatch.setattr(bootstrap, "make_gate_evaluator", _fake_make_gate_evaluator)
+    monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(12, 0))  # out of quiet hours
+
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_mic_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is not None
+    assert bundle.mic_probe is not None
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = cast(GateStage, graph.get("gate"))
+    item = GateItem(item_id="i1", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    # --- in-call: presence forced to None -- item holds, pending intact --------------------
+    bundle.current_activity.in_call = True
+    with caplog.at_level(logging.INFO):
+        in_call_decision = await stage._evaluate([item], _ACTIVE_PRESENCE)
+    assert received_presence[-1] is None
+    assert in_call_decision == canned_decision
+    assert "in-call" in caplog.text
+
+    # --- a later probe-false pass: byte-transparent passthrough -- item surfaces -----------
+    bundle.current_activity.in_call = False
+    surfaced_decision = await stage._evaluate([item], _ACTIVE_PRESENCE)
+    assert received_presence[-1] is _ACTIVE_PRESENCE
+    assert surfaced_decision == canned_decision
+
+
+async def test_ac2_mic_wrapper_out_of_call_is_transparent_passthrough_of_quiet_hours_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: ``in_call=False`` is a byte-transparent passthrough of the inner evaluator INCLUDING
+    its own quiet-hours behavior -- quiet hours in-window still holds (the inner wrapper's own
+    job), and out-of-window the real presence reaches the innermost evaluator unchanged."""
+    received_presence: list[PresenceSnapshot | None] = []
+    canned_decision = GateDecision(action=GateAction.HOLD, items=())
+
+    def _fake_make_gate_evaluator(**kwargs: object) -> object:
+        async def _evaluate(
+            items: list[GateItem], presence: PresenceSnapshot | None
+        ) -> GateDecision:
+            received_presence.append(presence)
+            return canned_decision
+
+        return _evaluate
+
+    monkeypatch.setattr(bootstrap, "make_gate_evaluator", _fake_make_gate_evaluator)
+
+    op = load_operating_params()
+    config = WombatConfig(
+        deepseek_api_key="sk-test",
+        deepseek_base_url="https://api.deepseek.com",
+        wombat_observe_mic=True,
+        wombat_quiet_start="22:00",
+        wombat_quiet_end="07:00",
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.current_activity is not None
+    bundle.current_activity.in_call = False
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = cast(GateStage, graph.get("gate"))
+    item = GateItem(item_id="i1", item_kind=ItemKind.GENERIC, created_at=0.0, payload={})
+
+    monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(23, 30))  # quiet hours in-window
+    await stage._evaluate([item], _ACTIVE_PRESENCE)
+    assert received_presence[-1] is None  # the quiet-hours wrapper's own hold, not ours
+
+    monkeypatch.setattr(bootstrap, "datetime", _fixed_now_at(12, 0))  # out of window
+    await stage._evaluate([item], _ACTIVE_PRESENCE)
+    assert received_presence[-1] is _ACTIVE_PRESENCE  # real presence, byte-transparent
+
+
+async def test_ac4_mic_wrapper_leaves_surfacing_and_reply_wiring_untouched() -> None:
+    """AC4: a reply is not a surfacing -- the mic wrapper only ever swaps ``gate_stage.evaluate``;
+    the drain graph's stage set (``review_or_speak`` and everything else brief-flush/chat/voice
+    replies ride) is identical with the toggle on or off, so those paths never call this
+    wrapper and stay unaffected regardless of ``in_call``."""
+    op = load_operating_params()
+    baseline = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    mic_bundle = bootstrap.assemble_runtime(
+        config=_mic_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    baseline_graph = baseline.pathways.get(baseline.drain_pathway_id)
+    mic_graph = mic_bundle.pathways.get(mic_bundle.drain_pathway_id)
+    assert set(baseline_graph.names()) == set(mic_graph.names())
+    assert "review_or_speak" in mic_graph.names()
+
+
+def test_ac6_wombat_observe_mic_false_leaves_gate_evaluate_byte_identical_to_quiet_hours() -> None:
+    """AC6: ``wombat_observe_mic=False`` (the default) -> no probe constructed, the mic wrapper
+    is NEVER installed -- ``gate_stage.evaluate`` IS ``bootstrap._quiet_hours_gate_evaluate``
+    itself (identity, not just equivalence), the exact pre-TK-313 wiring."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.mic_probe is None
+    assert bundle.current_activity is None
+    assert bundle.observation_store is None
+    graph = bundle.pathways.get(bundle.drain_pathway_id)
+    stage = cast(GateStage, graph.get("gate"))
+    assert stage._evaluate.__name__ == "_quiet_hours_gate_evaluate"
+    assert stage._evaluate.__qualname__.endswith(
+        "assemble_runtime.<locals>._quiet_hours_gate_evaluate"
+    )
+
+
 # --- TK-166 (CR-1, Q-83): replay_pending is the ONE eager-read boot-replay flag -----------------
 
 

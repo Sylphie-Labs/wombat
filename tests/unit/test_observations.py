@@ -32,8 +32,9 @@ from zoneinfo import ZoneInfo
 import psycopg
 import pytest
 
-from wombat import observations, schema_preflight
+from wombat import observations, observe_mic, schema_preflight
 from wombat.observations import CurrentActivity, ObservationStore, ensure_schema
+from wombat.observe_mic import MicInCallProbe
 from wombat.observe_screen import ScreenActivityCollector, ScreenBeat
 
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
@@ -333,3 +334,134 @@ def test_ac6_store_raise_logs_loudly_and_later_segments_still_record(
 
     assert len(store.segments) == 1
     assert store.segments[0]["payload"]["app"] == "notepad.exe"
+
+
+# ----------------------------------------------------------------------- mic probe ACs (TK-313)
+
+
+def _mic_probe(store: _FakeObservationStore, current_activity: CurrentActivity) -> MicInCallProbe:
+    return MicInCallProbe(
+        store=store,
+        current_activity=current_activity,
+        tz=ZoneInfo("UTC"),
+        clock=lambda: datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC),
+    )
+
+
+def test_mic_probe_coalesces_true_beats_into_one_in_call_segment() -> None:
+    """The DEC-68 ledger vocab, RULED: channel='mic', kind='in_call', payload={}, span =
+    the probe-true interval, day_key tz-local. CurrentActivity.in_call flips in place."""
+    store = _FakeObservationStore()
+    activity = CurrentActivity()
+    probe = _mic_probe(store, activity)
+    t0 = datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC)
+
+    probe.process_beat(True, now=t0)  # opens
+    assert activity.in_call is True
+    probe.process_beat(True, now=t0 + timedelta(seconds=30))  # same segment continues — no-op
+    probe.process_beat(False, now=t0 + timedelta(seconds=90))  # closes
+
+    assert activity.in_call is False
+    assert len(store.segments) == 1
+    seg = store.segments[0]
+    assert seg["channel"] == "mic"
+    assert seg["kind"] == "in_call"
+    assert seg["payload"] == {}
+    assert seg["started_at"] == t0
+    assert seg["ended_at"] == t0 + timedelta(seconds=90)
+    assert seg["day_key"] == t0.date()
+
+    # A false beat with nothing open is a pure no-op.
+    probe.process_beat(False, now=t0 + timedelta(seconds=91))
+    assert len(store.segments) == 1
+
+
+def test_mic_probe_store_raise_logs_loudly_and_later_segments_still_record(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = _FakeObservationStore(raise_on_call=1)
+    activity = CurrentActivity()
+    probe = _mic_probe(store, activity)
+    t0 = datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC)
+
+    probe.process_beat(True, now=t0)
+    with caplog.at_level(logging.WARNING, logger="wombat.observe_mic"):
+        probe.process_beat(False, now=t0 + timedelta(seconds=10))  # raises on close
+
+    assert any("raised" in record.message.lower() for record in caplog.records)
+    assert len(store.segments) == 0
+    assert activity.in_call is False  # state still resets cleanly
+
+    probe.process_beat(True, now=t0 + timedelta(seconds=20))
+    probe.process_beat(False, now=t0 + timedelta(seconds=30))  # SECOND append_segment — succeeds
+    assert len(store.segments) == 1
+
+
+def test_mic_probe_read_raise_degrades_to_false_via_poll_once() -> None:
+    """``poll_once``'s belt-and-suspenders catch: a raising ``read_beat`` never propagates."""
+    store = _FakeObservationStore()
+    activity = CurrentActivity()
+
+    def _raising_read() -> bool:
+        raise RuntimeError("boom")
+
+    probe = MicInCallProbe(
+        store=store,
+        current_activity=activity,
+        tz=ZoneInfo("UTC"),
+        clock=lambda: datetime(2026, 7, 30, 9, 0, 0, tzinfo=UTC),
+        read_beat=_raising_read,
+    )
+    probe.poll_once()
+    assert activity.in_call is False
+    assert len(store.segments) == 0
+
+
+def test_probe_in_call_import_error_degrades_to_false_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC3: pycaw unavailable (non-Windows/missing dep) -> ``probe_in_call`` returns ``False``
+    and logs exactly ONE WARNING — reduce-only must never become silence-forever."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith("pycaw"):
+            raise ImportError("simulated: pycaw unavailable on this platform")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    with caplog.at_level(logging.WARNING, logger="wombat.observe_mic"):
+        result = observe_mic.probe_in_call()
+
+    assert result is False
+    assert len(caplog.records) == 1
+
+
+def test_probe_in_call_com_raise_degrades_to_false_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC3: any COM raise mid-enumeration -> ``False`` plus ONE WARNING, never propagates."""
+    import pycaw.utils
+
+    def _raising_get_microphone() -> Any:
+        raise OSError("simulated COM failure")
+
+    monkeypatch.setattr(pycaw.utils.AudioUtilities, "GetMicrophone", _raising_get_microphone)
+
+    with caplog.at_level(logging.WARNING, logger="wombat.observe_mic"):
+        result = observe_mic.probe_in_call()
+
+    assert result is False
+    assert len(caplog.records) == 1
+
+
+def test_observe_mic_source_has_no_capture_stream_api_token() -> None:
+    """DEC-68a structural: no audio device is ever opened for capture. The probe reads only
+    session state via the audio-session manager — never a capture-stream library or the
+    IAudioClient/Initialize vtable calls that would actually open the microphone."""
+    source = Path(observe_mic.__file__).read_text(encoding="utf-8")
+    for token in ("sounddevice", "pyaudio", "IAudioClient", "Initialize"):
+        assert token not in source, f"forbidden capture/stream API token found: {token!r}"

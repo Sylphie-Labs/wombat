@@ -205,6 +205,7 @@ from .integrations.gmail.triage import load_triage_rules
 from .kb.loader import load_psychology_kb
 from .kb.schema import ValidationError as KBValidationError
 from .observations import CurrentActivity, ObservationStore
+from .observe_mic import MicInCallProbe
 from .observe_screen import ScreenActivityCollector
 from .params import OperatingParams, load_operating_params
 from .pathways.brief_pathway import (
@@ -758,6 +759,12 @@ class RuntimeBundle:
     observation_store: ObservationStore | None = None
     current_activity: CurrentActivity | None = None
     screen_collector: ScreenActivityCollector | None = None
+    # TK-313 (DEC-68(a)/(e)): the ambient-observability mic channel — constructed ONLY when
+    # config.wombat_observe_mic is true (the SAME structural-inertness contract as screen_
+    # collector above). Shares observation_store/current_activity with the screen channel (ONE
+    # CurrentActivity single-slot snapshot, DEC-68(a) — either toggle alone is enough to
+    # construct them; observations.CurrentActivity.in_call ships from birth for exactly this).
+    mic_probe: MicInCallProbe | None = None
 
 
 def assemble_runtime(
@@ -996,8 +1003,39 @@ def assemble_runtime(
             return await _inner_gate_evaluate(items, None)
         return await _inner_gate_evaluate(items, presence)
 
+    # TK-313 (DEC-68(a)/(e)): mutable single-slot state so the wrapper below logs its INFO line
+    # only on an in-call state CHANGE, not on every evaluate pass (mirrors the TK-315 quiet-hours
+    # convention above exactly).
+    _mic_in_call_state: dict[str, bool] = {"active": False}
+
+    async def _mic_in_call_gate_evaluate(
+        items: list[GateItem], presence: PresenceSnapshot | None
+    ) -> GateDecision:
+        """TK-313 (DEC-68(a)/(e)): a wrapper-of-wrapper composing OVER
+        ``_quiet_hours_gate_evaluate`` (gate_stage.py itself byte-untouched). Reads the LIVE
+        ``current_activity.in_call`` flag (flipped in place by ``MicInCallProbe``'s own poll
+        loop — never invoked directly here) at evaluate time and, when True, forces
+        ``presence=None`` into ``_quiet_hours_gate_evaluate``, which folds its OWN quiet-hours
+        check on top before reaching the inner evaluator — the SAME canonical presence_hold
+        predicate then degrades that to HOLD, pending set intact. Out of call this is a
+        byte-transparent passthrough to ``_quiet_hours_gate_evaluate`` (including its own
+        quiet-hours behavior). Only installed when ``config.wombat_observe_mic`` is true —
+        otherwise ``gate_stage.evaluate`` is ``_quiet_hours_gate_evaluate`` itself (AC6:
+        byte-identical to the pre-arc wiring)."""
+        now_in_call = current_activity is not None and current_activity.in_call
+        if now_in_call and not _mic_in_call_state["active"]:
+            logger.info("gate: in-call detected — holding the immediate-voice arm")
+        elif not now_in_call and _mic_in_call_state["active"]:
+            logger.info("gate: call ended — immediate-voice arm resumed")
+        _mic_in_call_state["active"] = now_in_call
+        if now_in_call:
+            return await _quiet_hours_gate_evaluate(items, None)
+        return await _quiet_hours_gate_evaluate(items, presence)
+
     gate_stage = GateStage(
-        evaluate=_quiet_hours_gate_evaluate,
+        evaluate=(
+            _mic_in_call_gate_evaluate if config.wombat_observe_mic else _quiet_hours_gate_evaluate
+        ),
         presence_provider=presence_provider,
         absorb_feedback=absorb_feedback,
         stamp_resolution=stamp_resolution,
@@ -1548,13 +1586,35 @@ def assemble_runtime(
     # config.wombat_observe_screen is true (structural inertness: toggle off leaves all three
     # None, so no store/writes/polling ever happen). dsn is a required str here; ObservationStore
     # is fully lazy (Q-46) — zero connection at construction either way.
+    #
+    # TK-313 (DEC-68(a)/(e)): observation_store/current_activity are now shared with the mic
+    # channel — constructed when EITHER toggle is true, since CurrentActivity is ONE single-slot
+    # snapshot object (app/title/in_call together) that both channels write into in place. Either
+    # toggle alone still leaves screen_collector/mic_probe themselves gated on their OWN flag.
     observation_store: ObservationStore | None = None
     current_activity: CurrentActivity | None = None
     screen_collector: ScreenActivityCollector | None = None
-    if config.wombat_observe_screen:
+    mic_probe: MicInCallProbe | None = None
+    if config.wombat_observe_screen or config.wombat_observe_mic:
         observation_store = ObservationStore(dsn)
         current_activity = CurrentActivity()
+    if config.wombat_observe_screen:
+        assert observation_store is not None and current_activity is not None, (
+            "assemble_runtime: wombat_observe_screen true must have constructed the shared "
+            "observation_store/current_activity pair above"
+        )
         screen_collector = ScreenActivityCollector(
+            store=observation_store,
+            current_activity=current_activity,
+            tz=tz,
+            clock=_utc_now,
+        )
+    if config.wombat_observe_mic:
+        assert observation_store is not None and current_activity is not None, (
+            "assemble_runtime: wombat_observe_mic true must have constructed the shared "
+            "observation_store/current_activity pair above"
+        )
+        mic_probe = MicInCallProbe(
             store=observation_store,
             current_activity=current_activity,
             tz=tz,
@@ -1588,4 +1648,5 @@ def assemble_runtime(
         observation_store=observation_store,
         current_activity=current_activity,
         screen_collector=screen_collector,
+        mic_probe=mic_probe,
     )
