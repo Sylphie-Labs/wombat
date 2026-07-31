@@ -684,6 +684,50 @@ def test_put_settings_quiet_hours_only_end_is_422() -> None:
     assert response.status_code == 422
 
 
+def test_put_settings_quiet_hours_touched_field_only_against_stored_pair_is_200() -> None:
+    """Repair regression (TK-304+TK-306 batch review): once both fields are coherently stored,
+    a later PUT touching only ONE of them (the settings UI's own patch semantics - only the
+    edited field is sent) must succeed, merging against the already-stored counterpart rather
+    than 422ing as if the untouched field were never set."""
+    client = _client()
+    seed = client.put(
+        "/settings",
+        json={"wombat_quiet_start": "22:00", "wombat_quiet_end": "07:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert seed.status_code == 200
+
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_end": "08:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_quiet_start"] == "22:00"
+    assert response.json()["settings"]["wombat_quiet_end"] == "08:00"
+
+
+def test_put_settings_quiet_hours_other_field_in_same_put_still_saves() -> None:
+    """The bug's second half: a same-PUT field unrelated to quiet hours must not be lost when
+    the quiet-hours half of the body is a valid touched-fields-only patch."""
+    client = _client()
+    seed = client.put(
+        "/settings",
+        json={"wombat_quiet_start": "22:00", "wombat_quiet_end": "07:00"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert seed.status_code == 200
+
+    response = client.put(
+        "/settings",
+        json={"wombat_quiet_end": "08:00", "wombat_assistant_name": "Wombat"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.json()["settings"]["wombat_quiet_end"] == "08:00"
+    assert response.json()["settings"]["wombat_assistant_name"] == "Wombat"
+
+
 # --- TK-302 (DEC-67d/h): the eight wombat_param_* operating-parameter overlay keys -------------
 
 

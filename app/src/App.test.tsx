@@ -592,6 +592,34 @@ describe("App (TK-306 AC2: brief time + decay save)", () => {
   });
 });
 
+describe("App (repair: clearing the ceiling override PUTs null, not 0)", () => {
+  it("PUTs null when a previously-set ceiling field is cleared back to blank", async () => {
+    const { calls } = installFakeApi({
+      ...baseSettings(),
+      wombat_param_per_class_daily_ceiling: 5,
+    });
+    render(<App />);
+    gotoSystem();
+    const ceilingField = await screen.findByLabelText(
+      "Max voice interruptions per sender class per day",
+    );
+    expect((ceilingField as HTMLInputElement).value).toBe("5");
+
+    fireEvent.change(ceilingField, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => {
+      const settingsPuts = calls.filter(
+        (call) => call.method === "PUT" && call.url.endsWith("/settings"),
+      );
+      expect(settingsPuts.length).toBe(1);
+      expect(settingsPuts[0].body).toEqual({
+        wombat_param_per_class_daily_ceiling: null,
+      });
+    });
+  });
+});
+
 describe("App (TK-306 AC3: read-only timezone line)", () => {
   it("renders the timezone name/source with no control", async () => {
     installFakeApi(undefined, undefined, { name: "America/Chicago", source: "env" });

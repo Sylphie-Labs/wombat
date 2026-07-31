@@ -49,7 +49,7 @@ from typing import Any, Literal
 
 import tzlocal
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
 from wombat.external_store import ExternalItemStore
@@ -153,8 +153,8 @@ class SettingsUpdate(BaseModel):
     # TK-304 (DEC-67g): mirrors WombatConfig.wombat_quiet_start/wombat_quiet_end - plain strs,
     # not Literals (exempt from the mirror test's vocabulary check). "" turns the feature off;
     # a non-blank value must be "HH:MM" (validated below); the pair-wise both-or-neither-set
-    # rule is enforced by the model_validator below (a single field's own format is otherwise
-    # independently valid).
+    # rule is enforced in the PUT route against the merged (body + stored) state, not here (a
+    # single field's own format is otherwise independently valid).
     wombat_quiet_start: str | None = None
     wombat_quiet_end: str | None = None
 
@@ -165,14 +165,11 @@ class SettingsUpdate(BaseModel):
             raise ValueError(f"must be \"HH:MM\" (24-hour, zero-padded) or empty, got {value!r}")
         return value
 
-    @model_validator(mode="after")
-    def _quiet_hours_pairwise(self) -> SettingsUpdate:
-        # "Set" means present in THIS PUT body (not None) - a PUT that omits both is a no-op for
-        # this pair, always fine. Exactly one present is the incoherent partial-window case the
-        # pair-wise rule rejects (RULING v2.172 r6's DEC-67g door check).
-        if (self.wombat_quiet_start is None) != (self.wombat_quiet_end is None):
-            raise ValueError(_QUIET_HOURS_PAIRWISE_MESSAGE)
-        return self
+    # TK-304/TK-306 repair (DEC-67g): the pair-wise both-or-neither rule is enforced in the
+    # ``PUT /settings`` route AFTER merging this body with the already-stored settings, not here
+    # at the per-request-body level — a touched-fields-only PUT that changes only one of the two
+    # (the other already coherently set from a prior save) is NOT the incoherent partial-window
+    # case the rule exists to reject. See ``put_settings`` below.
     # TK-302 (DEC-67d/h): the eight DEC-67(d) app-editable OperatingParams overlay keys —
     # ``wombat.params.PARAMS_APP_EDITABLE``'s spec, mirrored here VERBATIM. Restart-tier (no
     # hot-apply; ``wombat.runtime.serve()`` reads these once at boot). ge/le mirrors each spec
@@ -297,8 +294,24 @@ def create_app(
     def put_settings(body: SettingsUpdate) -> dict[str, Any]:
         if store is None:
             raise HTTPException(status_code=503, detail=_STORAGE_UNAVAILABLE_DETAIL)
+        mapping = body.model_dump(exclude_unset=True)
+        # TK-304/TK-306 repair (DEC-67g): the both-or-neither quiet-hours rule is checked against
+        # the MERGED (this PUT's body over the already-stored settings) state, not the body alone
+        # — a touched-fields-only PUT that changes only one of the pair while the other is already
+        # coherently stored from a prior save must succeed, matching the settings UI's patch
+        # semantics (only the edited field is sent).
+        if "wombat_quiet_start" in mapping or "wombat_quiet_end" in mapping:
+            try:
+                stored = store.get_all()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503, detail=_STORAGE_UNAVAILABLE_DETAIL
+                ) from exc
+            effective_start = mapping.get("wombat_quiet_start", stored.get("wombat_quiet_start"))
+            effective_end = mapping.get("wombat_quiet_end", stored.get("wombat_quiet_end"))
+            if bool(effective_start) != bool(effective_end):
+                raise HTTPException(status_code=422, detail=_QUIET_HOURS_PAIRWISE_MESSAGE)
         try:
-            mapping = body.model_dump(exclude_unset=True)
             if mapping:
                 store.put(mapping)
             existing = store.get_all()

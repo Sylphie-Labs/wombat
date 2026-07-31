@@ -363,9 +363,14 @@ function buildPatch(formState: FormState, touched: ReadonlySet<FormField>): Sett
     patch.wombat_param_urgency_threshold = Number(formState.wombat_param_urgency_threshold);
   }
   if (touched.has("wombat_param_per_class_daily_ceiling")) {
-    patch.wombat_param_per_class_daily_ceiling = Number(
-      formState.wombat_param_per_class_daily_ceiling,
-    );
+    // TK-306 repair: an empty field means "cleared - back to default", NOT the numeric value 0
+    // (which is itself a valid, distinct override meaning immediate voice off, ge=0 in the
+    // backend's bounds). Number("") === 0 would silently save that override instead of clearing
+    // it, so a blank field must PUT `null` (the backend already accepts `int | None`).
+    patch.wombat_param_per_class_daily_ceiling =
+      formState.wombat_param_per_class_daily_ceiling === ""
+        ? null
+        : Number(formState.wombat_param_per_class_daily_ceiling);
   }
   if (touched.has("wombat_param_decay_ttl_hours")) {
     patch.wombat_param_decay_ttl_seconds = Number(formState.wombat_param_decay_ttl_hours) * 3600;
