@@ -64,6 +64,7 @@ class _ScriptedHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(_ERROR_BODY)
             server.emission_log.append("error-sent")
+            server.error_sent_event.set()
             return
 
         total_length = sum(len(chunk) for chunk in server.chunks)
@@ -105,6 +106,11 @@ class _ScriptedServer(http.server.ThreadingHTTPServer):
         self.disconnect_after = disconnect_after
         self.emission_log: list[str] = []
         self.step_event = threading.Event()
+        # TK-330 AC4 (ISS-39 f2): a dedicated event for the non-2xx-error path, set AFTER the
+        # handler thread appends "error-sent" -- the client thread raises VoiceTransportError as
+        # soon as it reads the response status line, which can otherwise race the handler's own
+        # append to emission_log. The test waits on this event before asserting the log.
+        self.error_sent_event = threading.Event()
 
     @property
     def url(self) -> str:
@@ -184,6 +190,10 @@ def test_stream_non2xx_raises_before_any_chunk_delivered() -> None:
             for chunk in stream:
                 received.append(chunk)
 
+        # TK-330 AC4 (ISS-39 f2): wait for the handler thread's own append to actually land before
+        # asserting the log -- the client can raise as soon as it reads the status line, which
+        # otherwise races the handler thread's post-write emission_log.append("error-sent").
+        assert server.error_sent_event.wait(timeout=5)
         assert received == []
         assert server.emission_log == ["error-sent"]
 
