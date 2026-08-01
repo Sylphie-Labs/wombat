@@ -29,6 +29,13 @@ reference id) resolve via ``load_config()``; LOUD-SKIPS otherwise (the ``_LIVE_E
 precedent: ``tests/integration/test_capability_honesty_live.py``). Speaks exactly one pinned
 utterance through the REAL transport/player — costs API credit, NEVER runs in the plain suite.
 
+TK-333 (DEC-73 done-bar) adds a MEASUREMENT mode on the SAME arming var/idiom:
+``test_live_fish_measures_time_to_first_sound_buffered_vs_streaming`` — speaks the SAME pinned
+utterance BUFFERED then STREAMING through the REAL adapter, timing wall-clock time-to-first-sound
+for each half and printing both side by side (Jim's operator evidence for the streaming win; total-
+duration throughput is explicitly out of scope). Costs API credit TWICE — NEVER runs in the plain
+suite.
+
 Every OTHER test rides a fake ``VoiceTransport`` + fake ``AudioPlayer`` — ZERO live network calls
 and ZERO real audio playback (DEF-7).
 """
@@ -38,6 +45,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from importlib.abc import MetaPathFinder
@@ -58,7 +66,12 @@ from wombat.stages.artifacts import (
     composed_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
-from wombat.voice.stream_playback import STREAM_SAMPLE_RATE, StreamingAudioWriter
+from wombat.voice.playback import AudioPlayer, WinsoundPlayer
+from wombat.voice.stream_playback import (
+    STREAM_SAMPLE_RATE,
+    StreamingAudioWriter,
+    streaming_available,
+)
 from wombat.voice.transport import VoiceTransport, VoiceTransportError
 from wombat.voice.tts import FISH_AUDIO_TTS_URL, FishAudioTTSAdapter, PartialSpeechError
 
@@ -577,3 +590,83 @@ def test_live_fish_speaks_one_pinned_expressive_utterance() -> None:
     )
 
     adapter.speak(_LIVE_UTTERANCE)
+
+
+# --- TK-333 (DEC-73 done-bar): armed LIVE measurement mode, buffered vs streaming --------------
+
+
+class _TimingPlayer:
+    """Wraps a REAL ``AudioPlayer``, timestamping the FIRST ``play()`` call relative to a
+    caller-supplied start time (TK-333) — real playback fires through unchanged; this class exists
+    only to observe WHEN it fires."""
+
+    def __init__(self, inner: AudioPlayer, start: float) -> None:
+        self._inner = inner
+        self._start = start
+        self.first_sound_seconds: float | None = None
+
+    def play(self, wav_bytes: bytes) -> None:
+        if self.first_sound_seconds is None:
+            self.first_sound_seconds = time.perf_counter() - self._start
+        self._inner.play(wav_bytes)
+
+
+class _TimingWriter(StreamingAudioWriter):
+    """A REAL ``StreamingAudioWriter`` subclass that timestamps the FIRST ``write()`` call
+    relative to a caller-supplied start time (TK-333) — real streamed playback fires through
+    unchanged via ``super().write()``."""
+
+    def __init__(self, *, start: float) -> None:
+        super().__init__()
+        self._start = start
+        self.first_sound_seconds: float | None = None
+
+    def write(self, chunk: bytes) -> None:
+        if self.first_sound_seconds is None:
+            self.first_sound_seconds = time.perf_counter() - self._start
+        super().write(chunk)
+
+
+@_requires_fish_live
+def test_live_fish_measures_time_to_first_sound_buffered_vs_streaming() -> None:
+    """DEC-73 done-bar (TK-333): speaks the SAME pinned utterance BUFFERED then STREAMING through
+    the REAL adapter/transport/player, timing wall-clock time-to-first-sound for each half and
+    printing both side by side — Jim's operator evidence for the streaming win (time-to-first-sound
+    is the metric; total-duration throughput is explicitly out of scope). Costs API credit TWICE;
+    gated behind ``WOMBAT_TEST_FISH_LIVE``, never in the plain suite."""
+    config = load_config()
+    api_key = config.wombat_fish_api_key
+    assert api_key is not None
+    voice_id = config.wombat_tts_voice_id or ""
+    model = config.wombat_fish_model
+
+    buffered_start = time.perf_counter()
+    buffered_player = _TimingPlayer(WinsoundPlayer(), buffered_start)
+    buffered_adapter = FishAudioTTSAdapter(
+        api_key.get_secret_value(), voice_id=voice_id, model=model, player=buffered_player
+    )
+    buffered_adapter.speak(_LIVE_UTTERANCE)
+    assert buffered_player.first_sound_seconds is not None
+
+    if not streaming_available():
+        pytest.skip(
+            f"buffered time-to-first-sound={buffered_player.first_sound_seconds:.3f}s; "
+            "sounddevice (voice-cloud extra) is not installed -- cannot measure the streaming half"
+        )
+
+    streaming_start = time.perf_counter()
+    timing_writer = _TimingWriter(start=streaming_start)
+    streaming_adapter = FishAudioTTSAdapter(
+        api_key.get_secret_value(),
+        voice_id=voice_id,
+        model=model,
+        writer_factory=lambda: timing_writer,
+    )
+    streaming_adapter.speak(_LIVE_UTTERANCE)
+    assert timing_writer.first_sound_seconds is not None
+
+    print(
+        "\nTK-333 (DEC-73 done-bar) time-to-first-sound -- "
+        f"buffered={buffered_player.first_sound_seconds:.3f}s "
+        f"streaming={timing_writer.first_sound_seconds:.3f}s"
+    )
