@@ -1063,10 +1063,15 @@ def test_load_config_rejects_unknown_fish_model_naming_the_var(
 
 def test_wombat_fish_model_docstring_names_the_free_variant() -> None:
     """Structural check the briefing calls for: the field's docstring/comment must name
-    ``s2.1-pro-free`` as the zero-credit free-tier variant of the same bracket-grammar family."""
+    ``s2.1-pro-free`` as the zero-credit free-tier variant of the same bracket-grammar family.
+
+    TK-328 ISS-38(m4): anchored on the ``wombat_fish_model`` field declaration itself (the
+    comment block immediately precedes it) rather than the first ``"TK-326"`` occurrence in the
+    whole module + a fixed 900-char window — that anchor would silently stop covering the comment
+    if any earlier ``"TK-326"`` mention were ever added, or the block grew past the window."""
     source = inspect.getsource(config_module)
-    comment_start = source.index("TK-326")
-    comment_block = source[comment_start : comment_start + 900]
+    field_start = source.index("wombat_fish_model:")
+    comment_block = source[max(0, field_start - 900) : field_start]
     assert "s2.1-pro-free" in comment_block
     assert "zero-credit" in comment_block or "free-tier" in comment_block
 

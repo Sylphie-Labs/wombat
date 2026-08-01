@@ -210,6 +210,7 @@ class _RaisingCloudTTS:
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
+        self.model = model
 
     def speak(self, text: str) -> None:
         raise RuntimeError("cloud TTS exploded mid-call")
@@ -473,8 +474,8 @@ def test_cloud_tts_fish_provider_threads_configured_model_into_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """TK-326 (DEC-71a/DEC-72a): ``config.wombat_fish_model`` reaches the fish adapter's ``model``
-    ctor param; the deepgram/elevenlabs branches never receive it (asserted structurally by the
-    generic ``_RecordingCloudTTS`` fake's ``model`` defaulting to ``None`` everywhere else)."""
+    ctor param; the deepgram/elevenlabs branches never receive it — real assertion in
+    ``test_cloud_tts_non_fish_providers_never_receive_a_model_kwarg`` below (TK-328 ISS-38(m3))."""
     monkeypatch.setattr(select_module, "FishAudioTTSAdapter", _RecordingCloudTTS)
     monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
     store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
@@ -488,6 +489,26 @@ def test_cloud_tts_fish_provider_threads_configured_model_into_adapter(
     primary = adapter._primary
     assert isinstance(primary, _RecordingCloudTTS)
     assert primary.model == "s1"
+
+
+@pytest.mark.parametrize("provider", ["deepgram", "elevenlabs"])
+def test_cloud_tts_non_fish_providers_never_receive_a_model_kwarg(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """TK-328 ISS-38(m3): the real assertion backing the claim above — ``_construct_cloud_tts``'s
+    deepgram/elevenlabs branches never pass ``model``, so the generic ``_RecordingCloudTTS``
+    fake's ``model`` stays at its ``None`` default (previously only implied, never checked)."""
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    for name in _CLOUD_TTS_CLASS_NAMES:
+        monkeypatch.setattr(select_module, name, _RecordingCloudTTS)
+    store = _FakeVoiceKeyStore(initial={provider: "cloud-key"})
+    config = _config(wombat_tts_provider=provider, wombat_tts_voice_id="voice-123")
+
+    adapter = build_tts_adapter(config, key_store=store)
+
+    assert isinstance(adapter, FallbackTTSAdapter)
+    assert isinstance(adapter._primary, _RecordingCloudTTS)
+    assert adapter._primary.model is None
 
 
 class _FakeEnqueuer:

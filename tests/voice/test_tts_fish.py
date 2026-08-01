@@ -15,13 +15,21 @@ assertion in ``test_speak_sends_expected_request_and_plays_returned_bytes_exactl
 ``model`` HTTP header rides alongside the untouched ``Authorization`` header and the JSON body
 stays byte-identical.
 
-Every test rides a fake ``VoiceTransport`` + fake ``AudioPlayer`` — ZERO live network calls and
-ZERO real audio playback (DEF-7).
+TK-329 (DEC-72f) adds ONE arming-var-gated LIVE ear-proof:
+``test_live_fish_speaks_one_pinned_expressive_utterance`` — armed ONLY when
+``WOMBAT_TEST_FISH_LIVE=1`` AND a real ``WOMBAT_FISH_API_KEY``/``WOMBAT_TTS_VOICE_ID`` (Jim's
+reference id) resolve via ``load_config()``; LOUD-SKIPS otherwise (the ``_LIVE_ENV`` idiom
+precedent: ``tests/integration/test_capability_honesty_live.py``). Speaks exactly one pinned
+utterance through the REAL transport/player — costs API credit, NEVER runs in the plain suite.
+
+Every OTHER test rides a fake ``VoiceTransport`` + fake ``AudioPlayer`` — ZERO live network calls
+and ZERO real audio playback (DEF-7).
 """
 
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -34,6 +42,7 @@ from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Degraded
 
 from tests.support.stage_context_fake import StageContextFake
+from wombat.config import ConfigurationError, load_config
 from wombat.gate.models import ItemKind
 from wombat.sinks.speak import SpeakSink
 from wombat.sinks.tts_adapter import TTSAdapter
@@ -288,3 +297,73 @@ def test_fish_audio_tts_adapter_construction_with_default_transport_raises_witho
             model="s2.1-pro",
             player=_RecordingFakePlayer(),
         )
+
+
+# --- TK-329 (DEC-72f): the armed LIVE ear-proof --------------------------------------------------
+
+_LIVE_ENV = "WOMBAT_TEST_FISH_LIVE"
+
+# Pinned per DEC-72f — Jim's operator ear-check judges [break]/[long-break] efficacy on s2.1-pro
+# by listening to exactly this utterance; if the pause markers prove inert by ear they drop at
+# recalibration (recorded, not guessed).
+_LIVE_UTTERANCE = (
+    "[soft tone] Your first meeting is at nine. [break] Nothing else needs you before then."
+)
+
+
+def _missing_fish_live_requirements() -> tuple[str, ...]:
+    """What's missing to arm the live smoke, resolved LAZILY at each test's SETUP time via the
+    ``skipif`` STRING condition below — never at import/collection time (mirrors ``tests/
+    integration/test_capability_honesty_live.py``'s ``_missing_live_requirements`` exactly).
+    Short-circuits before ever calling ``load_config()`` when ``WOMBAT_TEST_FISH_LIVE`` itself is
+    unset (the default, unarmed case)."""
+    if not os.environ.get(_LIVE_ENV):
+        return (_LIVE_ENV,)
+    missing: list[str] = []
+    try:
+        config = load_config()
+    except ConfigurationError:
+        missing.append("WOMBAT_FISH_API_KEY/WOMBAT_TTS_VOICE_ID (load_config() failed)")
+    else:
+        if config.wombat_fish_api_key is None or not (
+            config.wombat_fish_api_key.get_secret_value().strip()
+        ):
+            missing.append("WOMBAT_FISH_API_KEY")
+        if not (config.wombat_tts_voice_id or "").strip():
+            missing.append("WOMBAT_TTS_VOICE_ID")
+    return tuple(missing)
+
+
+def _fish_live_unarmed() -> bool:
+    """The ``skipif`` condition, evaluated by pytest as a STRING at each item's SETUP time — runs
+    strictly before any fixture is instantiated."""
+    return bool(_missing_fish_live_requirements())
+
+
+_requires_fish_live = pytest.mark.skipif(
+    "_fish_live_unarmed()",
+    reason=(
+        f"missing {_LIVE_ENV} and/or WOMBAT_FISH_API_KEY/WOMBAT_TTS_VOICE_ID — skipping the live "
+        "Fish ear-proof (TK-329, DEC-72f). Export WOMBAT_TEST_FISH_LIVE=1 plus real creds (env "
+        "or repo-root .env) to arm this harness — costs API credit, NEVER runs in the plain suite."
+    ),
+)
+
+
+@_requires_fish_live
+def test_live_fish_speaks_one_pinned_expressive_utterance() -> None:
+    """DEC-72f: ONE armed live speak of the pinned utterance through the REAL
+    ``FishAudioTTSAdapter`` (real transport, real playback, ``config.wombat_fish_model`` — the
+    pinned ``s2.1-pro`` default unless overridden). Jim's ear-check on [break]/[long-break]
+    efficacy on s2.1-pro is the operator step; this smoke only proves the call completes without
+    raising. Costs API credit — gated behind ``WOMBAT_TEST_FISH_LIVE``, never in the plain suite."""
+    config = load_config()
+    api_key = config.wombat_fish_api_key
+    assert api_key is not None
+    adapter = FishAudioTTSAdapter(
+        api_key.get_secret_value(),
+        voice_id=config.wombat_tts_voice_id or "",
+        model=config.wombat_fish_model,
+    )
+
+    adapter.speak(_LIVE_UTTERANCE)
