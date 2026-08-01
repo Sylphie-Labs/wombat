@@ -29,6 +29,18 @@ text)`` exactly when ``voice_spoken`` flips ``True`` below (the ``speak()`` try'
 never on replay, voice-off, missing-speak-seam, or a raising ``speak()``. A raising hook is caught,
 logged as exactly ONE WARNING, and delivery is otherwise unaffected — the register is a pure side
 effect, never load-bearing for this stage's own result (mirrors ``sinks/speak.py``'s own guard).
+
+TK-332 repair (DEC-73e applies to BOTH call sites named in DEC-64): ``voice.tts.PartialSpeechError``
+is caught in its OWN ``except`` clause, ordered ahead of the broad ``except Exception`` below (a
+``RuntimeError`` subclass, so ordering matters) — otherwise ``bootstrap.make_speak_callable``'s
+``FallbackTTSAdapter.speak`` re-raising ``PartialSpeechError(played_any=True)`` (TK-332 AC5) would
+fall into the broad arm and read as total failure. ``played_any=True`` means the user genuinely
+heard the Steward start before Fish's stream died, so this counts as spoken exactly like
+``sinks/speak.py``'s SAME-named handling: ``voice_spoken`` flips ``True``, ``on_spoken`` fires (the
+same guarded call shape as the healthy path), plus ONE loud warning naming partial playback.
+``played_any=False`` takes the byte-identical posture as any other ``speak()`` failure below. The
+except clause references ``voice_tts.PartialSpeechError`` (a module attribute) rather than a
+value-bound import, for the same reload-safety reason documented in ``sinks/speak.py``.
 """
 
 from __future__ import annotations
@@ -47,6 +59,7 @@ from wombat.stages.artifacts import (
     brief_delivered_to_artifact_data,
     brief_text_from_artifact_data,
 )
+from wombat.voice import tts as voice_tts
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +140,31 @@ class BriefDeliverStage:
             else:
                 try:
                     self._speak(text)
+                except voice_tts.PartialSpeechError as exc:
+                    # TK-332 repair: ordered ahead of the broad except below — PartialSpeechError
+                    # is a RuntimeError subclass. played_any=False is byte-identical to any other
+                    # speak() failure (no on_spoken). played_any=True means the user genuinely
+                    # heard the Steward start, so this counts as spoken (mirrors sinks/speak.py).
+                    if not exc.played_any:
+                        logger.warning(
+                            "brief_deliver: speak sink raised; text delivery stands",
+                            exc_info=True,
+                        )
+                    else:
+                        logger.warning(
+                            "brief_deliver: speak sink played partial audio before failing "
+                            "(heard by the user); treating this delivery as spoken",
+                            exc_info=True,
+                        )
+                        voice_spoken = True
+                        if self._on_spoken is not None:
+                            try:
+                                self._on_spoken("brief:" + ctx.run_id, text)
+                            except Exception:
+                                logger.warning(
+                                    "brief_deliver: on_spoken hook raised; ignoring",
+                                    exc_info=True,
+                                )
                 except Exception:
                     logger.warning(
                         "brief_deliver: speak sink raised; text delivery stands", exc_info=True

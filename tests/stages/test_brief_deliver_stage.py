@@ -25,6 +25,7 @@ from wombat.stages.artifacts import (
     brief_text_to_artifact_data,
 )
 from wombat.stages.brief_deliver_stage import BriefDeliverStage
+from wombat.voice import tts as voice_tts
 
 _UTC_TZ = ZoneInfo("UTC")
 # A real non-UTC offset (CST-1/DEC-6) to catch bare-UTC bugs in the delivery header.
@@ -159,6 +160,67 @@ async def test_speak_raises_logs_warning_text_delivery_stands(
     _delivered_at, voice_spoken, _replay = brief_delivered_from_artifact_data(result.output.data)
     assert voice_spoken is False
     assert any("speak" in rec.message.lower() for rec in caplog.records)
+
+
+# --- TK-332 repair (DEC-73e applies to BOTH call sites named in DEC-64): PartialSpeechError -----
+
+
+async def test_partial_speech_error_played_any_true_counts_as_spoken(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """played_any=True: voice_spoken flips True, on_spoken fires once, ONE loud warning naming
+    partial playback — mirrors sinks/speak.py's SAME-named handling."""
+    sink = tmp_path / "brief.txt"
+    hook_calls: list[tuple[str, str]] = []
+
+    def _partial(_text: str) -> None:
+        raise voice_tts.PartialSpeechError(played_any=True)
+
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=_partial,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+    ctx = _ctx(run_id="run-9", text="Fish died mid-stream.")
+
+    with caplog.at_level("WARNING"):
+        result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert hook_calls == [("brief:run-9", "Fish died mid-stream.")]
+    _delivered_at, voice_spoken, _replay = brief_delivered_from_artifact_data(result.output.data)
+    assert voice_spoken is True
+    assert "Fish died mid-stream." in sink.read_text(encoding="utf-8")
+    assert any("partial" in rec.message.lower() for rec in caplog.records)
+
+
+async def test_partial_speech_error_played_any_false_matches_plain_failure(tmp_path: Path) -> None:
+    """played_any=False: byte-identical posture to any other speak() failure — no on_spoken,
+    voice_spoken stays False."""
+    sink = tmp_path / "brief.txt"
+    hook_calls: list[tuple[str, str]] = []
+
+    def _partial(_text: str) -> None:
+        raise voice_tts.PartialSpeechError(played_any=False)
+
+    stage = BriefDeliverStage(
+        sink_path=sink,
+        tz=_UTC_TZ,
+        voice_enabled=True,
+        speak=_partial,
+        on_spoken=lambda item_id, text: hook_calls.append((item_id, text)),
+    )
+    ctx = _ctx(text="Nothing was heard.")
+
+    result = await stage.run(ctx)
+
+    assert isinstance(result, Done)
+    assert hook_calls == []
+    _delivered_at, voice_spoken, _replay = brief_delivered_from_artifact_data(result.output.data)
+    assert voice_spoken is False
+    assert "Nothing was heard." in sink.read_text(encoding="utf-8")
 
 
 # --- AC5 (TK-288, DEC-64 gap A): on_spoken fires once, brief-scoped id + text, working case only -
