@@ -38,7 +38,7 @@ voice = ["pyttsx3>=2.90", "faster-whisper>=1.0"]
 # Cloud voice providers (TK-189, EP-31, DEC-28 structural opt-in) — thin httpx REST only, no
 # vendor SDKs (Q-100). Separate from `voice` (local/offline) since cloud providers are an
 # explicit opt-in, never installed by default.
-voice-cloud = ["httpx>=0.27"]
+voice-cloud = ["httpx>=0.27", "sounddevice>=0.4"]
 # The Electron renderer's CONFIG backend (TK-197, EP-32, DEC-31/32) — a standalone loopback-only
 # process (`python -m wombat.settings_app`) that imports NOTHING from the wombat runtime. Kept
 # out of the base dependency set for the same reason as `voice`/`voice-cloud`: a checkout that
@@ -130,6 +130,13 @@ ignore_missing_imports = true
 # pycaw ships no py.typed marker/stubs (DEC-68a, TK-313) — mypy must not fail to resolve it
 # inside observe_mic.probe_in_call's lazy import (and the test module's own monkeypatch import).
 module = ["pycaw.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# sounddevice ships no py.typed marker/stubs, and is an OPTIONAL extra not installed by default
+# (DEC-73c, TK-331) — mypy must not fail to resolve it inside StreamingAudioWriter's lazy import
+# (and the test module's own monkeypatch import).
+module = ["sounddevice.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
