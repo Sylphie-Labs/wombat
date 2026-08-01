@@ -1,8 +1,17 @@
-"""wipe — the archive-then-truncate core for the Postgres tier (TK-334, DEC-75/DEC-76/DEC-77 r4).
+"""wipe — the archive-then-truncate core for the Postgres tier (TK-334, DEC-75/DEC-76/DEC-77 r4),
+plus TK-335's filesystem tier and durable-substrate fail-loud guard (DEC-77 r7).
 
 ``archive_and_wipe(dsn, archive_dir, *, connect=psycopg.connect) -> WipeReport`` is EP-38's
 engine: a Jim-directed "wipe wombat's memory and start clean" act that must be SYSTEMIC (every
 public base table, not a hand-kept list) and never lose data silently.
+
+TK-335 adds two more standalone pieces that ``wombat.__main__``'s ``wipe`` subcommand composes
+with the above (guard, then Postgres, then filesystem — see that module for the orchestration):
+  - ``check_substrate_guard()`` — DEC-77 r7's fail-loud check for a durable cog-worx substrate
+    endpoint. Raises before any archive or destructive act; v1 ships no Neo4j purge code.
+  - ``wipe_filesystem_tier()`` — brief/feedback/trail text artifacts (copied then zeroed), the
+    trail's sidecar cursor (deleted), and the ASR voice-drop directory (audio MOVED into the
+    archive with a manifest).
 
 FOUR PHASES, IN ORDER, FAIL-CLOSED:
   (1) ENUMERATE BY INTROSPECTION (DEC-75b) — ``SELECT table_name FROM information_schema.tables
@@ -36,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -43,6 +53,11 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+
+from wombat.sources.asr import _FAILED_DIRNAME as _ASR_FAILED_DIRNAME
+from wombat.sources.asr import _PROCESSED_DIRNAME as _ASR_PROCESSED_DIRNAME
+from wombat.substrate import SubstrateConfig
+from wombat.trail.renderer import _sidecar_path_for
 
 # DEC-76 (Jim-confirmed, binding): exactly this set. A builder must not widen or narrow it —
 # wombat_settings is the DEC-43 configuration tier (peer of .env/keyring), not memory, so it is
@@ -194,8 +209,163 @@ def _truncate_tables(conn: _PgConnection, tables: list[str]) -> None:
     conn.commit()
 
 
+# ================================================================================================
+# TK-335 — the durable-substrate fail-loud guard (DEC-77 r7, binding, supersedes the ticket's
+# original wording).
+# ================================================================================================
+
+# Source-verified (DEC-77 r7): cog-worx's adapters.config.SubstrateSettings is the ONLY real
+# endpoint surface (env_prefix="COGWORX_"). It is read directly from os.environ here, never by
+# constructing SubstrateSettings() — that class ships non-blank defaults for every field, so an
+# unconfigured environment would still read as "configured" if we ever instantiated it.
+_COGWORX_SUBSTRATE_ENV_VARS: tuple[str, ...] = ("COGWORX_NEO4J_URI", "COGWORX_PG_DSN")
+
+
+class DurableSubstrateConfigured(WipeAborted):
+    """Raised when a durable cog-worx substrate endpoint is configured (DEC-77 r7) — the wipe
+    cannot safely reach data living outside what it archives, so it aborts by name before any
+    archive or destructive act rather than silently under-wiping. A ``WipeAborted`` subclass so
+    existing callers that catch the base class still catch this."""
+
+
+def check_substrate_guard(substrate_config: SubstrateConfig | None = None) -> str:
+    """DEC-77 r7: wombat has NO neo4j field anywhere in config.py/params.py/wombat_params.yaml,
+    and ``substrate.SubstrateConfig`` has zero real callers — both ``bootstrap.build_substrate()``
+    call sites pass no config, i.e. the cold-boot in-memory doubles. So the only real signal that
+    a durable substrate is wired is cog-worx's own ``COGWORX_`` endpoint prefix, PLUS an explicit
+    ``SubstrateConfig`` ever handed to this call (structural — nothing in wombat constructs one
+    today).
+
+    Returns ``"cold_boot"`` when neither signal is present. Raises ``DurableSubstrateConfigured``
+    otherwise, naming the specific store, BEFORE any archive or destructive act — v1 ships no
+    Neo4j purge code (DEC-75d); this guard is the whole obligation.
+    """
+    if substrate_config is not None:
+        raise DurableSubstrateConfigured(
+            "a wombat SubstrateConfig was supplied to the wipe — a durable substrate is wired "
+            "and this wipe cannot safely reach it. Aborting before any archive or destructive act."
+        )
+    for var in _COGWORX_SUBSTRATE_ENV_VARS:
+        if os.environ.get(var, "").strip():
+            raise DurableSubstrateConfigured(
+                f"{var} is set — a durable cog-worx substrate endpoint is configured and this "
+                "wipe cannot safely reach it. Aborting before any archive or destructive act."
+            )
+    return "cold_boot"
+
+
+# ================================================================================================
+# TK-335 — the filesystem tier: brief/feedback/trail text artifacts (copied then zeroed), the
+# trail's sidecar cursor (deleted), and the ASR voice-drop directory (audio MOVED into the
+# archive with a manifest, never base64'd into JSON).
+# ================================================================================================
+
+
+@dataclass
+class FileWipeReport:
+    """What ``wipe_filesystem_tier`` actually did, for a caller (TK-335's CLI) to report."""
+
+    files_dir: Path
+    text_files_archived: list[str]
+    text_files_truncated: list[str]
+    sidecar_deleted: bool
+    voice_drop_manifest_path: Path | None
+    voice_drop_files: list[str]
+
+
+def wipe_filesystem_tier(
+    archive_dir: Path,
+    *,
+    brief_path: Path | None,
+    feedback_path: Path | None,
+    trail_log_path: Path,
+    asr_drop_dir: Path | None,
+) -> FileWipeReport:
+    """Archive then wipe the non-Postgres persistence tier under ``archive_dir/files/`` (TK-335).
+
+    Text artifacts (``brief_path``/``feedback_path``/``trail_log_path`` — any that is ``None`` or
+    does not exist on disk is skipped, the same OPTIONAL-channel loud-skip posture as
+    ``sources.bootstrap``'s ``_maybe_register_*`` fields) are COPIED byte-identically under
+    ``files/`` by basename, then TRUNCATED TO ZERO BYTES — the file keeps existing, never removed
+    (the same empty-it-do-not-remove-the-thing-it-needs rule ``archive_and_wipe`` applies to
+    tables). The trail's dedup-cursor sidecar (``trail.renderer._sidecar_path_for``) is DELETED
+    outright, never archived — it is a cursor, not user data.
+
+    ``asr_drop_dir`` (if set and present) has every audio file in its root PLUS its
+    ``processed/``/``failed/`` subdirectories (``sources.asr``'s own dirnames) MOVED into
+    ``files/voice_drop/`` — each recorded name is prefixed with its subdirectory
+    (``"processed/foo.wav"``) so same-named files from different subdirectories never collide —
+    alongside ``voice-drop-manifest.json`` (name/size/mtime/sha256 per file), never base64'd into
+    JSON. The drop dir and its subdirectories are left in place, empty.
+    """
+    archive_dir = Path(archive_dir)
+    files_dir = archive_dir / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+
+    archived: list[str] = []
+    truncated: list[str] = []
+    for text_path in (brief_path, feedback_path, trail_log_path):
+        if text_path is None or not text_path.exists():
+            continue
+        shutil.copyfile(text_path, files_dir / text_path.name)
+        archived.append(text_path.name)
+        text_path.write_bytes(b"")
+        truncated.append(text_path.name)
+
+    sidecar_path = _sidecar_path_for(Path(trail_log_path))
+    sidecar_deleted = sidecar_path.exists()
+    if sidecar_deleted:
+        sidecar_path.unlink()
+
+    voice_drop_manifest_path: Path | None = None
+    voice_drop_files: list[str] = []
+    if asr_drop_dir is not None and Path(asr_drop_dir).is_dir():
+        drop_dir = Path(asr_drop_dir)
+        voice_drop_dir = files_dir / "voice_drop"
+        manifest_entries: list[dict[str, Any]] = []
+        for subdir_name in (None, _ASR_PROCESSED_DIRNAME, _ASR_FAILED_DIRNAME):
+            scan_dir = drop_dir / subdir_name if subdir_name else drop_dir
+            if not scan_dir.is_dir():
+                continue
+            for audio_path in sorted(scan_dir.iterdir()):
+                if not audio_path.is_file():
+                    continue
+                relative_name = (
+                    f"{subdir_name}/{audio_path.name}" if subdir_name else audio_path.name
+                )
+                stat = audio_path.stat()
+                digest = hashlib.sha256(audio_path.read_bytes()).hexdigest()
+                dest = voice_drop_dir / relative_name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(audio_path), str(dest))
+                manifest_entries.append(
+                    {
+                        "name": relative_name,
+                        "size": stat.st_size,
+                        "mtime": stat.st_mtime,
+                        "sha256": digest,
+                    }
+                )
+                voice_drop_files.append(relative_name)
+        voice_drop_manifest_path = files_dir / "voice-drop-manifest.json"
+        _write_json_file(voice_drop_manifest_path, manifest_entries)
+
+    return FileWipeReport(
+        files_dir=files_dir,
+        text_files_archived=archived,
+        text_files_truncated=truncated,
+        sidecar_deleted=sidecar_deleted,
+        voice_drop_manifest_path=voice_drop_manifest_path,
+        voice_drop_files=voice_drop_files,
+    )
+
+
 __all__ = [
+    "DurableSubstrateConfigured",
+    "FileWipeReport",
     "WipeAborted",
     "WipeReport",
     "archive_and_wipe",
+    "check_substrate_guard",
+    "wipe_filesystem_tier",
 ]

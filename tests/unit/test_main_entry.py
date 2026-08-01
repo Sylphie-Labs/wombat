@@ -29,6 +29,7 @@ import faulthandler
 import logging
 import re
 import socket
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -36,6 +37,15 @@ from pathlib import Path
 import pytest
 
 from wombat import __main__ as wombat_main
+
+
+@pytest.fixture(autouse=True)
+def _bare_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TK-335 (DEC-77 r1): main() now parses ``sys.argv`` as its first act. Every test in this
+    module exercises the pre-existing bare-boot path, so pin argv to just the program name —
+    regardless of whatever pytest itself was invoked with — the same way TK-335's own argv-aware
+    tests pin theirs (tests/unit/test_wipe_cli.py)."""
+    monkeypatch.setattr(sys, "argv", ["wombat"])
 
 
 @pytest.fixture(autouse=True)
