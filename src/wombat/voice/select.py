@@ -102,14 +102,17 @@ class FallbackTTSAdapter:
     the local engine never speaks Fish's bracket markers aloud. The primary branch is untouched;
     ``primary.speak`` always receives ``text`` byte-identical/verbatim.
 
-    TK-332 AC5 (ISS-39 f1 ruling): ``voice.tts.PartialSpeechError`` is caught in its OWN ``except``
-    clause, ordered BEFORE the bare ``except Exception`` below (it is a ``RuntimeError``
-    subclass, so ordering matters). It is always re-raised UNCHANGED, with NO fallback attempt —
-    the user already heard the Fish primary begin speaking before it died mid-stream, so a local
-    fallback speaking the whole utterance over again would duplicate audio rather than degrade
-    gracefully. Re-raising lets ``SpeakSink``'s own dedicated ``PartialSpeechError`` handling
-    (the DEC-73e played-partial-counts-as-spoken branch) actually run in the assembled runtime,
-    where every Fish primary is always wrapped in this class. The except clause references
+    TK-332 AC5 (ISS-39 f1 ruling, v2.195): ``voice.tts.PartialSpeechError`` is caught in its OWN
+    ``except`` clause, ordered BEFORE the bare ``except Exception`` below (it is a ``RuntimeError``
+    subclass, so ordering matters). ``played_any=True`` is always re-raised UNCHANGED, with NO
+    fallback attempt — the user already heard the Fish primary begin speaking before it died
+    mid-stream, so a local fallback speaking the whole utterance over again would duplicate audio
+    rather than degrade gracefully. Re-raising lets ``SpeakSink``'s own dedicated
+    ``PartialSpeechError`` handling (the DEC-73e played-partial-counts-as-spoken branch) actually
+    run in the assembled runtime, where every Fish primary is always wrapped in this class.
+    ``played_any=False`` (no audio ever reached the user) keeps TODAY'S EXACT posture instead —
+    the same loud warning and stripped-tag fallback attempt (or re-raise if no fallback was
+    constructed) as the bare ``except Exception`` arm below. The except clause references
     ``voice_tts.PartialSpeechError`` (a module attribute, ``import wombat.voice.tts as voice_tts``)
     rather than a value bound via ``from ... import PartialSpeechError`` — mirrors ``sinks.speak``'s
     own fix for the same hazard: a test suite that ``importlib.reload``s ``wombat.voice.tts``
@@ -123,17 +126,27 @@ class FallbackTTSAdapter:
     def speak(self, text: str) -> None:
         try:
             self._primary.speak(text)
-        except voice_tts.PartialSpeechError:
-            # TK-332 AC5: partial playback already reached the user -- re-raise unchanged, no
-            # fallback attempt. Ordered ahead of the bare Exception arm below.
-            raise
-        except Exception:
-            logger.warning(
-                "voice: cloud TTS provider failed; falling back to local TTS", exc_info=True
-            )
-            if self._fallback is None:
+        except voice_tts.PartialSpeechError as exc:
+            # TK-332 AC5 (ruling v2.195): ordered ahead of the bare Exception arm below.
+            if exc.played_any:
+                # Partial playback already reached the user -- re-raise unchanged, no fallback
+                # attempt.
                 raise
-            self._fallback.speak(strip_allowed_tags(text))
+            # No audio ever played -- degrades exactly like any other primary failure below.
+            self._warn_and_fallback(text)
+        except Exception:
+            self._warn_and_fallback(text)
+
+    def _warn_and_fallback(self, text: str) -> None:
+        """Today's exact degrade posture (shared by the bare ``Exception`` arm and the
+        ``played_any=False`` branch of the ``PartialSpeechError`` arm, ruling v2.195): ONE loud
+        warning, then a stripped-tag fallback attempt if constructed, else re-raise."""
+        logger.warning(
+            "voice: cloud TTS provider failed; falling back to local TTS", exc_info=True
+        )
+        if self._fallback is None:
+            raise
+        self._fallback.speak(strip_allowed_tags(text))
 
 
 def _cloud_api_key_field(config: WombatConfig, provider: str) -> SecretStr | None:

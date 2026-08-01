@@ -42,7 +42,7 @@ from wombat.stages.artifacts import (
     speech_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
-from wombat.voice.tts import PartialSpeechError
+from wombat.voice import tts as voice_tts
 
 _FIXED_NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=UTC)
 
@@ -86,7 +86,7 @@ class _PartialSpeechRaisingAdapter:
 
     def speak(self, text: str) -> None:
         self.call_count += 1
-        raise PartialSpeechError(played_any=self._played_any)
+        raise voice_tts.PartialSpeechError(played_any=self._played_any)
 
 
 def _composed_output_artifact(*, held_chat: bool = False) -> Artifact:

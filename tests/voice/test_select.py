@@ -45,6 +45,13 @@ TK-328 (ruling v2.187 r1) — the additive ``build_tts_adapter_with_info`` compa
     ``test_build_tts_adapter_is_thin_wrapper_over_with_info``,
     ``test_fallback_tts_adapter_strips_tags_only_on_the_fallback_branch``,
     ``test_fallback_tts_adapter_healthy_primary_receives_tagged_text_verbatim_no_fallback_call``.
+
+TK-332 AC5 (ISS-39 f1 ruling v2.195) — ``FallbackTTSAdapter.speak`` discriminates
+``PartialSpeechError.played_any`` through the wrapper itself (a constructed fallback), the
+reachability lesson pinned (an unwrapped-adapter test is exactly how this survived to review):
+    ``test_fallback_tts_adapter_partial_speech_played_any_true_reraises_no_fallback_call``,
+    ``test_fallback_tts_adapter_partial_speech_played_any_false_falls_back_with_loud_warning``,
+    ``test_fallback_tts_adapter_partial_speech_played_any_false_no_fallback_reraises``.
 """
 
 from __future__ import annotations
@@ -66,6 +73,7 @@ from wombat.config import WombatConfig
 from wombat.queue import EnqueueResult, QueueItem
 from wombat.sources.bootstrap import build_source_registry
 from wombat.sources.registry import SourceRegistry
+from wombat.voice import tts as voice_tts
 from wombat.voice.select import (
     FallbackTranscriber,
     FallbackTTSAdapter,
@@ -875,3 +883,57 @@ def test_cloud_tts_fish_streaming_dep_absent_builds_buffered_adapter_with_loud_w
     assert isinstance(primary, FishAudioTTSAdapter)
     assert primary._writer_factory is None
     assert "voice-cloud" in caplog.text.lower()
+
+
+# --------------------------------------------------- TK-332 AC5 (ISS-39 f1 ruling, v2.195)
+
+
+class _PartialSpeechRaisingTTS:
+    """Minimal ``TTSAdapter`` stand-in whose ``speak`` always raises a caller-chosen
+    ``PartialSpeechError`` -- drives ``FallbackTTSAdapter``'s dedicated except arm directly (AC5),
+    the reachability lesson: an unwrapped-adapter test is exactly how this bug survived review."""
+
+    def __init__(self, *, played_any: bool) -> None:
+        self._played_any = played_any
+
+    def speak(self, text: str) -> None:
+        raise voice_tts.PartialSpeechError(played_any=self._played_any)
+
+
+def test_fallback_tts_adapter_partial_speech_played_any_true_reraises_no_fallback_call() -> None:
+    """AC5: ``played_any=True`` re-raises ``PartialSpeechError`` UNCHANGED through the wrapper,
+    with the constructed fallback NEVER called."""
+    spy = _RecordingTTS()
+    adapter = FallbackTTSAdapter(_PartialSpeechRaisingTTS(played_any=True), fallback=spy)
+
+    with pytest.raises(voice_tts.PartialSpeechError) as excinfo:
+        adapter.speak("hello")
+
+    assert excinfo.value.played_any is True
+    assert spy.spoken == []
+
+
+def test_fallback_tts_adapter_partial_speech_played_any_false_falls_back_with_loud_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC5: ``played_any=False`` keeps today's exact posture through the wrapper -- ONE loud
+    warning, then the constructed fallback speaks the stripped-tag text (no exception escapes)."""
+    spy = _RecordingTTS()
+    adapter = FallbackTTSAdapter(_PartialSpeechRaisingTTS(played_any=False), fallback=spy)
+
+    with caplog.at_level(logging.WARNING):
+        adapter.speak("[calm] Lunch moved. [break] Nothing else.")
+
+    assert spy.spoken == ["Lunch moved. Nothing else."]
+    assert "cloud tts provider failed" in caplog.text.lower()
+
+
+def test_fallback_tts_adapter_partial_speech_played_any_false_no_fallback_reraises() -> None:
+    """AC5: ``played_any=False`` with NO fallback constructed re-raises the ``PartialSpeechError``
+    -- today's exact no-fallback posture, mirroring the bare ``Exception`` arm."""
+    adapter = FallbackTTSAdapter(_PartialSpeechRaisingTTS(played_any=False), fallback=None)
+
+    with pytest.raises(voice_tts.PartialSpeechError) as excinfo:
+        adapter.speak("hello")
+
+    assert excinfo.value.played_any is False
