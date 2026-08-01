@@ -307,8 +307,9 @@ from .voice.context_prefetch import (
     build_user_facts_context,
     build_voice_context,
 )
+from .voice.expressive import EXPRESSIVE_FISH_MODELS
 from .voice.reply_context import LastSpokenRegister
-from .voice.select import build_tts_adapter
+from .voice.select import TTSBuildInfo, build_tts_adapter, build_tts_adapter_with_info
 
 logger = logging.getLogger(__name__)
 
@@ -575,6 +576,7 @@ def build_speech_shape_stage(
     tz: ZoneInfo,
     daily_ledger: DailyLedger | None = None,
     adapter_present: bool,
+    expressive_tags: bool = False,
 ) -> SpeechShapeStage:
     """Assemble the drain pathway's ``speech_shape`` hop (TK-267, DEC-55): a SECOND DeepSeek mouth
     call, wired with the SAME TK-9 layer 2 budget plumbing as ``build_compose_stage`` — a real
@@ -590,6 +592,10 @@ def build_speech_shape_stage(
     adapter construction — ``assemble_runtime`` passes whether the SAME TTS adapter it built for
     ``SpeakSink`` is non-``None``, so this stage's pre-call gate (voice on AND adapter present)
     matches ``SpeakSink``'s own gate exactly.
+
+    ``expressive_tags`` (TK-328, ruling v2.187 r1): default-``False`` — byte-identical to the
+    pre-TK-327 instruction. ``assemble_runtime`` threads its key-gated, constructed-adapter
+    decision here (``info.fish_primary and info.fish_model in EXPRESSIVE_FISH_MODELS``).
     """
     op = params if params is not None else load_operating_params()
     ledger = daily_ledger if daily_ledger is not None else DailyLedger(dsn, tz=tz)
@@ -606,6 +612,8 @@ def build_speech_shape_stage(
         max_chars=config.wombat_spoken_reply_max_chars,
         # TK-318 (DEC-69b): the pane's-actual-reply voice opt-in, restart-tier (no hot-apply).
         speak_full_replies=config.wombat_speak_full_replies,
+        # TK-328: key-gated fish-primary + fish-model-family expressive-tag enablement.
+        expressive_tags=expressive_tags,
     )
 
 
@@ -1175,7 +1183,18 @@ def assemble_runtime(
     # TK-267 (DEC-55): the TTS adapter is built ONCE here (inlining what build_speak_sink itself
     # does) so speech_shape_stage's adapter-presence gate reads the SAME adapter SpeakSink speaks
     # through, rather than constructing (and possibly loud-logging) a second one.
-    tts_adapter = build_tts_adapter(config) if config.wombat_voice_enabled else None
+    # TK-328 (ruling v2.187 r1): build_tts_adapter_with_info is the with_info consumer here — its
+    # TTSBuildInfo drives expressive_tags below (fish_primary AND fish_model in the enumerated
+    # EXPRESSIVE_FISH_MODELS family, DEC-72d) while the adapter itself is byte-identical to what
+    # build_tts_adapter would have returned.
+    tts_adapter, tts_build_info = (
+        build_tts_adapter_with_info(config)
+        if config.wombat_voice_enabled
+        else (None, TTSBuildInfo(fish_primary=False, fish_model=None))
+    )
+    expressive_tags = (
+        tts_build_info.fish_primary and tts_build_info.fish_model in EXPRESSIVE_FISH_MODELS
+    )
     # TK-288 (DEC-64 gap A, v2.151 ruling): ONE shared LastSpokenRegister, threaded via its
     # note_spoken bound method into BOTH speak sites below (this drain-graph SpeakSink AND the
     # brief pathway's BriefDeliverStage further down) — never two registers, never build_speak_
@@ -1197,6 +1216,7 @@ def assemble_runtime(
         tz=tz,
         daily_ledger=daily_ledger,
         adapter_present=tts_adapter is not None,
+        expressive_tags=expressive_tags,
     )
 
     # TK-222 (EP-32, Q-110(d) ruling 5): the chat input surface — enabled IFF

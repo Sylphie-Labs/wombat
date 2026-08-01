@@ -26,6 +26,7 @@ from google.auth.exceptions import RefreshError
 from pydantic import SecretStr
 
 import wombat.sources.bootstrap as sources_bootstrap_module
+import wombat.voice.select as voice_select_module
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
 from wombat.behavior.stages.dream_facts import DreamFactsStage
@@ -947,6 +948,152 @@ def test_build_speech_shape_stage_default_preserves_speak_full_replies_off() -> 
         config=_config(), dsn=_FAKE_DSN, tz=ZoneInfo("UTC"), adapter_present=False
     )
     assert stage._speak_full_replies is False
+
+
+# --- TK-328 (ruling v2.187 r1): expressive_tags is key-gated at the constructed Fish adapter -----
+
+
+def test_build_speech_shape_stage_default_preserves_expressive_tags_off() -> None:
+    stage = bootstrap.build_speech_shape_stage(
+        config=_config(), dsn=_FAKE_DSN, tz=ZoneInfo("UTC"), adapter_present=False
+    )
+    assert stage._expressive_tags is False
+
+
+class _FakeVoiceKeyStoreForMatrix:
+    """Minimal in-memory VoiceKeyStore fake (Q-57(a)/DEF-7 -- never the real keyring), seeded at
+    construction so it can stand in for the seam's ``KeyringVoiceKeyStore()`` default (assemble_
+    runtime has no key_store injection point of its own)."""
+
+    def __init__(self, *, initial: dict[str, str] | None = None) -> None:
+        self._values = dict(initial or {})
+
+    def get(self, provider: str) -> str | None:
+        return self._values.get(provider)
+
+    def set(self, provider: str, key: str) -> None:
+        self._values[provider] = key
+
+    def delete(self, provider: str) -> None:
+        self._values.pop(provider, None)
+
+
+class _FakeCloudTTSForMatrix:
+    """Stands in for every real cloud TTS provider class -- construction never touches the
+    network; matches the ``(api_key, *, voice_id=, model=)`` ctor shape every one shares."""
+
+    def __init__(
+        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+    ) -> None:
+        self.api_key = api_key
+        self.voice_id = voice_id
+        self.model = model
+
+    def speak(self, text: str) -> None:
+        pass
+
+
+class _FakeLocalTTSForMatrix:
+    def speak(self, text: str) -> None:
+        pass
+
+
+def _build_speech_shape_for_tts_matrix_cell(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    provider: str,
+    fish_model: str,
+    key_present: bool,
+) -> object:
+    """Real construction through voice.select (fake key store + fake provider classes, DEF-7)
+    followed by the real assemble_runtime seam -- proves the FULL wire, not just the decision."""
+    monkeypatch.setattr(voice_select_module, "FishAudioTTSAdapter", _FakeCloudTTSForMatrix)
+    monkeypatch.setattr(voice_select_module, "ElevenLabsTTSAdapter", _FakeCloudTTSForMatrix)
+    monkeypatch.setattr(voice_select_module, "DeepgramAuraTTSAdapter", _FakeCloudTTSForMatrix)
+    monkeypatch.setattr(voice_select_module, "Pyttsx3Adapter", _FakeLocalTTSForMatrix)
+    initial = {provider: "cloud-key"} if key_present and provider != "local" else {}
+    monkeypatch.setattr(
+        voice_select_module,
+        "KeyringVoiceKeyStore",
+        lambda: _FakeVoiceKeyStoreForMatrix(initial=initial),
+    )
+
+    op = load_operating_params()
+    config = _config().model_copy(
+        update={
+            "wombat_voice_enabled": True,
+            "wombat_tts_provider": provider,
+            "wombat_tts_voice_id": "voice-123" if provider in ("fish", "elevenlabs") else None,
+            "wombat_fish_model": fish_model,
+            # Force key resolution through the fake store above, never a real operator .env/
+            # process-env override (resolve_provider_key's env_override wins when non-blank) --
+            # _config() doesn't chdir off the repo root, so Jim's real WOMBAT_FISH_API_KEY would
+            # otherwise leak into the "no key" cell and falsify it.
+            "wombat_fish_api_key": None,
+            "wombat_elevenlabs_api_key": None,
+            "wombat_deepgram_api_key": None,
+        }
+    )
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    return bundle.pathways.get(bundle.drain_pathway_id).get("speech_shape")
+
+
+@pytest.mark.parametrize(
+    ("provider", "fish_model", "key_present", "expected_expressive"),
+    [
+        pytest.param("fish", "s2.1-pro", True, True, id="fish-s2.1-pro-key"),
+        pytest.param("fish", "s2-pro", True, True, id="fish-s2-pro-key"),
+        pytest.param("fish", "s2.1-pro-free", True, True, id="fish-s2.1-pro-free-key"),
+        pytest.param("fish", "s2.1-pro", False, False, id="fish-s2.1-pro-no-key"),
+        pytest.param("fish", "s1", True, False, id="fish-s1-key"),
+        pytest.param("local", "s2.1-pro", True, False, id="local"),
+        pytest.param("elevenlabs", "s2.1-pro", True, False, id="elevenlabs"),
+        pytest.param("deepgram", "s2.1-pro", True, False, id="deepgram"),
+    ],
+)
+def test_assemble_runtime_expressive_tags_key_gated_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    fish_model: str,
+    key_present: bool,
+    expected_expressive: bool,
+) -> None:
+    """AC1: expressive_tags is True ONLY for a genuinely constructed Fish primary on an
+    EXPRESSIVE_FISH_MODELS-family model with a resolved key -- the key-absent cell degrades to
+    local (structural key-gate) and every other cell (s1, local, elevenlabs, deepgram) is False,
+    each with the byte-identical (pre-TK-327) instruction and an empty allowed-tags set."""
+    stage = _build_speech_shape_for_tts_matrix_cell(
+        monkeypatch, provider=provider, fish_model=fish_model, key_present=key_present
+    )
+    assert getattr(stage, "_expressive_tags") is expected_expressive  # noqa: B009
+    instruction = getattr(stage, "_system_instruction")  # noqa: B009
+    if expected_expressive:
+        assert "[calm]" in instruction
+    else:
+        assert "[calm]" not in instruction
+        assert getattr(stage, "_allowed_tags") == frozenset()  # noqa: B009
+
+
+def test_assemble_runtime_default_local_voice_off_no_expressive_instruction() -> None:
+    """AC3: the default config (voice off) builds no expressive instruction anywhere in the
+    speech_shape stage -- inertness, pre-arc bytes stand."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    stage = bundle.pathways.get(bundle.drain_pathway_id).get("speech_shape")
+    assert getattr(stage, "_expressive_tags") is False  # noqa: B009
+    assert "[calm]" not in getattr(stage, "_system_instruction")  # noqa: B009
 
 
 # --- TK-289 (DEC-64 gap A, half 2): the ASR context_hook -> LastSpokenRegister wiring -------------

@@ -35,6 +35,16 @@ still works), while the local-primary path's exact historical message is byte-pr
     ``test_tk217_cloud_tts_healthy_primary_contextualizes_local_fallback_failure``,
     ``test_tk217_local_tts_primary_failure_preserves_voice_output_disabled_message``,
     ``test_tk217_cloud_stt_healthy_primary_contextualizes_local_fallback_failure``.
+
+TK-328 (ruling v2.187 r1) — the additive ``build_tts_adapter_with_info`` companion and
+``FallbackTTSAdapter`` fallback-branch tag hygiene (AC2; the bootstrap-matrix AC1/AC3 live in
+``tests/unit/test_bootstrap.py``):
+    ``test_build_tts_adapter_with_info_fish_primary_true_when_actually_constructed``,
+    ``test_build_tts_adapter_with_info_degrade_paths_yield_false_none``,
+    ``test_build_tts_adapter_with_info_fish_import_error_yields_false_none``,
+    ``test_build_tts_adapter_is_thin_wrapper_over_with_info``,
+    ``test_fallback_tts_adapter_strips_tags_only_on_the_fallback_branch``,
+    ``test_fallback_tts_adapter_healthy_primary_receives_tagged_text_verbatim_no_fallback_call``.
 """
 
 from __future__ import annotations
@@ -637,3 +647,140 @@ def test_crf6_cloud_stt_healthy_primary_local_fallback_non_import_error_falls_ba
     assert isinstance(transcriber._primary, _RecordingCloudTranscriber)  # cloud primary is live
     assert transcriber._fallback is None
     assert "remains active" in caplog.text
+
+
+# ----------------------------------------------------------------------------------------- TK-328
+
+
+def test_build_tts_adapter_with_info_fish_primary_true_when_actually_constructed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling v2.187 r1: a genuinely constructed Fish primary yields
+    ``TTSBuildInfo(fish_primary=True, fish_model=<configured>)``."""
+    monkeypatch.setattr(select_module, "FishAudioTTSAdapter", _RecordingCloudTTS)
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
+    config = _config(
+        wombat_tts_provider="fish", wombat_tts_voice_id="voice-123", wombat_fish_model="s2.1-pro"
+    )
+
+    adapter, info = select_module.build_tts_adapter_with_info(config, key_store=store)
+
+    assert isinstance(adapter, FallbackTTSAdapter)
+    assert info == select_module.TTSBuildInfo(fish_primary=True, fish_model="s2.1-pro")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "store_initial"),
+    [
+        pytest.param(
+            {"wombat_tts_provider": "fish", "wombat_tts_voice_id": "voice-123"},
+            {},
+            id="fish-no-key",
+        ),
+        pytest.param(
+            {"wombat_tts_provider": "fish"}, {"fish": "cloud-key"}, id="fish-blank-voice-id"
+        ),
+        pytest.param({"wombat_tts_provider": "local"}, {}, id="local"),
+        pytest.param(
+            {"wombat_tts_provider": "deepgram"}, {"deepgram": "cloud-key"}, id="non-fish-cloud"
+        ),
+    ],
+)
+def test_build_tts_adapter_with_info_degrade_paths_yield_false_none(
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    store_initial: dict[str, str],
+) -> None:
+    """Every degrade path (no resolved key, blank required voice_id, local, a non-fish cloud
+    provider) yields ``TTSBuildInfo(fish_primary=False, fish_model=None)`` -- never a placebo."""
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    monkeypatch.setattr(select_module, "DeepgramAuraTTSAdapter", _RecordingCloudTTS)
+    store = _FakeVoiceKeyStore(initial=store_initial)
+    config = _config(**overrides)
+
+    _adapter, info = select_module.build_tts_adapter_with_info(config, key_store=store)
+
+    assert info == select_module.TTSBuildInfo(fish_primary=False, fish_model=None)
+
+
+def test_build_tts_adapter_with_info_fish_import_error_yields_false_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live, unmocked ``ImportError`` on the fish construction path (voice-cloud extra absent)
+    degrades to local -- still ``fish_primary=False, fish_model=None``."""
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    _simulate_absent(monkeypatch, "httpx")
+    store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
+    config = _config(wombat_tts_provider="fish", wombat_tts_voice_id="voice-123")
+
+    adapter, info = select_module.build_tts_adapter_with_info(config, key_store=store)
+
+    assert isinstance(adapter, _FakeLocalTTS)
+    assert info == select_module.TTSBuildInfo(fish_primary=False, fish_model=None)
+
+
+def test_build_tts_adapter_is_thin_wrapper_over_with_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``build_tts_adapter``'s two other call sites (``bootstrap.build_speak_sink``/
+    ``bootstrap.make_speak_callable``) must stay byte-identical -- proven structurally: it returns
+    exactly the SAME adapter shape ``build_tts_adapter_with_info`` builds."""
+    monkeypatch.setattr(select_module, "FishAudioTTSAdapter", _RecordingCloudTTS)
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
+    config = _config(wombat_tts_provider="fish", wombat_tts_voice_id="voice-123")
+
+    thin = select_module.build_tts_adapter(config, key_store=store)
+    with_info_adapter, _info = select_module.build_tts_adapter_with_info(config, key_store=store)
+
+    assert isinstance(thin, FallbackTTSAdapter)
+    assert isinstance(with_info_adapter, FallbackTTSAdapter)
+    assert isinstance(thin._primary, _RecordingCloudTTS)
+    assert isinstance(with_info_adapter._primary, _RecordingCloudTTS)
+
+
+# --------------------------------------------------------------------- TK-328 fallback-tag hygiene
+
+
+class _RecordingTTS:
+    """Minimal ``TTSAdapter`` stand-in for direct ``FallbackTTSAdapter`` unit tests (AC2) --
+    records every ``speak`` call, never raises."""
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+
+class _RaisingTTS:
+    """Minimal ``TTSAdapter`` stand-in whose ``speak`` always raises -- degrades to the fallback
+    slot (AC2)."""
+
+    def speak(self, text: str) -> None:
+        raise RuntimeError("primary exploded (simulated, TK-328)")
+
+
+def test_fallback_tts_adapter_strips_tags_only_on_the_fallback_branch() -> None:
+    """AC2: a raising primary degrades to the fallback with every ALLOWED_TAGS marker stripped
+    (whitespace collapsed) -- the local engine never speaks Fish's bracket markers aloud."""
+    spy = _RecordingTTS()
+    adapter = FallbackTTSAdapter(_RaisingTTS(), fallback=spy)
+
+    adapter.speak("[calm] Lunch moved. [break] Nothing else.")
+
+    assert spy.spoken == ["Lunch moved. Nothing else."]
+
+
+def test_fallback_tts_adapter_healthy_primary_receives_tagged_text_verbatim_no_fallback_call() -> (
+    None
+):
+    """AC2: a healthy primary receives the tagged text VERBATIM (byte-identical) and the fallback
+    is never called."""
+    spy = _RecordingTTS()
+    primary = _RecordingTTS()
+    adapter = FallbackTTSAdapter(primary, fallback=spy)
+
+    adapter.speak("[calm] Lunch moved. [break] Nothing else.")
+
+    assert primary.spoken == ["[calm] Lunch moved. [break] Nothing else."]
+    assert spy.spoken == []

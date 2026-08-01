@@ -23,11 +23,18 @@ stt``/``voice.tts``) anywhere reachable from boot (DEC-28: zero egress by defaul
 
 ``key_store`` defaults to ``KeyringVoiceKeyStore()`` — unit tests always inject an in-memory fake
 (Q-57(a); NEVER the real keyring, DEF-7).
+
+``build_tts_adapter_with_info`` (TK-328, ruling v2.187 r1) is an ADDITIVE companion to
+``build_tts_adapter`` above: it returns the SAME adapter plus a ``TTSBuildInfo`` recording whether
+a Fish TTS primary was truly constructed (never a degrade path) — ``assemble_runtime`` is its sole
+consumer, deciding whether to offer Fish's bracket-marker expressive instruction. ``build_tts_
+adapter`` itself is unchanged in behavior, now a thin wrapper over it.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -36,6 +43,7 @@ from pydantic import SecretStr
 from wombat.config import WombatConfig
 from wombat.sinks.tts_adapter import Pyttsx3Adapter, TTSAdapter
 from wombat.sources.asr import FasterWhisperTranscriber, Transcriber
+from wombat.voice.expressive import strip_allowed_tags
 from wombat.voice.key_store import KeyringVoiceKeyStore, VoiceKeyStore, resolve_provider_key
 from wombat.voice.stt import DeepgramTranscriber, ElevenLabsScribeTranscriber, FishAudioTranscriber
 from wombat.voice.tts import DeepgramAuraTTSAdapter, ElevenLabsTTSAdapter, FishAudioTTSAdapter
@@ -79,7 +87,12 @@ class FallbackTTSAdapter:
     tries ``fallback`` exactly once: ``fallback`` is ``None`` -> the primary's exception
     propagates; ``fallback`` itself raises -> ITS exception propagates. Either way the caller's
     own degrade machinery (``SpeakSink``'s ``Degraded(to=None)``) sees a raised exception, never a
-    lying success."""
+    lying success.
+
+    TK-328 fallback hygiene: the fallback branch strips every ``voice.expressive.ALLOWED_TAGS``
+    marker (``voice.expressive.strip_allowed_tags``) before handing text to ``fallback.speak`` —
+    the local engine never speaks Fish's bracket markers aloud. The primary branch is untouched;
+    ``primary.speak`` always receives ``text`` byte-identical/verbatim."""
 
     def __init__(self, primary: TTSAdapter, *, fallback: TTSAdapter | None) -> None:
         self._primary = primary
@@ -94,7 +107,7 @@ class FallbackTTSAdapter:
             )
             if self._fallback is None:
                 raise
-            self._fallback.speak(text)
+            self._fallback.speak(strip_allowed_tags(text))
 
 
 def _cloud_api_key_field(config: WombatConfig, provider: str) -> SecretStr | None:
@@ -240,16 +253,34 @@ def build_transcriber(
     )
 
 
-def build_tts_adapter(
+@dataclass(frozen=True)
+class TTSBuildInfo:
+    """The constructed-adapter seam's decision record (TK-328, ruling v2.187 r1):
+    ``fish_primary`` is ``True`` ONLY when the ``FishAudioTTSAdapter`` PRIMARY was actually
+    constructed by ``build_tts_adapter_with_info`` — every degrade path (no resolved key, blank
+    ``voice_id``, ``ImportError``, a non-fish provider, or ``local``) yields ``False``.
+    ``fish_model`` is the ``config.wombat_fish_model`` the primary was built with when
+    ``fish_primary`` is ``True``, else ``None``. This is a structural key-gate, not a config
+    toggle — ``assemble_runtime`` is the sole consumer, deciding whether Fish's bracket-marker
+    expressive instruction may ever be offered."""
+
+    fish_primary: bool
+    fish_model: str | None
+
+
+def build_tts_adapter_with_info(
     config: WombatConfig, key_store: VoiceKeyStore | None = None
-) -> TTSAdapter | None:
+) -> tuple[TTSAdapter | None, TTSBuildInfo]:
     """Build the ``TTSAdapter`` ``config.wombat_tts_provider`` selects, or ``None`` (TK-193,
-    Q-105(d)). ``key_store`` defaults to ``KeyringVoiceKeyStore()`` — tests always inject an
-    in-memory fake (never the real keyring)."""
+    Q-105(d)), alongside the ``TTSBuildInfo`` recording whether that build's primary is a truly
+    constructed Fish instance (TK-328, ruling v2.187 r1). ``build_tts_adapter`` below is a thin
+    adapter-only wrapper over this. ``key_store`` defaults to ``KeyringVoiceKeyStore()`` — tests
+    always inject an in-memory fake (never the real keyring)."""
     store = key_store if key_store is not None else KeyringVoiceKeyStore()
     provider = config.wombat_tts_provider
+    no_info = TTSBuildInfo(fish_primary=False, fish_model=None)
     if provider == "local":
-        return _build_local_tts(config)
+        return _build_local_tts(config), no_info
 
     key = resolve_provider_key(provider, _cloud_api_key_field(config, provider), store)
     if key is None:
@@ -259,7 +290,7 @@ def build_tts_adapter(
             provider,
             _api_key_env_var(provider),
         )
-        return _build_local_tts(config)
+        return _build_local_tts(config), no_info
 
     voice_id = config.wombat_tts_voice_id
     if provider in _TTS_PROVIDERS_REQUIRING_VOICE_ID and not (voice_id or "").strip():
@@ -269,7 +300,7 @@ def build_tts_adapter(
             provider,
             provider,
         )
-        return _build_local_tts(config)
+        return _build_local_tts(config), no_info
 
     try:
         primary: TTSAdapter = _construct_cloud_tts(provider, key, voice_id, config)
@@ -280,14 +311,31 @@ def build_tts_adapter(
             provider,
             exc_info=True,
         )
-        return _build_local_tts(config)
+        return _build_local_tts(config), no_info
 
-    return FallbackTTSAdapter(primary, fallback=_build_local_tts(config, role="fallback"))
+    adapter = FallbackTTSAdapter(primary, fallback=_build_local_tts(config, role="fallback"))
+    if provider == "fish":
+        return adapter, TTSBuildInfo(fish_primary=True, fish_model=config.wombat_fish_model)
+    return adapter, no_info
+
+
+def build_tts_adapter(
+    config: WombatConfig, key_store: VoiceKeyStore | None = None
+) -> TTSAdapter | None:
+    """Build the ``TTSAdapter`` ``config.wombat_tts_provider`` selects, or ``None`` (TK-193,
+    Q-105(d)) — a thin adapter-only wrapper over ``build_tts_adapter_with_info`` (TK-328) so its
+    two existing call sites (``bootstrap.build_speak_sink``/``bootstrap.make_speak_callable``)
+    stay byte-identical. ``key_store`` defaults to ``KeyringVoiceKeyStore()`` — tests always
+    inject an in-memory fake (never the real keyring)."""
+    adapter, _info = build_tts_adapter_with_info(config, key_store)
+    return adapter
 
 
 __all__ = [
     "FallbackTTSAdapter",
     "FallbackTranscriber",
+    "TTSBuildInfo",
     "build_transcriber",
     "build_tts_adapter",
+    "build_tts_adapter_with_info",
 ]
