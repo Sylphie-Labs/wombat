@@ -17,9 +17,11 @@ dot-sourcing only defines functions and never starts a process.
   AC2 (crash-loop backoff): Get-WombatNextBackoffDelaySeconds doubles 5->10->20...
       capped at 300, and resets to 5 once uptime clears the healthy threshold
       (direct pure-function calls, no process spawned).
-  AC3 (restart-wombat.ps1 ordering): the watchdog-host kill loop appears strictly
-      before the runtime-python kill loop in the script source, and the final
-      bounded-wait proves zero matches of both kinds (static order + text checks).
+  AC3 (stop-wombat.ps1 ordering): TK-337 (DEC-77 r6) extracted the watchdog-host-then-
+      runtime kill loop and bounded-wait out of restart-wombat.ps1 into standalone
+      scripts/stop-wombat.ps1 — the ONE stop implementation, also used by
+      wipe-wombat.ps1. These checks now read stop-wombat.ps1's source for the ordering
+      and bounded-wait shape, and assert restart-wombat.ps1 invokes it.
   AC4 (closing the console kills both): unchanged single-console-hosts-both-processes
       architecture (structural; not independently re-provable without a live process —
       reviewer/operator-driven per the briefing).
@@ -37,6 +39,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONSOLE_SCRIPT = _REPO_ROOT / "scripts" / "wombat-console.ps1"
 _RESTART_SCRIPT = _REPO_ROOT / "scripts" / "restart-wombat.ps1"
+_STOP_SCRIPT = _REPO_ROOT / "scripts" / "stop-wombat.ps1"
 
 _POWERSHELL = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
 
@@ -138,29 +141,39 @@ def test_backoff_does_not_reset_below_healthy_threshold() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC3 — restart-wombat.ps1 kill ordering
+# AC3 — stop-wombat.ps1 kill ordering (TK-337/DEC-77 r6: extracted out of
+# restart-wombat.ps1 into the one shared stop implementation)
 # ---------------------------------------------------------------------------
 
 
 def test_restart_script_kills_watchdog_host_before_runtime_python() -> None:
-    content = _RESTART_SCRIPT.read_text(encoding="utf-8")
+    content = _STOP_SCRIPT.read_text(encoding="utf-8")
     watchdog_kill_idx = content.index("Get-WombatWatchdogHostProcesses)) {")
     runtime_kill_idx = content.index("Get-WombatProcesses)) {")
     assert watchdog_kill_idx < runtime_kill_idx, (
-        "restart-wombat.ps1 must kill watchdog-host matches before runtime python "
+        "stop-wombat.ps1 must kill watchdog-host matches before runtime python "
         "matches, or a surviving watchdog can respawn a second runtime"
     )
 
 
 def test_restart_script_proves_zero_matches_of_both_kinds() -> None:
-    content = _RESTART_SCRIPT.read_text(encoding="utf-8")
+    content = _STOP_SCRIPT.read_text(encoding="utf-8")
     assert "watchdogCount" in content
     assert "procCount" in content
     assert "watchdogCount -ne 0 -or $procCount -ne 0" in content
 
 
 def test_restart_script_watchdog_marker_matches_console_script_marker() -> None:
-    restart_content = _RESTART_SCRIPT.read_text(encoding="utf-8")
+    stop_content = _STOP_SCRIPT.read_text(encoding="utf-8")
     console_content = _CONSOLE_SCRIPT.read_text(encoding="utf-8")
     assert "'wombat-watchdog-host'" in console_content
-    assert "wombat-watchdog-host" in restart_content
+    assert "wombat-watchdog-host" in stop_content
+
+
+def test_restart_script_invokes_stop_wombat_script() -> None:
+    """TK-337 (DEC-77 r6): restart-wombat.ps1 no longer kills anything inline — it
+    invokes the extracted scripts/stop-wombat.ps1 and propagates its exit code."""
+    restart_content = _RESTART_SCRIPT.read_text(encoding="utf-8")
+    assert "stop-wombat.ps1" in restart_content
+    assert "& $stopScript" in restart_content
+    assert "Stop-Process" not in restart_content
