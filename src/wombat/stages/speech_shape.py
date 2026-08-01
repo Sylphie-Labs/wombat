@@ -165,10 +165,14 @@ _FORBIDDEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     # consumer per ruling v2.190 r1): the gap between "]" and "(" is now whitespace-tolerant so
     # the '[tag] (paren)' adjacency hazard (e.g. '[break] (see below)') trips this SAME pattern
     # too, the pinned safe direction (reject, never mangle); a bare allowed tag followed by
-    # ordinary prose parentheses elsewhere is unaffected. DEC-72c's original adjacency mechanism
-    # (zero-space only) is superseded in part by this widening — DEC-72c's INTENT (safe-direction
-    # rejection of the whole adjacency class) is what this pattern now actually delivers.
-    re.compile(r"\[[^\]]+\]\s*\([^)]+\)"),
+    # ordinary prose parentheses elsewhere is unaffected. DEC-74's rule is a bracketed group plus
+    # optional whitespace plus an OPEN paren — it does NOT require a closing paren or any content
+    # inside (batch-review repair: the prior ``\([^)]+\)`` tail let an unterminated/empty paren
+    # ('[break] (see below', '[break] ()', '[break](') slip past the reject; ordinary model output
+    # is not guaranteed to balance parens). DEC-72c's original adjacency mechanism (zero-space
+    # only) is superseded in part by this widening — DEC-72c's INTENT (safe-direction rejection of
+    # the whole adjacency class) is what this pattern now actually delivers.
+    re.compile(r"\[[^\]]+\]\s*\("),
     re.compile(r"https?://\S+", re.IGNORECASE),  # raw URL
     re.compile(r"^\s*[-*+]\s", re.MULTILINE),  # bullet list marker
     re.compile(r"^\s*\d+\.\s", re.MULTILINE),  # numbered list marker

@@ -459,6 +459,6 @@ async def test_ac1d_quiet_hours_wrapper_and_construction_sites_carry_configured_
     assert speech_shape_stage._max_chars == 777
 
     speak_stage = graph.get("speak")
-    register = speak_stage._on_spoken.__self__
+    register = speak_stage._on_spoken.register
     assert isinstance(register, LastSpokenRegister)
     assert register._ttl_seconds == pytest.approx(333.0)

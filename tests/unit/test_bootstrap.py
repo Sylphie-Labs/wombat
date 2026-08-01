@@ -68,6 +68,7 @@ from wombat.stages.gate_stage import GateStage
 from wombat.substrate import cold_boot_bundle
 from wombat.user_facts import UserFactsStore
 from wombat.voice.context_prefetch import build_current_activity_context
+from wombat.voice.expressive import strip_allowed_tags
 from wombat.voice.reply_context import LastSpokenRegister
 
 # The ten seams the Engine must carry after composition (4 required substrate + 6 optional).
@@ -873,16 +874,56 @@ def test_assemble_runtime_wires_one_shared_last_spoken_register_into_both_speak_
     brief_on_spoken = getattr(brief_deliver_stage, "_on_spoken")  # noqa: B009
     assert speak_on_spoken is not None
     assert brief_on_spoken is not None
-    # Both are the SAME register's note_spoken bound method -- one shared instance, not two.
-    assert isinstance(speak_on_spoken.__self__, LastSpokenRegister)
-    assert speak_on_spoken.__self__ is brief_on_spoken.__self__
+    # Both wrap the SAME register (TK-328 batch-review repair: a sanitizing wrapper now sits
+    # between each speak site and the register, so ``.register`` replaces the old bound-method
+    # ``.__self__`` introspection) -- one shared instance, not two.
+    assert isinstance(speak_on_spoken.register, LastSpokenRegister)
+    assert speak_on_spoken.register is brief_on_spoken.register
 
-    register = speak_on_spoken.__self__
+    register = speak_on_spoken.register
     assert register.current() is None
     speak_on_spoken("i-1", "spoken via drain")
     assert register.current() == "spoken via drain"
     brief_on_spoken("brief:run-1", "spoken via brief")
     assert register.current() == "spoken via brief"
+
+
+def test_assemble_runtime_on_spoken_strips_expressive_tags_before_registering(
+    tmp_path: Path,
+) -> None:
+    """TK-328 batch-review repair: SpeakSink's ``on_spoken`` carries the raw, possibly
+    bracket-tagged ``speech_text`` -- but ``LastSpokenRegister.current()`` becomes
+    ``asr_context_hook``'s ``replying_to`` grounding field, which the compose/chat mouth prompt
+    can see (no bracket validator of its own there). Proven by the finding's exact repro: after
+    'speaking' a tagged reply, the register holds the SAME text with every allowed marker
+    stripped -- never the raw tagged text -- for BOTH speak sites."""
+    op = load_operating_params()
+    config = _config().model_copy(update={"wombat_brief_path": str(tmp_path / "brief.txt")})
+    bundle = bootstrap.assemble_runtime(
+        config=config,
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+
+    assert bundle.brief_pathway_id is not None
+    speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
+    brief_deliver_stage = bundle.pathways.get(bundle.brief_pathway_id).get("brief_deliver")
+    speak_on_spoken = getattr(speak_stage, "_on_spoken")  # noqa: B009
+    brief_on_spoken = getattr(brief_deliver_stage, "_on_spoken")  # noqa: B009
+
+    tagged = "[calm] Your meeting moved to ten. [break] Nothing else needs you."
+    expected = strip_allowed_tags(tagged)
+    assert "[" not in expected  # sanity: the fixture genuinely carries markers to strip
+
+    speak_on_spoken("i-1", tagged)
+    assert speak_on_spoken.register.current() == expected
+    assert "[calm]" not in speak_on_spoken.register.current()
+    assert "[break]" not in speak_on_spoken.register.current()
+
+    brief_on_spoken("brief:run-1", tagged)
+    assert brief_on_spoken.register.current() == expected
 
 
 # --- TK-303 (DEC-67e/f): the configured reply window / spoken-reply cap thread through -----------
@@ -911,7 +952,7 @@ def test_assemble_runtime_carries_configured_reply_window_and_speech_cap(
     )
 
     speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
-    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    register = getattr(speak_stage, "_on_spoken").register  # noqa: B009
     assert register._ttl_seconds == 300.0
 
     speech_shape_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speech_shape")
@@ -980,14 +1021,23 @@ class _FakeVoiceKeyStoreForMatrix:
 
 class _FakeCloudTTSForMatrix:
     """Stands in for every real cloud TTS provider class -- construction never touches the
-    network; matches the ``(api_key, *, voice_id=, model=)`` ctor shape every one shares."""
+    network; matches the ``(api_key, *, voice_id=, model=)`` ctor shape every one shares.
+    ``writer_factory`` (TK-332) is accepted-and-ignored so this fake stays a valid FishAudioTTS
+    Adapter stand-in regardless of whether ``stream_playback.streaming_available()`` resolves
+    True or False in the machine running this suite."""
 
     def __init__(
-        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+        self,
+        api_key: str,
+        *,
+        voice_id: str | None = None,
+        model: str | None = None,
+        writer_factory: object = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
         self.model = model
+        self.writer_factory = writer_factory
 
     def speak(self, text: str) -> None:
         pass
@@ -1126,7 +1176,7 @@ async def test_assemble_runtime_wires_asr_context_hook_reading_the_shared_regist
     asr_source = bundle.source_registry._sources["asr"]
 
     speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
-    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    register = getattr(speak_stage, "_on_spoken").register  # noqa: B009
     assert isinstance(register, LastSpokenRegister)
 
     # Before anything has been spoken, the register is empty -- no replying_to key.
@@ -1178,7 +1228,7 @@ async def test_assemble_runtime_asr_context_hook_merges_voice_context_with_reply
     )
     asr_source = bundle.source_registry._sources["asr"]
     speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
-    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    register = getattr(speak_stage, "_on_spoken").register  # noqa: B009
     register.note_spoken("i-spoken", "Anything else?")
 
     events = await asr_source.poll()
@@ -1382,7 +1432,7 @@ async def test_ac3_typed_chat_and_voice_turn_each_carry_known_user_context_throu
 
     # A fresh last_spoken_register entry -- the voice-only distinguishing clause.
     speak_stage = bundle.pathways.get(bundle.drain_pathway_id).get("speak")
-    register = getattr(speak_stage, "_on_spoken").__self__  # noqa: B009
+    register = getattr(speak_stage, "_on_spoken").register  # noqa: B009
     register.note_spoken("earlier-item", "Should I send it now?")
 
     assert bundle.chat_source is not None

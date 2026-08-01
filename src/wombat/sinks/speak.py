@@ -54,6 +54,17 @@ in shape, but UNLIKE that precedent this call site DOES guard against a raising 
 factory there is documented never to raise; this one is not) — a raising hook is caught, logged as
 exactly ONE WARNING, and the byte-identical ``Done(spoken=True)`` is still returned: the register
 is a pure side effect, never load-bearing for the stage's own result.
+
+TK-332 (DEC-73e, PLAYED-PARTIAL COUNTS AS SPOKEN): ``voice.tts.PartialSpeechError`` is caught in
+its OWN ``except`` clause, ahead of the broad ``except Exception`` below (a subclass of
+``RuntimeError``, so ordering matters). ``played_any=True`` means Fish's streaming path already
+wrote at least one audio chunk before failing — the user genuinely heard the Steward start, so
+``on_spoken`` fires exactly once (the SAME guarded call shape as the healthy path above; the
+register holds the full intended ``speech_text``, a recorded honest approximation of the heard
+prefix) plus ONE loud WARNING naming partial playback, and the terminal ``Degraded`` carries
+``spoken=True, degraded=True`` — the heard world, not a lie of silence. ``played_any=False`` takes
+the EXACT byte-identical shape as any other adapter failure below (``spoken=False, degraded=True``,
+no ``on_spoken``).
 """
 
 from __future__ import annotations
@@ -75,6 +86,7 @@ from wombat.stages.artifacts import (
     speech_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
+from wombat.voice.tts import PartialSpeechError
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +168,55 @@ class SpeakSink:
         except asyncio.CancelledError:
             # Never swallow cancellation — only the adapter's own failures degrade.
             raise
+        except PartialSpeechError as exc:
+            # TK-332 (DEC-73e): a Fish streaming failure caught BEFORE the broad except below —
+            # PartialSpeechError is a RuntimeError subclass, so ordering matters. played_any=False
+            # is byte-identical to any other adapter failure (no on_spoken); played_any=True means
+            # the user genuinely heard the Steward start, so on_spoken fires (PLAYED-PARTIAL
+            # COUNTS AS SPOKEN) and the terminal artifact reflects the heard world.
+            if not exc.played_any:
+                logger.warning(
+                    "speak: TTS adapter failed; degrading (text delivery unaffected)",
+                    exc_info=True,
+                )
+                return Degraded(
+                    reason=f"speak: TTS adapter failed: {exc}",
+                    output=Artifact(
+                        kind=SPOKEN_OUTPUT,
+                        produced_by=self.name,
+                        provenance=Provenance(
+                            source="system", confidence=1.0, recorded_at=ctx.clock()
+                        ),
+                        data=spoken_output_to_artifact_data(
+                            item_id=item_id, item_kind=item_kind, spoken=False, degraded=True
+                        ),
+                    ),
+                    to=None,
+                )
+            logger.warning(
+                "speak: TTS adapter played partial audio before failing (heard by the user); "
+                "treating this turn as spoken",
+                exc_info=True,
+            )
+            if self._on_spoken is not None:
+                # Mirrors the healthy-path guard below: a raising hook is caught, logged, and
+                # never threatens this already-decided terminal result.
+                try:
+                    self._on_spoken(item_id, speech_text)
+                except Exception:
+                    logger.warning("speak: on_spoken hook raised; ignoring", exc_info=True)
+            return Degraded(
+                reason=f"speak: TTS adapter failed after partial playback (heard by user): {exc}",
+                output=Artifact(
+                    kind=SPOKEN_OUTPUT,
+                    produced_by=self.name,
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                    data=spoken_output_to_artifact_data(
+                        item_id=item_id, item_kind=item_kind, spoken=True, degraded=True
+                    ),
+                ),
+                to=None,
+            )
         except Exception as exc:
             # ANY adapter failure (lazy import, engine init, or speak() itself raising) degrades
             # rather than raises: the already-composed/journaled output stands (CON-3).

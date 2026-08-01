@@ -72,6 +72,8 @@ from wombat.voice.select import (
     build_transcriber,
     build_tts_adapter,
 )
+from wombat.voice.stream_playback import StreamingAudioWriter
+from wombat.voice.tts import FishAudioTTSAdapter
 
 
 def _config(**overrides: object) -> WombatConfig:
@@ -188,14 +190,23 @@ class _RecordingCloudTTS:
     """A cloud TTS stand-in that succeeds — matches every real cloud TTS class's constructor
     shape (``api_key`` positional, ``voice_id``/``model`` optional keyword; TK-326 widens the
     real ``FishAudioTTSAdapter`` to a REQUIRED ``model``, but this generic fake keeps it optional
-    so it still stands in for deepgram/elevenlabs, whose ctors never take one)."""
+    so it still stands in for deepgram/elevenlabs, whose ctors never take one). ``writer_factory``
+    (TK-332) is accepted-and-ignored, so this fake stands in for ``FishAudioTTSAdapter`` correctly
+    whether ``stream_playback.streaming_available()`` resolves True or False on the machine
+    running this suite."""
 
     def __init__(
-        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+        self,
+        api_key: str,
+        *,
+        voice_id: str | None = None,
+        model: str | None = None,
+        writer_factory: object = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
         self.model = model
+        self.writer_factory = writer_factory
 
     def speak(self, text: str) -> None:
         pass
@@ -203,14 +214,21 @@ class _RecordingCloudTTS:
 
 class _RaisingCloudTTS:
     """A cloud TTS stand-in that constructs fine but raises on every ``speak`` call — exercises
-    the mid-call primary-failure fallback path (AC2)."""
+    the mid-call primary-failure fallback path (AC2). ``writer_factory`` (TK-332) is
+    accepted-and-ignored, mirroring ``_RecordingCloudTTS`` above."""
 
     def __init__(
-        self, api_key: str, *, voice_id: str | None = None, model: str | None = None
+        self,
+        api_key: str,
+        *,
+        voice_id: str | None = None,
+        model: str | None = None,
+        writer_factory: object = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
         self.model = model
+        self.writer_factory = writer_factory
 
     def speak(self, text: str) -> None:
         raise RuntimeError("cloud TTS exploded mid-call")
@@ -805,3 +823,55 @@ def test_fallback_tts_adapter_healthy_primary_receives_tagged_text_verbatim_no_f
 
     assert primary.spoken == ["[calm] Lunch moved. [break] Nothing else."]
     assert spy.spoken == []
+
+
+# ----------------------------------------------------------------------------------------- TK-332
+
+
+def test_cloud_tts_fish_streaming_available_wires_streaming_audio_writer_factory(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-332 (DEC-73a/d/f): ``stream_playback.streaming_available()`` returning True wires
+    ``StreamingAudioWriter`` itself (a zero-arg callable) as the REAL ``FishAudioTTSAdapter``'s
+    ``writer_factory`` -- proven without ever touching real audio hardware (the writer's own
+    ``sounddevice`` import stays lazy until the factory is actually invoked). No warning is
+    logged on this path."""
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    monkeypatch.setattr(select_module, "streaming_available", lambda: True)
+    store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
+    config = _config(
+        wombat_tts_provider="fish", wombat_tts_voice_id="voice-123", wombat_fish_model="s2.1-pro"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        adapter = build_tts_adapter(config, key_store=store)
+
+    assert isinstance(adapter, FallbackTTSAdapter)
+    primary = adapter._primary
+    assert isinstance(primary, FishAudioTTSAdapter)
+    assert primary._writer_factory is StreamingAudioWriter
+    assert "streaming" not in caplog.text.lower()
+
+
+def test_cloud_tts_fish_streaming_dep_absent_builds_buffered_adapter_with_loud_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-332 AC4: a genuinely simulated-absent ``sounddevice`` (``stream_playback.streaming_
+    available()``'s own lazy-import probe, TK-202/Q-103 shim reused) means the REAL
+    ``FishAudioTTSAdapter`` is built WITHOUT a ``writer_factory`` -- the buffered wav+winsound
+    path stays byte-identical to today -- alongside ONE loud WARNING naming the missing extra."""
+    monkeypatch.setattr(select_module, "Pyttsx3Adapter", _FakeLocalTTS)
+    _simulate_absent(monkeypatch, "sounddevice")
+    store = _FakeVoiceKeyStore(initial={"fish": "cloud-key"})
+    config = _config(
+        wombat_tts_provider="fish", wombat_tts_voice_id="voice-123", wombat_fish_model="s2.1-pro"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        adapter = build_tts_adapter(config, key_store=store)
+
+    assert isinstance(adapter, FallbackTTSAdapter)
+    primary = adapter._primary
+    assert isinstance(primary, FishAudioTTSAdapter)
+    assert primary._writer_factory is None
+    assert "voice-cloud" in caplog.text.lower()

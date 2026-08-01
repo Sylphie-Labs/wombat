@@ -15,10 +15,17 @@ module only proves ``SpeakSink``'s own half of the contract: driven directly wit
 ``ctx.last_output('compose')`` returning ``None`` (the shape a hold structurally produces,
 since a held item never reaches ``compose``), the stub is never touched and the stage fails
 loud instead of silently no-op'ing.
+
+TK-332 (DEC-73e): ``PartialSpeechError`` is caught in its own ``except`` clause, ahead of the
+broad ``except Exception`` above — ``played_any=True`` fires ``on_spoken`` once plus one loud
+WARNING and a ``spoken=True, degraded=True`` terminal ``Degraded`` (the heard world);
+``played_any=False`` matches today's plain adapter-failure degrade byte-identically (no
+``on_spoken``).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 import pytest
@@ -35,6 +42,7 @@ from wombat.stages.artifacts import (
     speech_output_to_artifact_data,
     spoken_output_from_artifact_data,
 )
+from wombat.voice.tts import PartialSpeechError
 
 _FIXED_NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=UTC)
 
@@ -66,6 +74,19 @@ class _RaisingAdapter:
     def speak(self, text: str) -> None:
         self.call_count += 1
         raise self._exc
+
+
+class _PartialSpeechRaisingAdapter:
+    """A ``TTSAdapter`` double whose ``speak()`` always raises ``PartialSpeechError`` with a
+    caller-chosen ``played_any`` (TK-332)."""
+
+    def __init__(self, *, played_any: bool) -> None:
+        self._played_any = played_any
+        self.call_count = 0
+
+    def speak(self, text: str) -> None:
+        self.call_count += 1
+        raise PartialSpeechError(played_any=self._played_any)
 
 
 def _composed_output_artifact(*, held_chat: bool = False) -> Artifact:
@@ -282,3 +303,83 @@ async def test_voice_disabled_never_reads_speech_shape_output_stays_byte_identic
     _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
     assert spoken is False
     assert degraded is False
+
+
+# --- TK-332 (DEC-73e): PartialSpeechError played-partial-counts-as-spoken -----------------------
+
+
+async def test_partial_speech_error_played_any_true_fires_on_spoken_once_with_loud_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC3: ``played_any=True`` fires ``on_spoken`` exactly once (the register holds the full
+    intended speech text) plus ONE loud WARNING naming partial playback, and the terminal
+    ``Degraded`` reflects the heard world (``spoken=True, degraded=True, to=None``)."""
+    stub = _PartialSpeechRaisingAdapter(played_any=True)
+    spoken_calls: list[tuple[str, str]] = []
+    stage = SpeakSink(
+        voice_enabled=True,
+        adapter=stub,
+        on_spoken=lambda item_id, text: spoken_calls.append((item_id, text)),
+    )
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    with caplog.at_level(logging.WARNING):
+        result = await stage.run(ctx)
+
+    assert stub.call_count == 1
+    assert spoken_calls == [(_ITEM_ID, _SPEECH_TEXT)]
+    assert any("partial" in record.message.lower() for record in caplog.records)
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    assert "partial" in result.reason.lower()
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is True
+    assert degraded is True
+
+
+async def test_partial_speech_error_played_any_false_matches_todays_plain_degrade_byte_identically() -> (  # noqa: E501
+    None
+):
+    """AC3: ``played_any=False`` fires NO ``on_spoken`` and matches today's plain adapter-failure
+    degrade shape exactly (``spoken=False, degraded=True, to=None``)."""
+    stub = _PartialSpeechRaisingAdapter(played_any=False)
+    spoken_calls: list[tuple[str, str]] = []
+    stage = SpeakSink(
+        voice_enabled=True,
+        adapter=stub,
+        on_spoken=lambda item_id, text: spoken_calls.append((item_id, text)),
+    )
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert stub.call_count == 1
+    assert spoken_calls == []  # NO on_spoken
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True
+
+
+async def test_plain_adapter_failure_still_never_fires_on_spoken_with_hook_wired() -> None:
+    """Regression companion: a plain (non-``PartialSpeechError``) adapter failure never fires
+    ``on_spoken`` even when a hook IS wired — proves the broad ``except Exception`` branch below
+    ``PartialSpeechError`` in ``run()`` is unaffected (existing speak-sink suites green
+    unmodified)."""
+    stub = _RaisingAdapter(RuntimeError("engine wedged"))
+    spoken_calls: list[tuple[str, str]] = []
+    stage = SpeakSink(
+        voice_enabled=True,
+        adapter=stub,
+        on_spoken=lambda item_id, text: spoken_calls.append((item_id, text)),
+    )
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert spoken_calls == []
+    assert isinstance(result, Degraded)
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is False
+    assert degraded is True

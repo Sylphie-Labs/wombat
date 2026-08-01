@@ -726,6 +726,16 @@ def test_ac2_expressive_tags_true_rejects_the_tag_before_paren_adjacency_hazard(
     assert _shape_speech_text("[break] see below", allowed_tags=ALLOWED_TAGS) == "[break] see below"
 
 
+def test_ac2_expressive_tags_true_rejects_unbalanced_adjacency_parens() -> None:
+    # batch-review repair: DEC-74's rule is tag + optional whitespace + an OPEN paren -- it never
+    # required a closing paren or any content inside, so an unterminated/empty paren must reject
+    # exactly like the closed forms above. Ordinary model output is not guaranteed to balance
+    # parens.
+    assert _shape_speech_text("[break] (see below", allowed_tags=ALLOWED_TAGS) is None
+    assert _shape_speech_text("[break] ()", allowed_tags=ALLOWED_TAGS) is None
+    assert _shape_speech_text("[break](", allowed_tags=ALLOWED_TAGS) is None
+
+
 async def test_ac2_expressive_tags_true_run_passes_a_verbatim_tagged_reply_through_the_stage() -> (
     None
 ):

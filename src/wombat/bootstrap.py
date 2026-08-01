@@ -307,7 +307,7 @@ from .voice.context_prefetch import (
     build_user_facts_context,
     build_voice_context,
 )
-from .voice.expressive import EXPRESSIVE_FISH_MODELS
+from .voice.expressive import EXPRESSIVE_FISH_MODELS, strip_allowed_tags
 from .voice.reply_context import LastSpokenRegister
 from .voice.select import TTSBuildInfo, build_tts_adapter, build_tts_adapter_with_info
 
@@ -645,6 +645,28 @@ def _utc_now() -> datetime:
     """The real-clock default for ``BriefGatherStage``'s ``datetime``-typed clock seam (TK-96) —
     mirrors ``_epoch_now`` above, just not epoch-seconds shaped."""
     return datetime.now(UTC)
+
+
+class _SanitizedNoteSpoken:
+    """TK-328 batch-review repair: wraps ``LastSpokenRegister.note_spoken`` so BOTH speak sites'
+    ``on_spoken`` hooks strip expressive bracket tags before recording. ``on_spoken`` carries the
+    raw, possibly bracket-tagged ``speech_text`` (TTS needs the markers) — but ``register.
+    current()`` becomes ``asr_context_hook``'s ``replying_to`` grounding field, which
+    ``compose.py`` lists in ``_GROUNDING_ONLY_KEYS`` and puts in the mouth prompt. The
+    compose/chat mouth has no expressive instruction and no bracket validator, so an unstripped
+    marker there is mimicable straight into user-visible pane/journal text — the exact DEC-69
+    voice-only invariant this closes. Stripping (``voice.expressive.strip_allowed_tags``) at THIS
+    single seam, mirroring TK-327's fallback-TTS-consumer fix, keeps the register itself
+    marker-free without touching what is actually spoken (both ``SpeakSink`` and
+    ``BriefDeliverStage`` still receive/speak the untouched tagged text; only the register's copy
+    is sanitized). ``register`` is exposed as a plain attribute — the same shared-instance
+    introspection the OLD ``register.note_spoken`` bound-method wiring offered via ``__self__``."""
+
+    def __init__(self, register: LastSpokenRegister) -> None:
+        self.register = register
+
+    def __call__(self, item_id: str, text: str) -> None:
+        self.register.note_spoken(item_id, strip_allowed_tags(text))
 
 
 def build_draft_composer_stage(
@@ -1195,19 +1217,25 @@ def assemble_runtime(
     expressive_tags = (
         tts_build_info.fish_primary and tts_build_info.fish_model in EXPRESSIVE_FISH_MODELS
     )
-    # TK-288 (DEC-64 gap A, v2.151 ruling): ONE shared LastSpokenRegister, threaded via its
-    # note_spoken bound method into BOTH speak sites below (this drain-graph SpeakSink AND the
-    # brief pathway's BriefDeliverStage further down) — never two registers, never build_speak_
-    # sink (zero src callers, stays byte-untouched).
+    # TK-288 (DEC-64 gap A, v2.151 ruling): ONE shared LastSpokenRegister, threaded via a
+    # sanitized wrapper into BOTH speak sites below (this drain-graph SpeakSink AND the brief
+    # pathway's BriefDeliverStage further down) — never two registers, never build_speak_sink
+    # (zero src callers, stays byte-untouched).
     # TK-303 (DEC-67e): ttl_seconds carries the DEC-64 reply window, restart-tier from the
     # settings table/env (no hot-apply).
     last_spoken_register = LastSpokenRegister(
         clock=_epoch_now, ttl_seconds=config.wombat_reply_window_seconds
     )
+    # TK-328 batch-review repair: BOTH speak sites feed this ONE wrapper (never the register's
+    # bare note_spoken method directly) so an expressive-tagged speech_text is stripped before it
+    # can reach LastSpokenRegister.current() -> asr_context_hook's replying_to grounding field ->
+    # the compose/chat mouth prompt, which has no bracket validator of its own (see
+    # _sanitized_note_spoken's docstring).
+    note_spoken = _SanitizedNoteSpoken(last_spoken_register)
     speak_stage = SpeakSink(
         voice_enabled=config.wombat_voice_enabled,
         adapter=tts_adapter,
-        on_spoken=last_spoken_register.note_spoken,
+        on_spoken=note_spoken,
     )
     speech_shape_stage = build_speech_shape_stage(
         config=config,
@@ -1626,7 +1654,7 @@ def assemble_runtime(
         # TK-288 (DEC-64 gap A): the SAME shared last_spoken_register as the drain pathway's
         # speak_stage above — one register, fed from both speak sites.
         brief_deliver_stage = build_brief_deliver_stage(
-            config=config, tz=tz, speak=speak, on_spoken=last_spoken_register.note_spoken
+            config=config, tz=tz, speak=speak, on_spoken=note_spoken
         )
         brief_graph = build_brief_pathway(
             brief_gather_stage, brief_force_flush_stage, brief_compose_stage, brief_deliver_stage

@@ -41,15 +41,36 @@ proper WAV image via ``_wrap_pcm16_mono_16k_as_wav`` (stdlib ``wave`` over ``io.
 new dependency, CST-1) before the ONE ``player.play(...)`` call; ``WinsoundPlayer.play`` requires a
 full RIFF/WAV image (``PlaySound`` + ``SND_MEMORY``). Deepgram Aura's response is ALREADY a WAV
 container (``container=wav`` in the request), so it is played back verbatim, unwrapped.
+
+TK-332 (DEC-73a/d/e): ``FishAudioTTSAdapter`` gains an optional keyword-only ``writer_factory`` (a
+zero-arg callable returning a ``voice.stream_playback.StreamingAudioWriter``, default ``None`` —
+wired at the ``voice.select`` construction seam, TK-332). When a ``writer_factory`` is present AND
+``transport`` satisfies ``StreamingVoiceTransport`` (a plain ``isinstance`` check against the
+``runtime_checkable`` protocol), ``speak()`` rides ``transport.stream`` instead of ``transport.
+post``: body ``format: "pcm"``, ``sample_rate`` IDENTITY with ``stream_playback.STREAM_SAMPLE_
+RATE`` (never a literal — request and writer structurally cannot disagree), ``latency: "low"``,
+the ``model`` header intact — chunks are written to the writer in arrival order and ``speak()``
+returns ONLY after ``writer.finish()`` drains (blocking-until-audio-done is preserved, keeping the
+DEC-64 on_spoken fire-after-heard contract at both call sites). ANY failure once a chunk has
+actually been written to the writer (transport death mid-stream, or the writer's own ``write``/
+``finish`` raising) calls ``writer.abort()`` first, then raises ``PartialSpeechError(played_any=
+True)``; a failure before any chunk is ever written (a non-2xx ``stream()`` call, or the writer
+failing on its very first chunk) propagates the underlying exception UNCHANGED — no wrapping, no
+``played_any=True`` masquerade. Without a ``writer_factory`` (or a non-streaming ``transport``),
+``speak()`` is the ORIGINAL buffered path below, byte-identical: ``format: "wav"`` request,
+``player.play(...)`` — TK-262/TK-264 handling untouched as the degrade path.
 """
 
 from __future__ import annotations
 
 import io
 import wave
+from collections.abc import Callable
 
+from wombat.voice import stream_playback
 from wombat.voice.playback import AudioPlayer, WinsoundPlayer
-from wombat.voice.transport import HttpxVoiceTransport, VoiceTransport
+from wombat.voice.stream_playback import StreamingAudioWriter
+from wombat.voice.transport import HttpxVoiceTransport, StreamingVoiceTransport, VoiceTransport
 
 # Best-effort endpoint pin (Q-104) — truthed later by the DEF-7 live smoke.
 FISH_AUDIO_TTS_URL = "https://api.fish.audio/v1/tts"
@@ -58,6 +79,21 @@ FISH_AUDIO_TTS_URL = "https://api.fish.audio/v1/tts"
 ELEVENLABS_TTS_URL_TEMPLATE = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 DEEPGRAM_AURA_TTS_URL = "https://api.deepgram.com/v1/speak"
 DEEPGRAM_AURA_DEFAULT_MODEL = "aura-asteria-en"
+
+
+class PartialSpeechError(RuntimeError):
+    """TK-332 (DEC-73e): raised by ``FishAudioTTSAdapter.speak``'s streaming path when playback
+    fails AFTER at least one chunk has already been written to the writer — the user genuinely
+    heard the steward start. ``played_any`` is ``True`` in every case this module actually raises
+    (the writer is ``abort()``-ed first); the attribute exists so a caller (``SpeakSink``) can
+    still distinguish a hypothetical ``played_any=False`` construction from ``True`` without
+    special-casing. A failure BEFORE any chunk is written propagates the underlying exception
+    unchanged instead — never wrapped here."""
+
+    def __init__(self, *, played_any: bool) -> None:
+        detail = "partial playback occurred" if played_any else "no audio was played"
+        super().__init__(f"Fish streaming speech failed ({detail})")
+        self.played_any = played_any
 
 
 def _wrap_pcm16_mono_16k_as_wav(pcm_bytes: bytes) -> bytes:
@@ -87,6 +123,7 @@ class FishAudioTTSAdapter:
         model: str,
         transport: VoiceTransport | None = None,
         player: AudioPlayer | None = None,
+        writer_factory: Callable[[], StreamingAudioWriter] | None = None,
     ) -> None:
         self._api_key = api_key
         self._voice_id = voice_id
@@ -95,11 +132,23 @@ class FishAudioTTSAdapter:
             transport if transport is not None else HttpxVoiceTransport()
         )
         self._player: AudioPlayer = player if player is not None else WinsoundPlayer()
+        # TK-332 (DEC-73a/d/f): the streaming writer factory, wired at the voice.select
+        # construction seam iff stream_playback.streaming_available() there — None (the default)
+        # preserves the buffered path byte-identically for every other caller (including every
+        # pre-TK-332 test).
+        self._writer_factory = writer_factory
 
     def speak(self, text: str) -> None:
-        """Speak ``text`` via ONE Fish Audio TTS POST followed by ONE playback call. Raises on a
-        transport failure (``VoiceTransportError``, non-2xx response) or a player failure —
-        never caught here; ``SpeakSink`` owns the degrade (CON-3)."""
+        """Speak ``text``. TK-332: iff a ``writer_factory`` was injected AND ``transport``
+        satisfies ``StreamingVoiceTransport``, rides the low-latency streaming path (see the
+        module docstring); otherwise this is the ORIGINAL buffered path — ONE Fish Audio TTS POST
+        followed by ONE playback call, byte-identical. Raises on a transport failure
+        (``VoiceTransportError``, non-2xx response) or a player failure — never caught here;
+        ``SpeakSink`` owns the degrade (CON-3)."""
+        transport = self._transport
+        if self._writer_factory is not None and isinstance(transport, StreamingVoiceTransport):
+            self._speak_streaming(text, transport, self._writer_factory)
+            return
         headers = {"Authorization": f"Bearer {self._api_key}", "model": self._model}
         json_body: dict[str, object] = {
             "text": text,
@@ -110,6 +159,40 @@ class FishAudioTTSAdapter:
             FISH_AUDIO_TTS_URL, headers=headers, json=json_body
         )
         self._player.play(wav_bytes)
+
+    def _speak_streaming(
+        self,
+        text: str,
+        transport: StreamingVoiceTransport,
+        writer_factory: Callable[[], StreamingAudioWriter],
+    ) -> None:
+        """TK-332 (DEC-73a/d/e): the streaming half of ``speak()``. ``format: "pcm"``,
+        ``sample_rate`` IDENTITY with ``stream_playback.STREAM_SAMPLE_RATE``, ``latency: "low"``
+        (pinned constants, DEC-63 no-knob) — the ``model`` header stays intact. Chunks are written
+        to the writer in arrival order; ``finish()`` drains before this returns (blocking-until-
+        audio-done, DEC-64). Any failure once at least one chunk has been written aborts the
+        writer and raises ``PartialSpeechError(played_any=True)``; a failure before any chunk is
+        written propagates unchanged."""
+        headers = {"Authorization": f"Bearer {self._api_key}", "model": self._model}
+        json_body: dict[str, object] = {
+            "text": text,
+            "reference_id": self._voice_id,
+            "format": "pcm",
+            "sample_rate": stream_playback.STREAM_SAMPLE_RATE,
+            "latency": "low",
+        }
+        writer = writer_factory()
+        played_any = False
+        try:
+            for chunk in transport.stream(FISH_AUDIO_TTS_URL, headers=headers, json=json_body):
+                writer.write(chunk)
+                played_any = True
+            writer.finish()
+        except Exception as exc:
+            if played_any:
+                writer.abort()
+                raise PartialSpeechError(played_any=True) from exc
+            raise
 
 
 class ElevenLabsTTSAdapter:
@@ -198,4 +281,5 @@ __all__ = [
     "DeepgramAuraTTSAdapter",
     "ElevenLabsTTSAdapter",
     "FishAudioTTSAdapter",
+    "PartialSpeechError",
 ]

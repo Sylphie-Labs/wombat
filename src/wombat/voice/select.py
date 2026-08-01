@@ -29,6 +29,12 @@ stt``/``voice.tts``) anywhere reachable from boot (DEC-28: zero egress by defaul
 a Fish TTS primary was truly constructed (never a degrade path) — ``assemble_runtime`` is its sole
 consumer, deciding whether to offer Fish's bracket-marker expressive instruction. ``build_tts_
 adapter`` itself is unchanged in behavior, now a thin wrapper over it.
+
+TK-332 (DEC-73a/d/f): ``_construct_cloud_tts``'s fish branch wires a ``StreamingAudioWriter``
+factory into the adapter iff ``stream_playback.streaming_available()`` — a missing streaming dep
+(sounddevice, part of the ``voice-cloud`` extra) is ONE loud warning, never a boot failure; the
+adapter still builds, just without streaming. Streaming is orthogonal to expressive tags/model
+choice — no interaction with the TK-328 ``TTSBuildInfo`` decision above.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ from wombat.sinks.tts_adapter import Pyttsx3Adapter, TTSAdapter
 from wombat.sources.asr import FasterWhisperTranscriber, Transcriber
 from wombat.voice.expressive import strip_allowed_tags
 from wombat.voice.key_store import KeyringVoiceKeyStore, VoiceKeyStore, resolve_provider_key
+from wombat.voice.stream_playback import StreamingAudioWriter, streaming_available
 from wombat.voice.stt import DeepgramTranscriber, ElevenLabsScribeTranscriber, FishAudioTranscriber
 from wombat.voice.tts import DeepgramAuraTTSAdapter, ElevenLabsTTSAdapter, FishAudioTTSAdapter
 
@@ -206,9 +213,27 @@ def _construct_cloud_tts(
 
     TK-326 (DEC-71a/DEC-72a): the fish branch also threads ``config.wombat_fish_model`` into the
     adapter's ``model`` ctor param, pinning the Fish engine version on every TTS POST — the
-    elevenlabs/deepgram branches below are byte-untouched."""
+    elevenlabs/deepgram branches below are byte-untouched.
+
+    TK-332 (DEC-73a/d/f): the fish branch ALSO wires a ``writer_factory`` (``StreamingAudioWriter``
+    itself, a zero-arg callable) iff ``stream_playback.streaming_available()`` — otherwise ONE
+    loud WARNING naming the missing extra and the adapter is built WITHOUT streaming (the buffered
+    wav+winsound path, byte-identical to today). Structural, no new config (DEC-63); the
+    elevenlabs/deepgram branches are byte-untouched."""
     if provider == "fish":
         assert voice_id is not None, "fish TTS requires voice_id (checked by the caller)"
+        if streaming_available():
+            return FishAudioTTSAdapter(
+                api_key,
+                voice_id=voice_id,
+                model=config.wombat_fish_model,
+                writer_factory=StreamingAudioWriter,
+            )
+        logger.warning(
+            "voice: fish TTS streaming playback is unavailable — install the 'voice-cloud' "
+            "extra's sounddevice dependency (`uv sync --extra voice-cloud`) to enable low-latency "
+            "streamed playback; using buffered playback for this boot"
+        )
         return FishAudioTTSAdapter(api_key, voice_id=voice_id, model=config.wombat_fish_model)
     if provider == "elevenlabs":
         assert voice_id is not None, "elevenlabs TTS requires voice_id (checked by the caller)"
