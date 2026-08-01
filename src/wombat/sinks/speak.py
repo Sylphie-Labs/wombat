@@ -65,6 +65,15 @@ prefix) plus ONE loud WARNING naming partial playback, and the terminal ``Degrad
 ``spoken=True, degraded=True`` — the heard world, not a lie of silence. ``played_any=False`` takes
 the EXACT byte-identical shape as any other adapter failure below (``spoken=False, degraded=True``,
 no ``on_spoken``).
+
+The except clause is written as ``voice_tts.PartialSpeechError`` (a module reference, ``import
+wombat.voice.tts as voice_tts``) rather than a value bound via ``from ... import
+PartialSpeechError`` at this module's own load time: some test suites ``importlib.reload(wombat.
+voice.tts)``, which rebinds ``PartialSpeechError`` to a NEW class object in that module's
+namespace — a value-bound import here would freeze the pre-reload class, and the dedicated except
+arm would silently stop matching post-reload instances (falling through to the broad ``except
+Exception`` instead). A module-attribute lookup always resolves the CURRENT class, regardless of
+reload order.
 """
 
 from __future__ import annotations
@@ -86,7 +95,7 @@ from wombat.stages.artifacts import (
     speech_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
-from wombat.voice.tts import PartialSpeechError
+from wombat.voice import tts as voice_tts
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +177,7 @@ class SpeakSink:
         except asyncio.CancelledError:
             # Never swallow cancellation — only the adapter's own failures degrade.
             raise
-        except PartialSpeechError as exc:
+        except voice_tts.PartialSpeechError as exc:
             # TK-332 (DEC-73e): a Fish streaming failure caught BEFORE the broad except below —
             # PartialSpeechError is a RuntimeError subclass, so ordering matters. played_any=False
             # is byte-identical to any other adapter failure (no on_spoken); played_any=True means

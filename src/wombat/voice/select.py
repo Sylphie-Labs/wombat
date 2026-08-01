@@ -49,6 +49,7 @@ from pydantic import SecretStr
 from wombat.config import WombatConfig
 from wombat.sinks.tts_adapter import Pyttsx3Adapter, TTSAdapter
 from wombat.sources.asr import FasterWhisperTranscriber, Transcriber
+from wombat.voice import tts as voice_tts
 from wombat.voice.expressive import strip_allowed_tags
 from wombat.voice.key_store import KeyringVoiceKeyStore, VoiceKeyStore, resolve_provider_key
 from wombat.voice.stream_playback import StreamingAudioWriter, streaming_available
@@ -99,7 +100,21 @@ class FallbackTTSAdapter:
     TK-328 fallback hygiene: the fallback branch strips every ``voice.expressive.ALLOWED_TAGS``
     marker (``voice.expressive.strip_allowed_tags``) before handing text to ``fallback.speak`` —
     the local engine never speaks Fish's bracket markers aloud. The primary branch is untouched;
-    ``primary.speak`` always receives ``text`` byte-identical/verbatim."""
+    ``primary.speak`` always receives ``text`` byte-identical/verbatim.
+
+    TK-332 AC5 (ISS-39 f1 ruling): ``voice.tts.PartialSpeechError`` is caught in its OWN ``except``
+    clause, ordered BEFORE the bare ``except Exception`` below (it is a ``RuntimeError``
+    subclass, so ordering matters). It is always re-raised UNCHANGED, with NO fallback attempt —
+    the user already heard the Fish primary begin speaking before it died mid-stream, so a local
+    fallback speaking the whole utterance over again would duplicate audio rather than degrade
+    gracefully. Re-raising lets ``SpeakSink``'s own dedicated ``PartialSpeechError`` handling
+    (the DEC-73e played-partial-counts-as-spoken branch) actually run in the assembled runtime,
+    where every Fish primary is always wrapped in this class. The except clause references
+    ``voice_tts.PartialSpeechError`` (a module attribute, ``import wombat.voice.tts as voice_tts``)
+    rather than a value bound via ``from ... import PartialSpeechError`` — mirrors ``sinks.speak``'s
+    own fix for the same hazard: a test suite that ``importlib.reload``s ``wombat.voice.tts``
+    rebinds the class in that module's namespace, and a value-bound import here would freeze the
+    pre-reload identity."""
 
     def __init__(self, primary: TTSAdapter, *, fallback: TTSAdapter | None) -> None:
         self._primary = primary
@@ -108,6 +123,10 @@ class FallbackTTSAdapter:
     def speak(self, text: str) -> None:
         try:
             self._primary.speak(text)
+        except voice_tts.PartialSpeechError:
+            # TK-332 AC5: partial playback already reached the user -- re-raise unchanged, no
+            # fallback attempt. Ordered ahead of the bare Exception arm below.
+            raise
         except Exception:
             logger.warning(
                 "voice: cloud TTS provider failed; falling back to local TTS", exc_info=True

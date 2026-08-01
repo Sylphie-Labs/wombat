@@ -18,7 +18,11 @@ only after the writer drains.
 chunks, driven through the REAL streaming ``FishAudioTTSAdapter`` wired into the REAL
 ``SpeakSink``: ``on_spoken`` fires exactly once plus ONE loud WARNING, text delivery (the composed
 artifact) is unaffected. A pre-audio death (before any chunk ever arrives) takes today's plain
-adapter-failure degrade instead — no ``on_spoken``.
+adapter-failure degrade instead — no ``on_spoken``. ``..._through_assembled_fallback_adapter_...``
+re-drives the SAME mid-stream scenario through the REAL ``voice.select.FallbackTTSAdapter``
+wrapper (the ISS-39 reachability lesion, TK-332 AC5) — every Fish primary is always wrapped this
+way in production, and the wrapper must re-raise ``PartialSpeechError`` unchanged, never attempting
+a duplicate local-fallback speech.
 
 (3) DEC-72 INTERPLAY PIN: ``test_dec72_interplay_e2e_...`` — a subset-tagged shaped reply is
 validated WHOLE-TEXT by ``SpeechShapeStage`` before any streaming byte ever leaves (validate-
@@ -67,6 +71,7 @@ from wombat.stages.artifacts import (
 from wombat.stages.speech_shape import SpeechShapeStage
 from wombat.voice.expressive import ALLOWED_TAGS, find_disallowed_token
 from wombat.voice.playback import WinsoundPlayer
+from wombat.voice.select import FallbackTTSAdapter
 from wombat.voice.stream_playback import (
     STREAM_SAMPLE_RATE,
     StreamingAudioWriter,
@@ -126,6 +131,18 @@ class _RecordingFakePlayer:
 
     def play(self, wav_bytes: bytes) -> None:
         self.calls.append(wav_bytes)
+
+
+class _RecordingFakeLocalTTS:
+    """Stands in for the local fallback adapter (``Pyttsx3Adapter``'s shape) inside an assembled
+    ``voice.select.FallbackTTSAdapter`` — records every ``speak()`` call so a test can prove it was
+    NEVER reached (TK-332 AC5: partial playback must never trigger a duplicate fallback speech)."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.calls.append(text)
 
 
 class _ScriptedStreamTransport:
@@ -328,6 +345,61 @@ async def test_partial_failure_e2e_mid_stream_death_fires_on_spoken_once_with_lo
     assert spoken is True  # played-partial-counts-as-spoken, DEC-73e
     assert degraded is True
     assert spoken_calls == [(_ITEM_ID, _SPOKEN_TEXT)]  # fired EXACTLY once
+    warning_count = sum("partial" in record.message.lower() for record in caplog.records)
+    assert warning_count == 1  # ONE loud WARNING, not zero, not several
+    assert compose_artifact == snapshot  # text delivery unaffected
+
+
+async def test_partial_failure_e2e_through_assembled_fallback_adapter_still_fires_on_spoken_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ISS-39 reachability lesion (TK-332 AC5 / TK-333): in the real assembled runtime, every Fish
+    primary is wrapped in ``voice.select.FallbackTTSAdapter`` BEFORE ``SpeakSink`` ever sees it —
+    driving the SAME mid-stream-death scenario through that wrapper (rather than handing SpeakSink
+    a bare ``FishAudioTTSAdapter``, as the test above does) proves ``PartialSpeechError`` re-raises
+    through the wrapper unchanged, with NO fallback speech attempted, so ``SpeakSink``'s own
+    dedicated partial-speech handling still runs in production."""
+    events: list[str] = []
+    fake_stream = _RecordingFakeStreamWithLog(events)
+    writer = StreamingAudioWriter(stream_factory=lambda: fake_stream)
+    chunks = [b"\x01\x00\x02\x00", b"\x03\x00\x04\x00", b"\x05\x00\x06\x00"]
+    transport = _ScriptedStreamTransport(stream_fn=lambda: _dying_after_k_chunks(chunks, 2))
+    primary = FishAudioTTSAdapter(
+        "fish-secret",
+        voice_id="voice-abc123",
+        model="s2.1-pro",
+        transport=transport,
+        player=_RecordingFakePlayer(),
+        writer_factory=lambda: writer,
+    )
+    fallback = _RecordingFakeLocalTTS()
+    adapter = FallbackTTSAdapter(primary, fallback=fallback)
+    spoken_calls: list[tuple[str, str]] = []
+    stage = SpeakSink(
+        voice_enabled=True,
+        adapter=adapter,
+        on_spoken=lambda item_id, text: spoken_calls.append((item_id, text)),
+    )
+    compose_artifact = _compose_artifact()
+    snapshot = compose_artifact.model_copy(deep=True)
+    ctx = StageContextFake(
+        now_fn=lambda: _FIXED_NOW,
+        last_output_map={
+            "compose": compose_artifact,
+            "speech_shape": _speech_output_artifact(_SPOKEN_TEXT),
+        },
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await stage.run(ctx)
+
+    assert isinstance(result, Degraded)
+    assert result.to is None
+    _item_id, _item_kind, spoken, degraded = spoken_output_from_artifact_data(result.output.data)
+    assert spoken is True  # played-partial-counts-as-spoken, even through the wrapper
+    assert degraded is True
+    assert spoken_calls == [(_ITEM_ID, _SPOKEN_TEXT)]  # fired EXACTLY once
+    assert fallback.calls == []  # no duplicate fallback speech (TK-332 AC5, ISS-39 f1)
     warning_count = sum("partial" in record.message.lower() for record in caplog.records)
     assert warning_count == 1  # ONE loud WARNING, not zero, not several
     assert compose_artifact == snapshot  # text delivery unaffected
