@@ -4,6 +4,7 @@ import {
   AudioPanel,
   Button,
   ChatDock,
+  DangerZone,
   Field,
   GoogleConnections,
   Header,
@@ -793,6 +794,7 @@ export function App() {
             {view === "system" && (
               <>
                 <RuntimeControls />
+                <DangerZone />
                 {formState && (
                   <>
                     <Panel className="flex flex-col gap-4">

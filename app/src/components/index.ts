@@ -22,6 +22,8 @@ export { AudioPanel } from "./AudioPanel";
 
 export { RuntimeControls } from "./RuntimeControls";
 
+export { DangerZone } from "./DangerZone";
+
 export { Header } from "./Header";
 
 export { NavRail } from "./NavRail";

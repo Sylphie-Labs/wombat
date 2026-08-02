@@ -8,6 +8,7 @@ import { openGmailMessage } from "./gmail-open";
 import { isAllowedPermission } from "./permissions";
 import { restartRuntime } from "./runtime-control";
 import { saveCapture } from "./save-capture";
+import { wipeMemory } from "./wipe-control";
 import { WEB_PREFERENCES } from "./window-options";
 
 /**
@@ -95,6 +96,12 @@ app.whenReady().then(async () => {
   ipcMain.handle("wombat:restart-runtime", () =>
     restartRuntime(process.env, app.getAppPath()),
   );
+
+  // TK-336 (DEC-77 r3): the danger-zone "wipe memory" button's IPC seam -
+  // spawns TK-337's wipe script detached; the in-flight latch lives in
+  // `wipe-control.ts` itself, single-flight process-wide, mirroring the
+  // restart handler immediately above.
+  ipcMain.handle("wombat:wipe-memory", () => wipeMemory(process.env, app.getAppPath()));
 
   // TK-251 (RULING r3): the "open in Gmail" bridge - the renderer passes
   // ONLY a message_id; validation + URL construction happen in

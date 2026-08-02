@@ -48,6 +48,18 @@ contextBridge.exposeInMainWorld("wombatRuntime", {
 });
 
 /**
+ * TK-336 (DEC-77 r3): the danger-zone "wipe memory" button's bridge - the
+ * SAME `contextBridge`-only pattern as the channels above. The renderer
+ * passes NOTHING (the typed-confirmation gate lives entirely in the
+ * renderer; the main process never receives the typed text). The renderer
+ * surface (`window.wombatWipe.wipe()`) is pinned - `DangerZone.tsx` binds
+ * against this exact name.
+ */
+contextBridge.exposeInMainWorld("wombatWipe", {
+  wipe: () => ipcRenderer.invoke("wombat:wipe-memory"),
+});
+
+/**
  * TK-251 (RULING r3): the "open in Gmail" bridge - the SAME
  * `contextBridge`-only pattern as the four channels above. The renderer
  * passes ONLY a `message_id` string; `main.ts`'s handler (backed by
