@@ -986,3 +986,17 @@ Batch = TK-330 -> TK-331 -> TK-332 -> TK-333, the last four open tickets (246/25
 **Quality bar:** `uv run pytest -q` → 2279 passed / 134 skipped / 0 failed (TK-336's 2277 baseline + exactly the two new PowerShell tests). No `src/wombat` change, no `app/` change, no decision spine touched.
 
 **State:** EP-38 review-clean and CLOSED 4/4. Board 254/269; every remaining open ticket is FEAT-15 (TK-338..TK-353), and EP-42/EP-43 stay BLOCKED on Q-129..Q-136 — which is why `gate_check analyze` still FAILs by design while `tickets` PASSes.
+
+---
+
+## 2026-08-01 — batch-review round 2 repair over the EP-38 wipe arc (contract v2.213, commit `d249f7f`)
+
+**Within authority.** One MAJOR finding — **the same root cause as round 1, one layer deeper**, and the more dangerous instance of it.
+
+- **TK-335** — `wipe.check_substrate_guard`, the DEC-75d obligation that must abort **before any archive or destructive act** when a durable cog-worx substrate is wired, read `COGWORX_NEO4J_URI` / `COGWORX_PG_DSN` from `os.environ` **only**. But cog-worx's `adapters.config.SubstrateSettings` declares `env_prefix="COGWORX_"` **and `env_file=".env"`**, and wombat's own secrets already live *only* in the repo-root `.env`, never exported. So the single most likely way an operator would ever configure a durable substrate — a line in that same `.env` — was invisible to the guard: cog-worx would connect while the guard reported `cold_boot` and the wipe proceeded. **Fail-open on exactly the real path.** Fix: env, else the same var in a cwd-relative `.env` via `dotenv_values` — mirroring `config._resolve_pg_dsn` (round 1's TK-334 fix) rather than inventing a second resolution order; cwd is already pinned to the repo root by round 1's TK-337 fix, so both agree on *which* `.env`. Still deliberately never constructs `SubstrateSettings()` (non-blank defaults would read as configured — **DEC-77 r7 stands unchanged**). Pinned by three AC3 tests: dotenv-only URI aborts, dotenv-only DSN aborts, and a `.env` carrying only `WOMBAT_PG_DSN` still returns `cold_boot` (the widened read must not false-positive and brick an ordinary wipe). **DEC-75d unchanged as a rule; this makes it actually bite.**
+
+**The durable lesson (three findings now, one cause):** anything in this repo that reads configuration must read it *the way wombat reads it* — process env **else** repo-root `.env` — never a bare `os.environ`. A bare `os.environ` read of an operator secret is a latent fail-open.
+
+**Quality bar:** `uv run pytest -q` → 2282 passed / 134 skipped / 0 failed (round-1 baseline 2279 + exactly these three). No `app/` change, no script change, no decision spine touched.
+
+**State:** unchanged from round 1 — EP-38 CLOSED 4/4 and now review-clean through two rounds; board 254/269, all remaining open tickets FEAT-15; `gate_check analyze` still FAILs by design on Q-129..Q-136. Two unrelated working-tree edits (the `claude-fable-5` → `claude-opus-5` model rename in `.claude/agents/architect.md` and `ux-designer.md`) were left **uncommitted** — tooling config, not this repair.

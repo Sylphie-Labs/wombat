@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from dotenv import dotenv_values
 
 from wombat.sources.asr import _FAILED_DIRNAME as _ASR_FAILED_DIRNAME
 from wombat.sources.asr import _PROCESSED_DIRNAME as _ASR_PROCESSED_DIRNAME
@@ -215,7 +216,9 @@ def _truncate_tables(conn: _PgConnection, tables: list[str]) -> None:
 # ================================================================================================
 
 # Source-verified (DEC-77 r7): cog-worx's adapters.config.SubstrateSettings is the ONLY real
-# endpoint surface (env_prefix="COGWORX_"). It is read directly from os.environ here, never by
+# endpoint surface (env_prefix="COGWORX_", env_file=".env"). It is read directly from the process
+# environment, else a cwd-relative .env (TK-335 repair — mirrors config._resolve_pg_dsn/TK-334
+# exactly, since cog-worx's own SubstrateSettings would see the same repo-root .env), never by
 # constructing SubstrateSettings() — that class ships non-blank defaults for every field, so an
 # unconfigured environment would still read as "configured" if we ever instantiated it.
 _COGWORX_SUBSTRATE_ENV_VARS: tuple[str, ...] = ("COGWORX_NEO4J_URI", "COGWORX_PG_DSN")
@@ -239,14 +242,22 @@ def check_substrate_guard(substrate_config: SubstrateConfig | None = None) -> st
     Returns ``"cold_boot"`` when neither signal is present. Raises ``DurableSubstrateConfigured``
     otherwise, naming the specific store, BEFORE any archive or destructive act — v1 ships no
     Neo4j purge code (DEC-75d); this guard is the whole obligation.
+
+    Each var is resolved from the process environment, else the same var in a cwd-relative
+    ``.env`` (TK-335 repair) — wombat's own secrets (e.g. ``WOMBAT_PG_DSN``,
+    ``DEEPSEEK_API_KEY``) live only in the repo-root ``.env``, never exported, and cog-worx's
+    real ``SubstrateSettings`` (``env_file=".env"``) reads that identical file — so an
+    os.environ-only check is fail-open on exactly the most likely configuration path.
     """
     if substrate_config is not None:
         raise DurableSubstrateConfigured(
             "a wombat SubstrateConfig was supplied to the wipe — a durable substrate is wired "
             "and this wipe cannot safely reach it. Aborting before any archive or destructive act."
         )
+    dotenv_vars = dotenv_values(".env")
     for var in _COGWORX_SUBSTRATE_ENV_VARS:
-        if os.environ.get(var, "").strip():
+        value = os.environ.get(var) or dotenv_vars.get(var) or ""
+        if value.strip():
             raise DurableSubstrateConfigured(
                 f"{var} is set — a durable cog-worx substrate endpoint is configured and this "
                 "wipe cannot safely reach it. Aborting before any archive or destructive act."

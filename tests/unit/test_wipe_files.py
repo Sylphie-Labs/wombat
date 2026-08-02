@@ -12,8 +12,9 @@ zero real I/O beyond the tmp_path filesystem.
   AC2 exclusions — logs/, archives/, chat-handshake.json, .env, wombat.settings.json(.migrated),
       wombat_params.yaml, persona_policy.yaml survive a full wipe byte-for-byte (hashed, not a
       comment).
-  AC3 substrate guard — COGWORX_NEO4J_URI / COGWORX_PG_DSN / an explicit SubstrateConfig each
-      abort before any archive or destructive act; the cold-boot default returns "cold_boot".
+  AC3 substrate guard — COGWORX_NEO4J_URI / COGWORX_PG_DSN (env or a cwd-relative .env, TK-335
+      repair) / an explicit SubstrateConfig each abort before any archive or destructive act; the
+      cold-boot default returns "cold_boot".
 """
 
 from __future__ import annotations
@@ -270,6 +271,43 @@ def test_substrate_guard_aborts_on_cogworx_pg_dsn(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(wipe.DurableSubstrateConfigured) as exc_info:
         wipe.check_substrate_guard()
     assert "COGWORX_PG_DSN" in str(exc_info.value)
+
+
+def test_substrate_guard_aborts_on_cogworx_neo4j_uri_in_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-335 repair: wombat's own secrets (WOMBAT_PG_DSN, DEEPSEEK_API_KEY) live only in the
+    repo-root .env, never exported — cog-worx's real SubstrateSettings (env_file=".env") reads
+    that identical file, so this guard must too, not just os.environ."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("COGWORX_NEO4J_URI=bolt://localhost:7687\n", encoding="utf-8")
+    with pytest.raises(wipe.DurableSubstrateConfigured) as exc_info:
+        wipe.check_substrate_guard()
+    assert "COGWORX_NEO4J_URI" in str(exc_info.value)
+
+
+def test_substrate_guard_aborts_on_cogworx_pg_dsn_in_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "COGWORX_PG_DSN=postgresql://localhost/cogworx\n", encoding="utf-8"
+    )
+    with pytest.raises(wipe.DurableSubstrateConfigured) as exc_info:
+        wipe.check_substrate_guard()
+    assert "COGWORX_PG_DSN" in str(exc_info.value)
+
+
+def test_substrate_guard_cold_boot_with_dotenv_present_but_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .env with unrelated keys (the shape of wombat's real repo-root .env today) must not
+    false-positive the guard."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "WOMBAT_PG_DSN=postgresql://localhost/wombat\n", encoding="utf-8"
+    )
+    assert wipe.check_substrate_guard() == "cold_boot"
 
 
 def test_substrate_guard_aborts_on_explicit_substrate_config() -> None:
