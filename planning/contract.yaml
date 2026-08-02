@@ -70,6 +70,7 @@ non_goals:
   - { id: NG-7, statement: "No cloud-first data storage.", rationale: "Local-first data residency by default; privacy as character, not a toggle." }
   - { id: NG-8, statement: "No Outlook / non-Gmail email providers in v1.", rationale: "Depth-first: one provider done deeply. Converted from Q-8." }
   - { id: NG-9, statement: "No multi-camera / home-wide 'hive' observation.", rationale: "Jim verbatim 2026-07-30 - 'thats like home stuff. Not this application.' wombat observes the computer it runs on: one screen, one webcam, one mic, one host. A home-scale sensor fabric is a different product. (Recorded with DEC-68.)" }
+  - { id: NG-10, statement: "No sensor or audio fabric beyond the single user's OWN body-worn/carried personal devices.", rationale: "The companion-device listener admits EXACTLY the paired iPhone and Apple Watch of the one user wombat serves, on the home LAN, always as clients wombat never dials. Each of these is a NEW owner decision and never an incremental widening - a home-fixed sensor, a second person's device, a third device class, an internet-reachable listener, or wombat originating a connection to any device. NG-9's home-hive bar is preserved in PURPOSE by this bound: the boundary that carries the weight is fixed-home-fabric versus this-one-user's-own-body, not the literal one-host phrasing of NG-9's rationale. Recorded with DEC-78 as the structural companion to that ruling." }
 
 constraints:
   - { id: CST-1, statement: "Runs on an always-on local host and must survive laptop sleep (watch overnight)." }
@@ -110,6 +111,7 @@ nodes:
   - { id: FEAT-12, kind: feature, parent: null, title: "Voice & interaction (in v1, as a registered input source)", intent: "Voice is in v1 'out the box' — but built as one registered input source on the loop's input queue (not a special path), plus terse load-bearing spoken/text output on rare speak-events. Full capability without speech.", status: todo, priority: P2 }
   - { id: FEAT-13, kind: feature, parent: null, title: "Configuration surface & companion app (Electron + React)", intent: "The user-facing configuration surface - assistant name, voice provider choices, user-supplied API keys - as a local Electron + React app over a loopback Python settings API; intended to grow into wombat's front-end (future companion/avatar surface, DEC-31). Config only in v1 - zero analytics (DEC-29), no accounts/packaging (DEC-30).", status: todo, priority: P2 }
   - { id: FEAT-14, kind: feature, parent: null, title: "Persona - tunable personality matrix (the identity kit completes)", intent: "A way to tune the personality so people can have fun with it - name + voice + services + personality = the user-facing identity kit (name TK-194, voice EP-31, services = the configured providers; this feature adds the personality). Five named-level axes (DEC-33) rendered by a PURE-FUNCTION prompt builder whose DEFAULT reproduces today's prompts byte-for-byte (TK-207), hot-applied via LivePersona (DEC-34), driveable by a closed voice-command grammar (DEC-35) and nightly feedback-token learning (DEC-36/DEF-8). The persona shapes HOW gate-cleared output reads plus - via DEC-37's restored proactivity band ONLY - a bounded deterministic offset on the gate's willingness inside a recorded human-custody band; never a new surfacing, never a raised cap (CON-2/CON-3). Jim's verbatim framing - 'observant, learns to fit in the right way'.", status: todo, priority: P2 }
+  - { id: FEAT-15, kind: feature, parent: null, title: "Companion devices - iOS + watchOS (watch push-to-talk, return audio, passive biometrics)", intent: "JIM DIRECTIVE 2026-08-01, four researched rounds with Jim answering each pivot - a crazy-simple watchOS push-to-talk button so he can talk to wombat with no headphones and no laptop nearby; real audio played BACK on the watch itself because 'phone is often elsewhere'; and passive biometrics read from the iPhone's HealthKit store. This is wombat's SECOND companion surface and the peer of FEAT-13's Electron app - the same product (one steward, one queue, one gate, one mouth) reached from the wrist instead of the desk. It is a feature rather than an epic because it adds a whole PLATFORM (Swift/iOS/watchOS, built and signed off-repo) and a whole CAPABILITY CLASS (wombat's first inbound network listener and its first remote audio destination), and its epics cut across voice (FEAT-12), privacy (FEAT-11) and the empirical user model (FEAT-3) rather than sitting under any one of them. The wombat-SIDE half is pure Python on proven seams and is fully curl-verifiable with no Apple code in existence; the device-SIDE half is blocked on operator preconditions recorded as Q-134 and Q-136.", status: todo, priority: P2 }
   - { id: EP-1, kind: epic, parent: FEAT-1, title: "Engine assembly & wombat bootstrap", intent: "Construct the cog-worx Engine with wombat's ModelRegistry/BudgetPolicy/Registry/RecallStack/personality/rules; one composition root.", status: todo, priority: P1 }
   - { id: EP-2, kind: epic, parent: FEAT-1, title: "Durable work queue (WombatQueue)", intent: "Bounded, persisted enqueue/drain with idempotent items; queue is wombat domain state, journal stays run authority.", status: todo, priority: P1 }
   - { id: EP-3, kind: epic, parent: FEAT-1, title: "Source registry & registration contract", intent: "Pluggable input-source contract (id/poll/push/map) + lifecycle; adding a source is registration, not a rewrite (DEC-5).", status: todo, priority: P1 }
@@ -148,6 +150,11 @@ nodes:
   - { id: EP-36, kind: epic, parent: FEAT-1, title: "External-information persistence + scratch substrate", intent: "JIM DIRECTIVE 2026-07-11 - information wombat nabs from external APIs (other than STT/TTS providers) is SAVED to Postgres instead of fetch-render-discard. ONE upsert-shaped wombat_external_items table synced on the existing source-poll beat via whitelist projections (bodies NEVER stored - the DEC-26/Q-65 taint discipline preserved structurally), with a token-guarded settings_app read path feeding the app's concurrent design iteration (calendar/upcoming-meetings + gmail-derived views). PLUS wombat_scratchpad - the working-memory surface wombat lacks for persisting intermediate work across steps/runs (NOT a second queue, NOT the memory graph, NOT a chat log). Carried by DEC-45/DEC-46 and TK-244..TK-247 (the read-path ticket TK-246 homes in EP-32 as app-backend work).", status: todo, priority: P1 }
   - { id: EP-37, kind: epic, parent: FEAT-3, title: "User-model growth - observational knowing beyond chat", intent: "JIM FRAME RULING 2026-07-30 (recorded by the architect) - 'the whole point of this app is to learn and observe and build a model of its user'; the declarative knowing-the-user layer minted by the companion arc must grow past chat-derived facts. Growth path, every input attaching to the ALREADY-PINNED seams with zero rework: (a) deterministic derivations from wombat_external_items - recurring-meeting rhythms, frequent correspondents, calendar-shape regularities - pure code over the whitelisted projections, NO LLM; (b) the existing behavioral-model outputs (productivity_window claims, pattern-detector claims, outcome regularities - the gate-facing empirical half that already exists) rendered into the same known_user_context block under the same caps; (c) explicit preference capture when its deferral is scheduled. All writes go through the UserFactsStore upsert seams (the source column carries provenance: dream | derived | behavior | told), all prompt delivery through the ONE known_user_context render - no new prompt channels, no new egress, CON-6 absolute (observed behavior + stated facts, never motive). UNSCHEDULED - no tickets until the companion arc lands and proves the store/render/dream seams; the scheduling deferral holds the trigger. AMENDED v2.176 (DEC-68) - growth input (d): consented ambient perception channels (screen/webcam/mic) per DEC-68 - on-host collectors -> the wombat_observations 21-day ledger + in-memory CurrentActivity -> the bounded current_activity chat/voice payload key AND the deterministic LLM-free dream_observe pass writing source=behavior facts; same UserFactsStore seams, same known_user_context render caps, CON-6 absolute; home-wide multi-camera hive OUT (NG-9). DEF-13 trigger MET at v2.176 (companion arc landed + review-clean) - TK-299 and TK-309..TK-314 are the scheduled growth. AMENDED v2.181 (DEC-70) - growth input (e), the screenpipe ambient record: an operator-installed local capture service (pixels/OCR in ITS OWN on-machine store) becomes the content-level ambient record wombat CONSUMES on Jim's two axes - a registered change-event InputSource through the existing gate (default-hold, EventClass.SCREEN_ACTIVITY) and a nightly bounded dream distillation (dream_screenpipe, DEC-23 slot, dream_facts custody) into source=behavior facts; wombat persists derivations only, never content copies (Q-123); DEC-68(a)'s no-pixels/no-OCR invariant is rescoped to wombat's OWN collectors, which stand as the zero-dependency fallback. TK-319..TK-325 are the scheduled growth.", status: todo, priority: P2 }
   - { id: EP-38, kind: epic, parent: FEAT-11, title: "Memory lifecycle - archive-then-wipe (start clean)", intent: "JIM DIRECTIVE 2026-08-01 (verbatim) - 'We need tools in the UI to wipe wombat's memory and start clean... it should archive every bit of data into json files then wipe the database. Make sure this is a systemic wipe. It should not wipe information it needs to work, like tables. It should just empty the DB out. The model of the user and anything that is related to persistence should be cleaned.' Homed under FEAT-11 because this is a DESTRUCTIVE data-lifecycle act and inherits that feature's posture verbatim - archive-before-destroy is the CON-4 'every side effect appears before it happens' rule applied to deletion, and every failure is fail-closed (an archive that cannot be written aborts the wipe with zero rows touched). THE ENUMERATION IS SCHEMA-DRIVEN, NOT LIST-DRIVEN (DEC-75b): the wipe reads information_schema at runtime, so 'systemic' is structural and drift-proof - a future migration needs no wipe-side edit, and if the DEC/Q-36 real_adapter_bundle is ever pointed at WOMBAT_PG_DSN the cogworx_* tables are swept for free. FOUR tickets, one arc, cross-layer (the EP-36 precedent), split at the seam the atomicity gate found rather than the one first guessed (ISS-41): TK-334 the Postgres archive+TRUNCATE core, TK-335 the filesystem tier + durable-substrate fail-loud guard + the complete safe `python -m wombat wipe` command (which enforces the quiesce precondition itself), TK-337 the one-click quiesce-then-wipe ps1 wrapper on the TK-238/TK-239 exit-code contract, TK-336 the typed-confirmation danger-zone UI riding the TK-239 detached-script seam. The file tier and the CLI were deliberately NOT split apart: a runnable wipe command that truncates the DB while leaving brief/feedback/trail/voice-drop behind would be an operator-facing command that lies about being systemic, on the one irreversibly destructive feature on the board. NOT a restore/import path (write-only archive in v1, DEF-20), NOT a selective/per-store wipe, NOT a credentials or configuration reset (Q-128 holds the wombat_settings boundary).", status: todo, priority: P1 }
+  - { id: EP-39, kind: epic, parent: FEAT-15, title: "Companion device listener + per-device pairing/auth (wombat side, no Swift)", intent: "The one genuinely new box in the whole design - an authenticated, consent-gated LAN listener owned by runtime.serve(), and the per-device credential store behind it. Everything downstream of it is shipped and proven: POST /voice writes bytes into a directory ASRSource already watches, POST /biometrics writes rows into a table ObservationStore already owns. This epic is FULLY curl-verifiable before a single line of Swift exists - curl a WAV in from another machine on the LAN and hear wombat answer on the laptop - which makes it an unusually strong and unusually cheap first slice. Ruled by DEC-78.", status: todo, priority: P2 }
+  - { id: EP-40, kind: epic, parent: FEAT-15, title: "Return audio - the reply follows the turn's origin (wombat side, no Swift)", intent: "Jim chose the expensive option knowingly ('Real audio streamed back to phone/watch') and then made it harder ('Phone is often elsewhere - watch needs its own playback'). DEC-73 left exactly the seam this needs: writer_factory is invoked PER UTTERANCE inside _speak_streaming (source-verified), and StreamingAudioWriter already takes an injected stream_factory returning an AudioOutputStream Protocol. So every playback destination is one more four-method implementation behind an origin-aware factory closure, and voice/tts.py plus sinks/speak.py stay byte-untouched. Watch-first by deliberate architect ordering (the plan proposed phone-first as a de-risk; Jim's value is on the wrist). Ruled by DEC-79.", status: todo, priority: P2 }
+  - { id: EP-41, kind: epic, parent: FEAT-15, title: "Biometrics - ingest, and the three tiers of wombat actually using them", intent: "Jim answered 'all of the above' to how the body data should be used - silent context, grounding, and interruption-worthy events. This epic lands all three in the order that keeps each honest: nightly deterministic facts first (zero new mechanism), then ONE bounded grounding line on the existing context closure, then LAST a closed three-kind event vocabulary through PushSource and the real gate - a NAMED, BOUNDED carve-out from DEC-68(e)'s observations-are-not-interruption-candidates rule, justified because Jim asked for it, never a general reopening. Ruled by DEC-80.", status: todo, priority: P2 }
+  - { id: EP-42, kind: epic, parent: FEAT-15, title: "iOS companion app - pairing, HealthKit sync, phone playback (Swift, operator-verified)", intent: "The SwiftUI iPhone app - QR pairing off the Electron app, HealthKit authorization and anchored sync, background delivery, and the phone-side playback fast path. BLOCKED ON OPERATOR PRECONDITIONS, recorded not assumed: Q-136 (a Mac running Xcode - wombat's own host is Windows 11, so none of this is buildable on the machine wombat runs on) and Q-134 (the 99-dollar-a-year Apple Developer Program, without which every build's signature expires in 7 days). VERIFICATION MODE IS DIFFERENT HERE and is recorded so nobody pretends otherwise - there is no pytest for a watch; these tickets are engineering_level prototype and their acceptance criteria are operator-executed on real hardware, not CI-runnable.", status: blocked, priority: P3 }
+  - { id: EP-43, kind: epic, parent: FEAT-15, title: "watchOS push-to-talk app - the headline ask (Swift, operator-verified)", intent: "Jim's actual request, verbatim - 'It would be a simple app with a push to talk button on the watch. Crazy simple.' Hold to talk, a recording indicator for the whole hold, direct POST over the watch's own Wi-Fi (every Apple Watch model has Wi-Fi, so watch-direct is the PRIMARY path and phone relay is only the fallback), then fetch and play the sealed reply on the watch speaker. Q-m moved this from a button that uploads a file to a small autonomous client and the plan should not pretend otherwise. Same blocked-on preconditions and same operator-verified mode as EP-42.", status: blocked, priority: P3 }
   - id: TK-1
     kind: ticket
     parent: EP-1
@@ -9031,6 +9038,594 @@ nodes:
       - app/src/components/DangerZone.test.tsx
       - app/src/components/index.ts
       - app/src/App.tsx
+  - id: TK-338
+    kind: ticket
+    parent: EP-39
+    title: "Per-device credential store - mint/verify/list/revoke a bearer token PER PAIRED DEVICE, hashed at rest in the OS keyring so both the runtime process and the settings-app process can reach it without a shared in-process object"
+    intent: "The auth substrate the LAN listener stands on, built FIRST and standalone because it is the one piece two separate OS processes must agree about. wombat's existing token model (settings API, chat surface) mints ONE per-launch secret held in memory by the process that binds the socket - structurally wrong here for two reasons: a phone and a watch are TWO devices that must be revocable independently, and pairing happens in the Electron/settings-app process while verification happens in the runtime process (settings_app imports nothing from wombat.bootstrap or wombat.runtime - a structural test enforces it). The OS keyring is the one store both already share (DEC-32 secrets tier), so this ticket adds ONE keyring entry holding a JSON map of device_id -> name, token sha256, paired_at. mint(name) returns the PLAINTEXT token exactly once and never stores it; verify(token) is a constant-time compare against the stored hashes and returns the device_id or None; list() returns names and pairing dates but NEVER a token or a hash; revoke(device_id) removes the entry. No HTTP, no listener, no consent logic - this is a pure store with no network surface at all, which is exactly why it is separable and worth separating."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "ONE new module (src/wombat/devices/credentials.py) plus one unit module driven entirely by an injected in-memory fake keyring. No new dependency (keyring is already a dependency). No HTTP, no config field, no UI, no pg table, no migration."
+    acceptance_criteria:
+      - given: "an empty device store backed by an injected in-memory fake keyring"
+        when: "mint('iphone') then mint('watch') are called"
+        then: "two distinct device_ids and two distinct high-entropy plaintext tokens are returned; the persisted blob contains NEITHER plaintext token, only their sha256 hex digests, asserted by searching the serialized blob for each plaintext substring and finding none."
+      - given: "a store holding the two devices above"
+        when: "verify() is called with the iphone token, the watch token, a truncated token, an unknown token, and an empty string"
+        then: "the first two return their own device_ids, the last three return None, and no call raises."
+      - given: "the same store"
+        when: "list() is called"
+        then: "it returns both device names with their pairing timestamps and NO token and NO hash appears anywhere in the returned structure."
+      - given: "the same store"
+        when: "revoke(watch_device_id) then verify(watch_token) run"
+        then: "verify returns None while the iphone token still verifies - revocation is per-device and never collateral."
+      - given: "a keyring that raises on read (locked/unavailable vault)"
+        when: "verify() is called"
+        then: "it returns None and logs ONE loud warning rather than raising - a broken vault fails CLOSED (nothing authenticates) and never takes a process down."
+    non_goals:
+      - "No HTTP route, no listener, no bind, no consent toggle - TK-339 owns every one of those."
+      - "No QR generation and no Electron/UI surface - TK-342 owns pairing UX."
+      - "No token expiry, rotation, refresh or scope/permission model - a paired device is paired until revoked; add-on shapes are a later decision, not v1."
+      - "No pg table and no migration - pairing is CREDENTIAL custody (DEC-32 keyring tier), which is also why the DEC-75/DEC-76 wipe correctly leaves it alone."
+    depends_on: []
+    files_in_scope:
+      - src/wombat/devices/__init__.py
+      - src/wombat/devices/credentials.py
+      - tests/unit/test_device_credentials.py
+
+  - id: TK-339
+    kind: ticket
+    parent: EP-39
+    title: "DeviceSurface - the consent-gated LAN listener, wombat's first inbound socket off loopback, on an EXPLICIT bind config that defaults to loopback and a FIXED configured port, answering 401 to everything until a route lands"
+    intent: "The one genuinely new architectural box (DEC-78). Built on the ChatSurface precedent verified in source - a stdlib-only asyncio.start_server HTTP/1.1 transport, zero new runtime dependency, runtime-owned via bundle + drivers with the same guarded start/stop posture where a bind failure is ONE loud warning that never touches the drain loop. Three deliberate DIVERGENCES from ChatSurface, each a ruling: (1) the bind host is an EXPLICIT config field defaulting to 127.0.0.1, so an unconfigured wombat is byte-identical to today and reaching the LAN is an act, never a drift; (2) the port is FIXED and configured, NOT the ephemeral port-0 both existing surfaces use - a phone that was paired yesterday must find wombat today, and an ephemeral port makes that impossible; (3) the token is per-device (TK-338) rather than per-launch, because pairing must survive a restart. Auth is a single header checked before ANY routing decision, and the anti-enumeration rule is inherited verbatim from the settings API - 401 on EVERY path including unknown ones, never a 404, so an unauthenticated scanner learns nothing about which routes exist. ATOMICITY-GATE CORRECTION, recorded - this ticket was first drafted with an EMPTY route table, which fails the vertical-slice bar (a socket that answers nothing is one layer, not a behavior). It therefore ships ONE authenticated liveness GET, which is not scope creep but the route TK-349 pairing already has to probe to tell the operator Paired versus unreachable. That makes the ticket end-to-end observable with curl from another machine on the LAN - token, 200, everything else 401 - while the ingest routes stay with TK-340/TK-341."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE new module (src/wombat/devices/surface.py) modeled on chat/surface.py + two config fields + one bundle field + one drivers/start-stop wiring block + one charter sentence + one unit module. No fastapi, no uvicorn, no new dependency. EXACTLY ONE route (the authenticated liveness GET) - TK-340/TK-341 own the ingest routes. No UI, no QR, no pg table, no migration."
+    acceptance_criteria:
+      - given: "a config with both device consent toggles OFF (the default)"
+        when: "assemble_runtime builds the bundle"
+        then: "bundle.device_surface is None, no socket is bound, no port is opened, and the device credential store is never even constructed - inert by ABSENCE, asserted structurally, matching the DEC-68(b) pattern."
+      - given: "a config with a device consent toggle ON and the bind host left at its default"
+        when: "the surface starts"
+        then: "the ACTUAL bound address read off the live socket is 127.0.0.1 - the default reaches nothing beyond this host, proven against the socket rather than against the configured string."
+      - given: "a config with a device consent toggle ON and the bind host explicitly set to 0.0.0.0 with a fixed port"
+        when: "the surface starts and is probed twice across two starts"
+        then: "the bound address is 0.0.0.0, the bound port equals the configured value BOTH times (a fixed, restart-stable port - never an ephemeral one), and ONE loud INFO-or-above log line names the non-loopback bind so a LAN-exposed wombat can never be a silent state."
+      - given: "a started surface and a paired device token"
+        when: "requests arrive with no token, a wrong token, a valid token on an unknown path, and a body larger than the pinned size cap"
+        then: "the first three all return 401 with an identical body and NO 404 is ever produced for any path (anti-enumeration, the settings-API rule); the oversized body is rejected without being read into memory in full."
+      - given: "a surface whose bind fails (port already in use)"
+        when: "serve() starts it"
+        then: "ONE loud warning is logged, serve() continues, and the drain pump, Sweeper, brief timers and every other source are unaffected - identical to the _start_chat_surface guarded posture."
+      - given: "a started surface reachable from a second machine on the LAN and a freshly minted device token"
+        when: "curl requests the liveness route with that token, then without it"
+        then: "the tokened request returns 200 and the untokened one returns 401 - the ticket is verifiable end to end from off-host with no Apple code in existence, which is what makes it a vertical slice rather than a bare socket."
+      - given: "the landed surface"
+        when: "the capability charter diff oracle runs"
+        then: "CAPABILITY_CHARTER carries ONE new conditionally-true sentence about paired personal devices, every pre-existing cannot/never clause is byte-retained, and the sentence is true whether the toggles are on or off - the TK-298 conditional-phrasing precedent."
+    non_goals:
+      - "No routes at all in this ticket - the route table is empty and every authenticated request 404s AFTER auth; TK-340 and TK-341 add the two POSTs."
+      - "No widening of the settings API - it runs in a SEPARATE process that structurally imports nothing from bootstrap/runtime, so it cannot reach the origin register or the sealed-utterance buffer the return-audio path needs (source-verified)."
+      - "No TLS, no mTLS, no Bonjour/mDNS discovery, no UPnP, no NAT traversal, no reverse tunnel, no cloud relay - LAN-only per DEC-78, and wombat NEVER dials a device."
+      - "No change to chat/surface.py or settings_app - both stay byte-untouched and loopback-only."
+    depends_on:
+      - TK-338
+    files_in_scope:
+      - src/wombat/devices/surface.py
+      - src/wombat/config.py
+      - src/wombat/bootstrap.py
+      - src/wombat/runtime.py
+      - src/wombat/persona/capabilities.py
+      - tests/unit/test_device_surface.py
+
+  - id: TK-340
+    kind: ticket
+    parent: EP-39
+    title: "POST /voice - authenticated audio ingest that writes into a REMOTE-origin drop dir a SECOND ASRSource already watches, with stale-audio refusal, so a curl from another machine on the LAN makes wombat answer out loud with zero new transcription machinery"
+    intent: "The whole voice-IN feature, and it is one box. DEC-58 and DEC-64 both say verbatim that the MicCapture to drop-dir to ASRSource loop IS the capture path and IS the reply channel; the only thing a watch cannot do is put the bytes in the directory. This route does exactly that and stops. It writes into a SEPARATE remote drop dir registered as a SECOND ASRSource with its own source_id (asr_remote) - the registry already drives N sources independently, and a distinct source_id keeps idempotency keys, failure isolation and the future origin stamp cleanly separated from desktop PTT without touching sources/asr.py at all. STALE-AUDIO REFUSAL is load-bearing, not polish: DEC-64's 120s reply window means a four-hour-old utterance is not a conversation, so the route refuses audio whose client-stamped capture time is older than a pinned window rather than delivering it late - the app should refuse stale audio, never queue it. Content is validated by extension AND magic-byte sniff against the exact set ASRSource scans, with a pinned size cap; the sha256 content-hash event key ASRSource already computes gives duplicate-POST idempotency for free."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE route handler on the TK-339 surface + one remote-drop-dir config field + one extra ASRSource registration in bootstrap + one unit module + one end-to-end test driving a real temp drop dir through a real ASRSource with a fake transcriber. sources/asr.py is BYTE-UNTOUCHED."
+    acceptance_criteria:
+      - given: "a started surface, a paired token, and a bootstrap that registered the remote ASRSource over a temp drop dir"
+        when: "a valid WAV is POSTed with a fresh capture timestamp"
+        then: "the response is 2xx, the bytes land in the remote drop dir byte-identically, and a subsequent real ASRSource.poll() over that dir yields exactly one SourceEvent whose idempotency key derives from source_id 'asr_remote' and the sha256 of those bytes."
+      - given: "the same setup"
+        when: "the identical WAV is POSTed twice"
+        then: "both POSTs succeed but exactly ONE SourceEvent is produced across polls - the existing content-hash event key supplies idempotency with no new dedupe mechanism."
+      - given: "the same setup"
+        when: "a WAV is POSTed carrying a client capture timestamp older than the pinned staleness window"
+        then: "the route refuses with a 4xx naming staleness, writes NOTHING into the drop dir, and a poll produces zero events - late audio is refused, never delivered late."
+      - given: "the same setup"
+        when: "a .txt file, a file whose extension says .wav but whose magic bytes are not audio, and a body over the size cap are each POSTed"
+        then: "each is rejected 4xx and the drop dir stays empty - extension alone is never trusted."
+      - given: "the desktop PTT path"
+        when: "the whole suite runs after this ticket"
+        then: "sources/asr.py, app/electron/main.ts, app/src/ptt.ts and the desktop drop dir are byte-untouched and every pre-existing voice test passes unchanged - the watch path is strictly ADDITIVE and DEC-58(b)'s window-focused desktop binding is untouched."
+    non_goals:
+      - "No new Transcriber, no new ASR, no new source class, no change to sources/asr.py or the registry contract - a second ASRSource is a REGISTRATION (DEC-5), not a rewrite."
+      - "No chunked/streaming input audio and no live upload - one discrete file POST per press, matching ASRSource's own file contract."
+      - "No origin stamping and no reply routing - TK-343 owns the origin register and adds the stamp at this route."
+      - "No replacement of desktop PTT - DEC-58 stands whole; this is additive."
+    depends_on:
+      - TK-339
+    files_in_scope:
+      - src/wombat/devices/surface.py
+      - src/wombat/devices/voice_ingest.py
+      - src/wombat/config.py
+      - src/wombat/bootstrap.py
+      - tests/unit/test_device_voice_ingest.py
+
+  - id: TK-341
+    kind: ticket
+    parent: EP-39
+    title: "POST /biometrics - a CLOSED numeric/enum/timestamp projection into the existing wombat_observations ledger on channel 'biometric', where any free-text field is a hard 4xx so the taint question never arises rather than being answered"
+    intent: "The passive body-data pipe, and it needs NO migration - wombat_observations is already channel/kind/started_at/ended_at/payload/day_key and the module enforces no channel vocabulary itself (source-verified), so 'biometric' is a new channel VALUE, not a schema change. The custody ruling this ticket makes structural is DEC-80's: HealthKit samples carry free-text metadata written by third-party apps (source app names, device names, user-entered workout titles and notes), so rather than deciding what taint tier that text rides, v1 lets NO free text cross the wire at all. The route validates against a CLOSED per-kind schema of numbers, enumerated strings from a fixed vocabulary, and ISO timestamps; ANY unknown key or any string outside its enum is a hard rejection of the whole batch, pinned by test. That makes derive-then-discard (DEC-68c) literal - the projection happens on the phone, and wombat's own door refuses anything richer. Batched POST with per-sample idempotency so an offline phone can drain a backlog without producing duplicate rows."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE route handler + ONE closed-schema validator module + a per-sample idempotency guard + one unit module. NO migration, NO new table, NO change to observations.py's schema or retention (21 days stays a pinned module constant, DEC-63)."
+    acceptance_criteria:
+      - given: "a started surface, a paired token, and a real ObservationStore against a test DSN"
+        when: "a batch of valid samples across every v1 kind is POSTed"
+        then: "one wombat_observations row per sample exists with channel='biometric', the expected kind, correct started_at/ended_at/day_key, and a payload containing ONLY numbers, enum strings and timestamps."
+      - given: "the same setup"
+        when: "batches are POSTed containing a free-text field, an unknown key, an enum string outside its fixed vocabulary, a NaN/Infinity number, and a value outside its pinned plausible range"
+        then: "EACH batch is rejected 4xx as a WHOLE and writes ZERO rows - partial acceptance of a malformed batch is impossible, and the free-text rejection is asserted by name so 'no free text crosses the wire' is a test and not a comment."
+      - given: "the same setup"
+        when: "the identical batch is POSTed twice (an offline phone re-draining)"
+        then: "the row count after the second POST equals the count after the first - per-sample idempotency, no duplicate rows."
+      - given: "a wipe run per DEC-75 after biometric rows exist"
+        when: "the schema-driven enumeration executes"
+        then: "the biometric rows are archived and emptied with ZERO source edits to wipe.py - proving the information_schema enumeration sweeps this data for free."
+      - given: "the landed route"
+        when: "the observations module and its retention are inspected"
+        then: "observations.py's schema, its 21-day pinned retention constant and every existing screen-channel test are byte-untouched - the biometric channel is a VALUE, never a schema change."
+    non_goals:
+      - "No free text of any kind in v1 - no source app name, no device name, no workout title, no note. DEC-80 names the later grounding-only tier if Jim ever asks; until then the taint question does not arise (DEC-26 untouched)."
+      - "No raw sample series, no heartbeat graphs, no workout GPS routes - closed projected segments only, the DEC-68(c) custody thesis applied literally."
+      - "No consumption - nothing reads these rows in this ticket. TK-346/347/348 own the three tiers."
+      - "No writing back to HealthKit, no medical or clinical interpretation of any value (NG-2), no new retention tier (Q-132 tracks the long-trend question)."
+    depends_on:
+      - TK-339
+    files_in_scope:
+      - src/wombat/devices/surface.py
+      - src/wombat/devices/biometric_ingest.py
+      - src/wombat/bootstrap.py
+      - tests/unit/test_device_biometric_ingest.py
+
+  - id: TK-342
+    kind: ticket
+    parent: EP-39
+    title: "Electron pairing surface - QR mint, paired-device list with per-device revoke, the two consent toggles, and the wipe dialog honestly naming the devices as data the wipe cannot reach"
+    intent: "The human end of pairing. The Electron app mints a QR encoding host, fixed port and the one-time plaintext token, which the phone scans; the watch cannot scan a QR, so the phone hands the watch its own separately-minted token once at setup over WatchConnectivity - a one-shot config transfer, never a runtime dependency. Two SEPARATE consent rows, never one: wombat_observe_biometrics (passive body data collected without an act) and wombat_remote_voice (an explicit mic press and its spoken reply) are genuinely different grants and bundling them would violate DEC-68(b)'s per-channel thesis. The row primitive is the existing Off/On Select (the TK-309 Observation-panel precedent), not a new toggle component. This ticket also closes a real DEC-75 honesty gap the design opened: the phone holds a sync buffer and per-type anchors, the watch may hold untransferred audio, and NONE of it is inside the schema-driven wipe's blast radius - so the wipe dialog's what-does-NOT-die column must name the paired devices, or the wipe quietly overstates itself."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "One settings-API read/mint/revoke route trio + one React panel + one line added to the existing wipe dialog's preserved-items column + component tests. Reuses the existing Select row primitive - no new toggle component, no new design tokens."
+    acceptance_criteria:
+      - given: "the settings app with no devices paired"
+        when: "the Devices panel renders"
+        then: "it shows both consent rows at Off, an empty device list, and a Pair-a-device control; no QR and no token exist until the operator acts."
+      - given: "the operator names and pairs a device"
+        when: "the mint completes"
+        then: "a QR encoding host, the configured fixed port and the plaintext token is shown EXACTLY ONCE with copy affordance, the device appears in the list by name and pairing date, and re-opening the panel shows the device but never the token again."
+      - given: "two paired devices"
+        when: "the operator revokes one"
+        then: "the revoked device disappears from the list, the other is untouched, and the UI states plainly that the revoked device must be re-paired to reconnect."
+      - given: "the consent rows"
+        when: "either is switched On"
+        then: "the restart-to-apply notice appears (DEC-43/Q-118 precedent) and the two rows are independently settable - turning voice on never turns biometrics on."
+      - given: "the DEC-75 danger-zone wipe dialog"
+        when: "it renders with at least one device paired"
+        then: "its what-is-NOT-erased column names the paired devices' own on-device copies (phone sync buffer, per-type anchors, any untransferred watch audio) - the wipe never implies a reach it does not have."
+    non_goals:
+      - "No device management beyond name, pairing date and revoke - no per-device permissions, no rename, no last-seen telemetry (DEC-29 zero-analytics is absolute)."
+      - "No token ever re-displayed after minting, and no token ever written to wombat.settings.json or any log - keyring tier only (DEC-32)."
+      - "No Bonjour/auto-discovery - host and port are entered or encoded once at pairing (Bonjour deferred)."
+      - "No change to the wipe's actual behavior - this adds one honest sentence to its dialog, nothing more."
+    depends_on:
+      - TK-338
+    files_in_scope:
+      - src/wombat/settings_app/api.py
+      - app/src/components/DevicesPanel.tsx
+      - app/src/components/DevicesPanel.test.tsx
+      - app/src/components/DangerZone.tsx
+      - app/src/components/index.ts
+      - app/src/App.tsx
+
+  - id: TK-343
+    kind: ticket
+    parent: EP-40
+    title: "The reply comes out of the WATCH - LastTurnOriginRegister plus the origin-aware writer_factory closure plus BufferedUtteranceSink plus the sealed-utterance GET, one vertical slice, with every local and proactive path pinned byte-identical"
+    intent: "MERGED BY THE ATOMICITY GATE, recorded - this was first drafted as two tickets, a register-and-closure seam followed by the sink. The seam ticket failed the vertical-slice bar outright: with the remote resolver returning None its ENTIRE acceptance was that nothing changed, which spends a whole build-and-verify pass proving a no-op. Merged, the slice is one observable behavior - a turn that came from a watch is answered TO that watch - and every byte-identity criterion survives as a regression pin rather than as the point. THE SEAM, verified against source before pricing and it resolves favorably: voice/tts.py _speak_streaming calls writer_factory() PER UTTERANCE inside the speak path, not once at construction, and voice/select.py currently passes the StreamingAudioWriter CLASS ITSELF as that zero-arg callable - so per-turn routing is swapping a class reference for a closure returning StreamingAudioWriter(stream_factory=...), an ordinary closure change with no lifecycle problem. ORIGIN RIDES A REGISTER because both obvious carriers are ruled out by source: compose/templates.format_payload_fields renders EVERY payload key into the mouth prompt, so an origin key would change what the reply SAYS, and QueueItem has no source_id field at all. The register mirrors LastSpokenRegister verbatim - single slot, TTL, in-memory, restart-forgets - threading state between the same two points DEC-64 already threads state between. BufferedUtteranceSink is a four-method AudioOutputStream implementation and that is the whole class: write accumulates, stop seals and publishes, abort discards, close is a no-op; frame discipline, the shared STREAM_SAMPLE_RATE and the headerless raw-PCM wire format are all INHERITED from StreamingAudioWriter, so nothing re-encodes and DEC-73(d)s deliberate absence of RIFF headers is preserved. THE BUFFER LIVES ON WOMBAT, in memory, ONE slot, TTL near DEC-64s reply window, discarded on fetch or expiry - putting it on the phone would reintroduce exactly the dependency Q-m rules out, and keeping it off disk means wombat never accumulates unclaimed recordings and the wipe has nothing new to reach. NO LAPTOP FALLBACK when every remote branch fails - the turn came from the watch precisely BECAUSE Jim was not at the laptop, so a rescue speaks into an empty room while logging success, which is DEC-73(e)s lie-of-silence inverted."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE register module (mirroring voice/reply_context.py) + ONE sink class + ONE single-slot TTL store + ONE closure at the voice/select.py construction seam + ONE origin stamp at the TK-340 route + ONE GET route on the TK-339 surface + bundle threading + two unit modules. voice/tts.py, sinks/speak.py and StreamingAudioWriter are BYTE-UNTOUCHED - asserted, not assumed."
+    acceptance_criteria:
+      - given: "a runtime with no paired device reachable, or the device toggles off"
+        when: "any reply is spoken - desktop PTT turn, chat turn, morning brief, proactive surfacing"
+        then: "the audio path is byte-identical to today (the local sounddevice stream opens exactly as before) and every pre-existing streaming-playback and speak test passes unchanged."
+      - given: "a remote voice turn accepted at the voice route, then a second turn from the laptop"
+        when: "each reply is spoken"
+        then: "the factory is invoked once per utterance and the two speaks route DIFFERENTLY - proving the closure reads the register at CALL time rather than at construction time."
+      - given: "a BufferedUtteranceSink driven through a real StreamingAudioWriter with a chunked fake Fish stream including a torn odd-byte chunk"
+        when: "every chunk is written and stop() seals the utterance"
+        then: "the sealed buffer equals the concatenated source PCM byte-for-byte and no torn frame is ever submitted - frame discipline is INHERITED, never re-implemented in the sink."
+      - given: "a sealed utterance published in the single slot"
+        when: "an authenticated GET fetches it, then the same GET is repeated, and separately a different utterance is left to age past the pinned TTL"
+        then: "the first fetch returns the full PCM plus the sample rate read from the SAME shared STREAM_SAMPLE_RATE constant; the repeat finds nothing (single-fetch-then-discard); the aged one is gone; and no audio was written to disk at any point on this path."
+      - given: "a remote turn whose register entry has aged past the pinned TTL, and separately a brief or proactive surfacing while a remote origin IS fresh"
+        when: "each is spoken"
+        then: "BOTH play LOCALLY - a stale origin never misroutes audio to a device that stopped waiting, and only turn-originated replies are ever eligible for a remote sink, so wombat structurally cannot push unsolicited audio at a wrist."
+      - given: "a mid-stream transport failure after at least one chunk has been written"
+        when: "the speak path unwinds"
+        then: "abort() discards the partial buffer, PartialSpeechError(played_any=True) propagates, SpeakSink fires on_spoken with ONE loud warning, and LastSpokenRegister still updates so replying_to threading survives - Jim can walk back into range and continue."
+      - given: "a remote-origin turn where the watch is unreachable and no phone session exists"
+        when: "the reply is ready"
+        then: "it degrades LOUDLY with played_any=False and byte-identical-to-any-other-failure handling, and it does NOT play on the laptop speakers - asserted explicitly, because a silent rescue into an empty room is the exact failure this rules out."
+      - given: "the composed payload of a remote voice turn"
+        when: "format_payload_fields renders it"
+        then: "no origin key appears anywhere in the prompt - the register carries origin and the payload wire is byte-unchanged, so the mouth wording cannot vary by where the turn came from."
+    non_goals:
+      - "No phone WebSocket and no live remote streaming - TK-345 owns the phone fast path and adds its branch to this tree."
+      - "No sentence-chunked or progressive publishing - the accepted latency regression is recorded with its revisit trigger in DEC-79(i) and DEF-21; do not build it until Jim reports the pause."
+      - "No disk persistence, no second slot, no queue of utterances, no retention tier - one in-memory slot with a TTL, nothing for the wipe to reach."
+      - "No laptop fallback on remote failure, ever - ruled explicitly."
+      - "No QueueItem schema change, no origin payload key, no idempotency-key string parsing inside a sink."
+      - "No persistence of the origin register - a restart forgets, exactly like LastSpokenRegister; a reply across a restart is not a conversation."
+      - "No re-encoding, no RIFF header, no resample - the raw PCM the Fish stream already carries goes out unchanged."
+      - "No change to voice/tts.py, sinks/speak.py, speech_shape or the compose path."
+    depends_on:
+      - TK-340
+    files_in_scope:
+      - src/wombat/voice/turn_origin.py
+      - src/wombat/voice/remote_sinks.py
+      - src/wombat/voice/select.py
+      - src/wombat/devices/surface.py
+      - src/wombat/devices/voice_ingest.py
+      - src/wombat/bootstrap.py
+      - tests/voice/test_turn_origin.py
+      - tests/voice/test_remote_sinks.py
+  - id: TK-345
+    kind: ticket
+    parent: EP-40
+    title: "RemoteAudioStream + the phone WebSocket fast path - the one device that can hold a live session gets DEC-73's streaming win back, added as a BRANCH on the existing decision tree rather than a second design"
+    intent: "The cheaper, better-UX branch, deliberately sequenced AFTER the watch rather than before it. The research plan proposed phone-first as a de-risk; the architect inverts that because Jim's value is on the wrist (Q-m) and the shared parts - the origin register, the factory closure, the resolver, the decision tree - all land in TK-343/TK-344 anyway, so building the phone first would de-risk work that is already done by the time it runs. RemoteAudioStream is a third AudioOutputStream implementation that writes each chunk to an open WebSocket as it arrives, preserving time-to-first-sound whenever Jim's phone happens to be to hand. It costs almost nothing once the seam exists, which is exactly why it is worth having and exactly why it is not load-bearing. The system stays FILE-SHAPED BY DEFAULT with one streaming fast path for the one device that can exploit it - the watch never opens a WebSocket at all. played_any=True here is a slight overstatement (frames reached the socket, not necessarily the ear), bounded by the sub-second jitter buffer and recorded honestly, exactly as DEC-73(e) already recorded a materially identical approximation."
+    status: todo
+    priority: P3
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE sink class + ONE WebSocket upgrade handler on the TK-339 stdlib surface + the resolver's phone branch + one unit module. If a hand-rolled WebSocket frame handler on the stdlib transport exceeds the budget, STOP and re-scope - the watch path already works without this."
+    acceptance_criteria:
+      - given: "an open authenticated phone session and a remote-origin turn"
+        when: "the reply is spoken"
+        then: "chunks reach the socket as they arrive - the first chunk is observed on the wire before the last chunk is synthesized, proving the DEC-73 streaming win is preserved on this branch."
+      - given: "both a live phone session and a reachable watch"
+        when: "a remote-origin reply is routed"
+        then: "the PHONE wins - the full decision tree order is pinned by test: local origin to laptop, else live phone session, else watch buffered, else loud degrade."
+      - given: "a phone session that drops mid-utterance after chunks were sent"
+        when: "the speak path unwinds"
+        then: "PartialSpeechError(played_any=True) propagates, on_spoken fires with ONE loud warning, and NO fallback to the watch or the laptop is attempted mid-utterance."
+      - given: "no phone session open"
+        when: "a remote-origin reply is routed"
+        then: "behavior is byte-identical to the TK-344 watch-only world and every TK-344 test still passes."
+    non_goals:
+      - "No wombat-initiated connection - the phone opens the socket; wombat never dials out (DEC-78, NG-10)."
+      - "No WebSocket for the watch - it stays file-shaped both directions by ruling."
+      - "No fastapi/uvicorn in the runtime process - the stdlib transport stands or this ticket re-scopes."
+      - "No reconnect-and-resume of a partially-delivered utterance - a dropped session is a partial reply, honestly reported."
+    depends_on:
+      - TK-343
+    files_in_scope:
+      - src/wombat/voice/remote_sinks.py
+      - src/wombat/devices/surface.py
+      - src/wombat/voice/select.py
+      - tests/voice/test_remote_sinks_phone.py
+
+  - id: TK-346
+    kind: ticket
+    parent: EP-41
+    title: "Tier 1 - dream_biometrics, an LLM-FREE deterministic nightly pass turning the biometric ledger into templated third-person behavior facts, the dream_observe pattern applied to a second channel"
+    intent: "The first and cheapest of Jim's three tiers, and it introduces ZERO new mechanism. dream_observe (TK-314) already reads wombat_observations, distills regularities with deterministic templates and writes UserFactsStore.upsert_fact(source='behavior') - this is that stage pointed at channel='biometric'. LLM-FREE is the point: deterministic templates over closed numeric segments can never state motive (CON-6 by construction), and the model never sees a single biometric row. Provenance is source='behavior' by ORIGIN, exactly as DEC-70(h) ruled for screenpipe - the distillation mechanism does not set provenance. Sequenced FIRST of the three tiers deliberately: it is the tier that compounds the user model, it costs no prompt budget, and it produces evidence about whether the data is even worth grounding on before tier 2 spends prompt space on it."
+    status: todo
+    priority: P2
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE new dream stage module on the dream_observe pattern + its pathway registration + one unit module. NO model call, NO budget-guard touch, NO change to dream_observe or dream_facts, NO new store."
+    acceptance_criteria:
+      - given: "a seeded biometric ledger window with regular sleep and resting-HR segments"
+        when: "dream_biometrics runs"
+        then: "it writes bounded third-person templated facts with source='behavior' and makes ZERO model calls - asserted with a spy model that fails the test if called at all."
+      - given: "a ledger window with no biometric rows, or with the consent toggle off"
+        when: "the stage runs"
+        then: "it writes nothing, logs one skip line, and transitions onward without raising - absent data is never an error."
+      - given: "any generated fact"
+        when: "the CON-6 motive screen runs over the template set"
+        then: "no template can express why, intent, mood, cause or a clinical claim - proven over the closed template vocabulary rather than sampled outputs, and NG-2's no-clinical-function bar holds by construction."
+      - given: "two consecutive nights over overlapping windows"
+        when: "the stage runs twice"
+        then: "facts upsert rather than accumulating duplicates, and the per-night write count is clamped exactly as dream_observe's is."
+    non_goals:
+      - "No model call anywhere on this path - this is the LLM-free dream lane, not the DEC-23 dream_facts lane."
+      - "No grounding line and no queue events - TK-347 and TK-348 own those."
+      - "No clinical, diagnostic or health-advice framing in any template (NG-2), and no trend analysis beyond the pinned 21-day retention window (Q-132 tracks the longer-trend question)."
+    depends_on:
+      - TK-341
+    files_in_scope:
+      - src/wombat/stages/dream_biometrics.py
+      - src/wombat/pathways/dream.py
+      - src/wombat/bootstrap.py
+      - tests/unit/test_dream_biometrics.py
+
+  - id: TK-347
+    kind: ticket
+    parent: EP-41
+    title: "Tier 2 - ONE bounded biometric line on the existing context closure, chat/voice payloads only, char-capped, absent-not-wrong"
+    intent: "Grounding, on DEC-68(d)(1)'s precedent exactly - the ONE existing composition-root context closure gains one more bounded key on chat and voice payloads only, never brief, draft or reflection. One line, hard char cap, freshness-gated: stale or missing data means the key is ABSENT, never a stale or guessed value, because a wrong body-state claim in the mouth's prompt is worse than none. The TK-298 drift pin over the closure's exact key set is extended deliberately with the ticket, not silently. This is the only tier that spends prompt budget and the only one that widens what rides the existing DeepSeek egress - recorded in DEC-80(e) and nowhere silently; the widening is a fixed-shape line of numbers, not free text, because TK-341's door already refuses free text."
+    status: todo
+    priority: P2
+    estimate: S
+    engineering_level: production
+    complexity_budget: "One bounded projection function + one key on the existing closure + the drift-pin extension + one unit module. NO new closure, NO new channel, NO change to compose or the prompt templates."
+    acceptance_criteria:
+      - given: "fresh biometric rows and a chat or voice turn"
+        when: "the context closure builds the payload"
+        then: "exactly ONE additional key carries a single line under its pinned char cap, and format_payload_fields renders it into the mouth prompt with no other payload change."
+      - given: "no biometric rows, data older than the pinned freshness window, or the consent toggle off"
+        when: "the closure runs"
+        then: "the key is ABSENT entirely - never empty-string, never a stale number, never a placeholder - and the payload is byte-identical to today's."
+      - given: "a brief, a Gmail draft, or a reflection"
+        when: "its prompt is built"
+        then: "no biometric key appears anywhere - pinned by test, the same brief/draft/reflection exclusion DEC-68(d) already holds."
+      - given: "the landed closure"
+        when: "the TK-298 drift-pin test runs"
+        then: "it asserts the NEW exact key set and fails loudly on any future silent key addition."
+    non_goals:
+      - "No free text, no raw values beyond the fixed projected line, no history - one line, capped."
+      - "No brief/draft/reflection grounding, no gate input, no tool-dispatch input (DEC-26 untouched)."
+      - "No second context closure - the ONE closure grows a key, per DEC-68(d)."
+    depends_on:
+      - TK-341
+    files_in_scope:
+      - src/wombat/bootstrap.py
+      - src/wombat/devices/biometric_projection.py
+      - tests/unit/test_compose_stage.py
+      - tests/unit/test_biometric_projection.py
+
+  - id: TK-348
+    kind: ticket
+    parent: EP-41
+    title: "Tier 3 - a CLOSED three-kind biometric event vocabulary through PushSource and the REAL gate, the named bounded carve-out from DEC-68(e), defaulting to hold-silently"
+    intent: "The tier that needs the most care and therefore comes LAST. DEC-68(e) ruled that observations enter no queue and trigger no surfacing; Jim's 'all of the above' asks for a narrow exception, so DEC-80(d) grants it as a NAMED, BOUNDED carve-out with a CLOSED event vocabulary - never a general reopening of the rule. Exactly three deterministic kinds: a workout ended, a resting-HR reading outside its own pinned personal band, and a sleep-debt threshold crossed. Each is derived deterministically (no model decides what becomes an event, NG-4/CON-2), rides PushSource (the shipped push-shaped producer, so sources/base.py and the registry contract are byte-untouched), enters the EXISTING queue and is rated by the EXISTING gate with a NEW EventClass whose default ratings score BELOW the shipped threshold - so the DEFAULT posture is hold-silently and personalization is the existing dream_tune machinery. No gate special-casing, no bypass, no flush exemption, no ceiling raised (NG-3)."
+    status: todo
+    priority: P3
+    estimate: M
+    engineering_level: production
+    complexity_budget: "ONE deterministic event deriver + a PushSource registration + ONE new EventClass with default ratings + one unit module + one gate-level test proving default-hold at the REAL gate. gate_stage.py and sources/base.py BYTE-UNTOUCHED; no RATING_PARAMS_VERSION bump unless the schema actually changes."
+    acceptance_criteria:
+      - given: "biometric rows crossing each of the three pinned conditions"
+        when: "the deriver runs"
+        then: "exactly one event of the matching kind is produced per crossing, debounced so a fluctuating value cannot emit repeatedly, and NO other kind can ever be produced - the vocabulary is closed and asserted exhaustively."
+      - given: "each of the three event kinds at its default ratings"
+        when: "each is scored by the REAL assembled gate at the shipped threshold"
+        then: "every one is HELD - default-hold is proven runnable at the real gate, not asserted in prose."
+      - given: "the landed deriver"
+        when: "the model-free structural check runs"
+        then: "no model call exists anywhere on the derivation or rating path (NG-4/CON-2), asserted with a spy that fails on any call."
+      - given: "the existing queue, registry, gate stage and daily ceilings"
+        when: "the whole suite runs after this ticket"
+        then: "sources/base.py, the SourceRegistry contract, gate_stage.py and every ceiling constant are byte-untouched and every pre-existing gate test passes - a new EventClass is a vocabulary addition, never a gate change."
+    non_goals:
+      - "No fourth event kind and no watchlist/threshold configuration surface - the closed set is the carve-out's whole boundary; widening it is a NEW decision."
+      - "No LLM deciding what becomes an event or how it rates."
+      - "No clinical alerting, no emergency detection, no health advice (NG-2) - these are ordinary gate candidates that usually lose."
+      - "No raising of any daily ceiling or flush cap (NG-3), and no bypass of the deterministic gate for any biometric event (CON-3)."
+    depends_on:
+      - TK-341
+    files_in_scope:
+      - src/wombat/devices/biometric_events.py
+      - src/wombat/rating/params.py
+      - src/wombat/bootstrap.py
+      - tests/unit/test_biometric_events.py
+      - tests/gate/test_biometric_default_hold.py
+
+  - id: TK-349
+    kind: ticket
+    parent: EP-42
+    title: "iOS app skeleton - QR pairing into the Keychain, HealthKit authorization, Sync-now with a persisted per-type anchor, batched POST (SwiftUI, foreground only, operator-verified on hardware)"
+    intent: "The first Swift slice, deliberately foreground-only so it is testable by a human in one sitting. Scan the QR the Electron app mints, store host/port/token in the iOS Keychain, request per-type HealthKit authorization for the Q-131 set, and on an explicit Sync-now run an HKAnchoredObjectQuery per type from a PERSISTED anchor so only new samples ever move. Project every sample to the closed numeric/enum shape BEFORE it leaves the phone (derive-then-discard, literally on-device) and POST it batched. NSLocalNetworkUsageDescription is required in Info.plist or iOS silently blocks the LAN connection. VERIFICATION MODE, recorded honestly: there is no pytest for a phone - every acceptance criterion below is executed by the operator against real hardware and the real wombat listener, and the ticket is engineering_level prototype for exactly that reason."
+    status: blocked
+    priority: P3
+    estimate: L
+    engineering_level: prototype
+    complexity_budget: "One SwiftUI app target with pairing, authorization, sync and settings screens. No background execution (TK-350), no audio (TK-351), no watch target (EP-43). If the Xcode/Mac precondition (Q-136) is unmet this ticket cannot start at all."
+    acceptance_criteria:
+      - given: "the app freshly installed and a QR minted by the Electron app"
+        when: "the operator scans it"
+        then: "host, port and token are stored in the Keychain, the app shows Paired, and a connectivity probe against the listener succeeds from the phone on the home LAN."
+      - given: "a paired app"
+        when: "HealthKit authorization is requested"
+        then: "the operator sees one prompt per requested type and only granted types are ever queried afterward."
+      - given: "a paired, authorized app"
+        when: "Sync now is tapped twice in a row"
+        then: "the first run POSTs the available samples and wombat_observations gains the expected biometric rows; the second run POSTs nothing new because the persisted anchor advanced - verified by row count on the wombat side."
+      - given: "a granted type whose permission the operator then revokes in iOS Settings"
+        when: "Sync now runs"
+        then: "the app surfaces last-successful-sample age and flags the type as possibly revoked rather than silently reporting success - HealthKit returns empty with no error, and silence must never be read as a signal."
+      - given: "the app off the home LAN, or wombat not running"
+        when: "Sync now runs"
+        then: "it fails visibly with a plain reason and retains its anchors - a failed sync never advances an anchor and never loses samples."
+    non_goals:
+      - "No background delivery, no HKObserverQuery, no offline drain queue - TK-350 owns all of it."
+      - "No audio in or out on the phone - TK-351 owns it."
+      - "No free-text HealthKit metadata may be projected or transmitted, ever (DEC-80)."
+      - "No writing to HealthKit, no iCloud sync of health data, no analytics/telemetry of any kind (DEC-29 absolute), no App Store distribution."
+    depends_on:
+      - TK-341
+      - TK-342
+    files_in_scope:
+      - ios/WombatCompanion/
+    design_refs:
+      - planning/design/ios-companion-app-plan.md
+
+  - id: TK-350
+    kind: ticket
+    parent: EP-42
+    title: "iOS background biometric sync - HKObserverQuery plus enableBackgroundDelivery, background URLSession, offline buffering with drain-on-reconnect, and an app-side reset that gives the DEC-75 wipe a reach it otherwise lacks"
+    intent: "Turns Sync-now into 'wombat knows today's sleep and resting HR without Jim thinking about it' - Jim's 'real time is preferred', read as NOT-STALE pending Q-130. Expect hourly-ish wakes; that is the platform ceiling and Apple's own recommendation, and the app should not pretend to more. Offline buffering with drain-on-reconnect is what makes LAN-only tolerable for biometrics (unlike voice, which refuses to be late by design). The app-side reset is not a nicety: the phone's buffer and per-type anchors sit OUTSIDE the DEC-75 schema-driven wipe's blast radius, so without a device-side reset the wipe's promise is quietly incomplete - TK-342 names the gap in the dialog and this ticket gives the operator the control that closes it."
+    status: blocked
+    priority: P3
+    estimate: L
+    engineering_level: prototype
+    complexity_budget: "Background delivery, background URLSession, a persisted local buffer and one reset control. No new screens beyond a sync-status row and the reset. No audio."
+    acceptance_criteria:
+      - given: "background delivery enabled and the app backgrounded"
+        when: "new samples land in HealthKit over several hours"
+        then: "wombat_observations gains the corresponding rows without the operator opening the app, observed over a real multi-hour window."
+      - given: "the phone off the home LAN with new samples arriving"
+        when: "it later rejoins the LAN"
+        then: "the buffered samples drain in order, produce no duplicate rows (per-sample idempotency), and the buffer empties."
+      - given: "wombat not running while the phone tries to sync"
+        when: "wombat later starts"
+        then: "the phone drains successfully on its next wake and no samples were dropped."
+      - given: "the app-side reset"
+        when: "the operator runs it"
+        then: "the local buffer and every per-type anchor are cleared and the next sync re-reads from the anchorless start, so the operator can genuinely start clean on BOTH sides of a DEC-75 wipe."
+    non_goals:
+      - "No promise of real-time or per-minute delivery - hourly-ish is the platform ceiling and the UI must say so rather than imply more."
+      - "No HKWorkoutSession and no continuous live HR - that is a separate default-OFF mode gated on Q-130, with real battery cost and phantom workouts polluting Activity rings."
+      - "No silent failure - a stalled sync must be visible in the app."
+    depends_on:
+      - TK-349
+    files_in_scope:
+      - ios/WombatCompanion/
+    design_refs:
+      - planning/design/ios-companion-app-plan.md
+
+  - id: TK-351
+    kind: ticket
+    parent: EP-42
+    title: "iPhone voice - push-to-talk capture POSTed to the listener, plus the live WebSocket playback client with a jitter buffer, the fast path for when the phone IS to hand"
+    intent: "The phone's half of the voice loop, and the one device that can hold a live session. Hold to talk with a visible recording indicator for the whole hold (DEC-58(f)/Q-97 push-to-activate, strengthened rather than bent), POST the clip, then receive the reply as chunked PCM over the WebSocket and play it through a small jitter buffer using the same shared sample rate the pairing handshake carries - so the phone and wombat structurally cannot disagree about format. This is the best-UX branch and it is explicitly NOT the primary design: Jim's phone is often elsewhere, which is why the watch path is the one that must work."
+    status: blocked
+    priority: P3
+    estimate: L
+    engineering_level: prototype
+    complexity_budget: "Recording, upload, a WebSocket client and a jitter-buffered player. No watch code, no HealthKit changes."
+    acceptance_criteria:
+      - given: "a paired phone on the home LAN"
+        when: "the operator holds the button, speaks, and releases"
+        then: "a recording indicator is visible for the entire hold, the clip uploads, and wombat's reply is HEARD from the phone - the full round trip end to end."
+      - given: "the same setup"
+        when: "the round trip is timed over several turns"
+        then: "first sound arrives within the recorded phone-path budget and the measured figures are written back into DEC-79's record - measured, not assumed."
+      - given: "the phone leaving Wi-Fi mid-reply"
+        when: "the socket drops"
+        then: "the app reports the reply as partial rather than showing success, matching played_any=True semantics on the wombat side."
+      - given: "no reachable wombat"
+        when: "the operator holds the button"
+        then: "the app refuses to record with a plain reason rather than capturing audio it cannot deliver."
+    non_goals:
+      - "No VAD, no wake word, no always-listening, no auto-open mic - push-to-activate only (Q-97/DEF-11 untouched)."
+      - "No on-device transcription and no on-device model - the phone is a microphone and a speaker, never a second brain."
+      - "No unprompted playback - the phone only ever plays a reply to a turn it originated."
+    depends_on:
+      - TK-349
+      - TK-345
+    files_in_scope:
+      - ios/WombatCompanion/
+    design_refs:
+      - planning/design/ios-companion-app-plan.md
+
+  - id: TK-352
+    kind: ticket
+    parent: EP-43
+    title: "watchOS push-to-talk - hold to talk with a recording indicator, direct POST over the watch's OWN Wi-Fi with WatchConnectivity relay as the fallback, stale-audio refusal, and the reply still coming out of the laptop"
+    intent: "Jim's headline ask - 'a simple app with a push to talk button on the watch. Crazy simple.' The research finding that reshapes this: EVERY Apple Watch model including GPS-only has Wi-Fi and can join networks the paired iPhone has previously joined even with the phone absent, so watch-direct to the LAN listener is the PRIMARY path and phone relay is only the fallback - the inverse of the usual assumption, and it is why this is buildable at all. Deliberately SHIPPABLE AND TESTABLE WITHOUT ANY RETURN AUDIO - at the end of this ticket the reply plays on the laptop, which is a real and verifiable milestone and de-risks TK-353 completely. Stale-audio refusal lives on the watch too, not just at the route, so a watch that was off-network does not deliver a four-hour-old utterance into a conversation that ended. The watch receives its OWN token from the phone once at setup over WatchConnectivity - a one-shot config transfer, never a runtime dependency on the phone."
+    status: blocked
+    priority: P3
+    estimate: L
+    engineering_level: prototype
+    complexity_budget: "One watchOS target - one hold control, a recording indicator, AVAudioRecorder, an HTTP POST, a WatchConnectivity relay fallback, and the one-shot token handoff. NO playback (TK-353), NO HealthKit on the watch, NO workout session."
+    acceptance_criteria:
+      - given: "a watch paired via the phone's one-shot token handoff, on the home LAN, with the phone deliberately powered off or left in another room"
+        when: "the operator holds the button and speaks"
+        then: "the clip POSTs DIRECTLY from the watch to the listener and wombat answers out loud on the laptop - proving the watch does not need the phone, which is the whole premise."
+      - given: "the same watch with the phone nearby and the watch unable to reach the LAN directly"
+        when: "the operator holds the button and speaks"
+        then: "the clip relays via WatchConnectivity through the phone and still reaches wombat - the fallback is exercised, not assumed."
+      - given: "a hold of any duration"
+        when: "the operator is recording"
+        then: "a recording indicator is visible for the ENTIRE hold and the mic closes on release - push-to-activate with a visible indicator, DEC-58(f) strengthened, no VAD and no wake word anywhere."
+      - given: "a watch that was off-network when the operator spoke"
+        when: "it later regains the LAN"
+        then: "the clip is REFUSED as stale rather than delivered late, and the operator is told - a four-hour-old utterance is not a conversation."
+      - given: "no reachable wombat by either path"
+        when: "the operator holds the button"
+        then: "the app says so plainly and does not capture audio it cannot deliver."
+    non_goals:
+      - "No return audio in this ticket - the reply plays on the laptop, and that is a deliberate shippable milestone."
+      - "No HealthKit reads and no HKWorkoutSession on the watch - the paired watch already syncs into the phone's HealthKit store for free (Path C), and a continuous session is a separate default-OFF mode."
+      - "No VAD, no wake word, no always-listening, no complication, no background execution - the app is foregrounded by construction because Jim just held the button."
+      - "No replacement of desktop PTT - DEC-58 stands and the watch is additive."
+      - "No away-from-home operation - LAN-only (Q-133)."
+    depends_on:
+      - TK-340
+      - TK-349
+    files_in_scope:
+      - ios/WombatCompanion Watch App/
+    design_refs:
+      - planning/design/ios-companion-app-plan.md
+
+  - id: TK-353
+    kind: ticket
+    parent: EP-43
+    title: "watchOS playback - fetch the sealed utterance over one authenticated GET and play it on the watch speaker, with the charging dead-state and the unreachable state surfaced honestly rather than failing silently"
+    intent: "The phase Jim actually asked for when he said the phone is often elsewhere. Pull, never push - the watch asks for its utterance and wombat never dials out, which keeps the connection direction intact and means a watch that was briefly off-network simply fetches late or gives up. One GET, no socket lifecycle on a constrained device, and a failed GET is retryable where a stalled socket is not. TWO REAL COSTS the app must state rather than hide: roughly ten minutes of watch-speaker playback costs about an hour of watch battery, so a thirty-second reply is worth roughly three minutes of battery and a chatty day is a measurable dent; and speaker playback is NOT SUPPORTED while the watch is on the charger, which is a genuine dead state where PTT works, wombat replies, and nothing plays. Bluetooth headphones win the audio route automatically when present, which is fine and better - it is simply not the case Jim described."
+    status: blocked
+    priority: P3
+    estimate: L
+    engineering_level: prototype
+    complexity_budget: "Fetch, buffer, play, and the state messaging. No streaming, no gapless sentence-chunk playback, no background fetch."
+    acceptance_criteria:
+      - given: "a watch-originated turn on the home LAN with the phone absent"
+        when: "wombat finishes composing and speaking the reply into the buffered sink"
+        then: "the watch fetches the sealed utterance over ONE authenticated GET and plays it audibly through the watch speaker - the complete round trip Jim asked for."
+      - given: "the same round trip"
+        when: "it is timed over several turns"
+        then: "the delay between release and first sound is measured and written back into DEC-79's record, so the accepted latency regression is a known number rather than an estimate, and DEF-21's revisit trigger has real evidence behind it."
+      - given: "the watch sitting on its charger"
+        when: "a reply is ready"
+        then: "the app states plainly that it cannot play while charging rather than failing silently - the dead state is surfaced, which is the whole point of naming it."
+      - given: "the watch unable to reach wombat when the reply is ready"
+        when: "the fetch fails or times out"
+        then: "the app says so, the wombat side degraded loudly with played_any=False, and NOTHING played on the laptop speakers - asserted on both ends."
+      - given: "Bluetooth headphones connected to the watch"
+        when: "a reply plays"
+        then: "audio routes to the headphones automatically and the operator confirms it - the better-audio path is not broken by the speaker-focused design."
+    non_goals:
+      - "No live streaming to the watch - buffer-then-play is what a constrained, opportunistically-connected device can do reliably, and the regression is accepted and recorded in DEC-79."
+      - "No sentence-chunked publishing (DEF-21) - build it only when Jim reports the pause bothering him."
+      - "No fallback to laptop speakers when the watch cannot be reached - ruled explicitly in DEC-79."
+      - "No unprompted playback - the watch only ever plays a reply to a turn it originated (DEC-79's recorded privacy property)."
+    depends_on:
+      - TK-352
+      - TK-343
+    files_in_scope:
+      - ios/WombatCompanion Watch App/
+    design_refs:
+      - planning/design/ios-companion-app-plan.md
 governance:
   # --- Open questions (all resolved at /plan-clarify, kept for traceability) ---
   - { id: Q-1, type: open_question, status: resolved, scope: FEAT-2, date_raised: "2026-06-19", date_updated: "2026-06-19", title: "What does 'necessary' mean concretely for the interruption gate?", resolution: "Resolved by DEC-1 (two-axis Urgency x Cognitive Load pressure engine).", links: ["DEC-1"] }
@@ -10226,6 +10821,47 @@ governance:
                      "A dedicated wombat-wipe console script instead of a wipe subcommand - REJECTED, TK-335's own AC text pins `python -m wombat wipe`, and a second entry point is a second thing to keep in sync",
                      "Leaving TK-335 AC3 keyed on resolved params and letting the builder invent a neo4j param - REJECTED, that invents config surface the complexity_budget forbids, in order to test a guard whose whole point is detecting somebody else's configuration"],
       links: ["DEC-75", "DEC-76", "ISS-41", "TK-334", "TK-335", "TK-336", "TK-337", "EP-38", "Q-46", "DEC-42", "NG-3"] }
+  - { id: ASMP-3, type: assumption, status: accepted, scope: FEAT-15, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Voice and biometric bytes crossing the home LAN between wombat's host and the user's OWN paired phone/watch is an accepted residency tradeoff - the same class of named, bounded exception as ASMP-1's DeepSeek egress",
+      description: "CON-7 says keep user data on the user's host by default and NG-7 forbids cloud-first storage. This design moves audio and projected biometric numbers OFF the host - never to a third party, never to the internet, only across the user's own home network to two devices the user owns and personally paired, over a listener that must be explicitly configured to leave loopback at all. No cloud service, no relay, no APNs, no account, no third-party custody appears anywhere in the path; the DEFAULT configuration remains byte-identical to today (bind defaults to 127.0.0.1, both consent toggles default OFF, nothing constructed). What is genuinely new and therefore named here rather than left implicit: a home LAN is a shared trust boundary - another device on Jim's Wi-Fi can attempt to reach the listener, which is why per-device tokens, 401-on-every-route anti-enumeration, size caps and revoke exist from the first ticket rather than being retrofitted. Jim's own answers supply the acceptance - LAN-only for MVP (explicitly rejecting cloud as colliding with NG-7) and 'Real audio streamed back to phone/watch'. Recorded as an assumption rather than buried inside DEC-78 so that a future reader sees the residency cost stated in the same register as ASMP-1.",
+      validation_method: "The default-configuration invariant is a TEST, not a claim - an unconfigured wombat binds nothing beyond loopback and constructs no device machinery (TK-339 AC1/AC2). The trust-boundary mitigations are pinned by TK-338 and TK-339's auth and anti-enumeration criteria. If the assumption is ever to widen - an overlay mesh for away-from-home, or any internet-reachable path - that is a NEW decision, never an incremental config change." }
+  - { id: DEC-78, type: decision, status: accepted, scope: FEAT-15, date_raised: "2026-08-01", title: "THE COMPANION-DEVICE LAN LISTENER - wombat's FIRST inbound network listener, explicit-bind and defaulting to loopback, per-device tokens, closed narrow route set, consent-gated to structural absence, and an EXPLICIT NG-9 boundary ruling rather than a silent pass (JIM DIRECTIVE - watch push-to-talk, LAN-only for MVP, cloud explicitly rejected)",
+      context: "Recorded 2026-08-01 from planning/design/ios-companion-app-plan.md revision 4 FINAL (four research rounds, Jim answering each pivot; original ask verbatim - 'I want to put an opus agent on planning an iOS app build. We will use the main phone app to connect to watch for biometrics'; watch app verbatim - 'watch integration is also for communication when i dont have headphones in. It would be a simple app with a push to talk button on the watch. Crazy simple.'; connectivity - LAN-only for MVP). Every seam RE-VERIFIED by the architect against the live tree before ruling, and two verifications MATERIALLY CHANGED the shape the plan proposed. (1) settings_app runs as a SEPARATE PROCESS and structurally imports nothing from wombat.bootstrap or wombat.runtime (a subprocess-clean test enforces it at import time), so the listener CANNOT be the settings API widened - not merely because a narrow surface is nicer, but because the return-audio path needs the origin register and the sealed-utterance buffer, both of which live in the runtime process. (2) chat/surface.py is the exact precedent and it is stdlib-only - asyncio.start_server, hand-rolled HTTP/1.1, zero fastapi/uvicorn in the runtime process, host injected with a 127.0.0.1 default, per-launch token, a bound-address property that reads the LIVE socket rather than trusting the configured string, and a guarded start/stop in runtime.serve() where a bind failure is one warning that never touches the drain loop. Also verified - settings_app/api.py BIND_HOST is 127.0.0.1 with the 401-never-404 anti-enumeration rule; safety/local_residency.py guards OUTBOUND storage endpoints only, so it neither blesses nor blocks an inbound bind and needs no change; the runtime drivers list already grows conditionally per consent toggle (screen_collector, mic_probe), which is exactly where this attaches.",
+      decision: "(a) ONE LISTENER, RUNTIME-OWNED, STDLIB-ONLY - a new DeviceSurface on the ChatSurface pattern, constructed by assemble_runtime and started/stopped by serve() under the same guarded posture. Three deliberate divergences from ChatSurface, each ruled: the bind host is an EXPLICIT config field DEFAULTING TO LOOPBACK so an unconfigured wombat is byte-identical to today and reaching the LAN is an act rather than a drift; the port is FIXED and configured rather than the ephemeral port-0 both existing surfaces use, because a device paired yesterday must find wombat today; and a non-loopback bind emits ONE loud log line so a LAN-exposed wombat can never be a silent state. (b) PER-DEVICE BEARER TOKENS, HASHED AT REST IN THE KEYRING - two paired devices from day one (phone and watch), independently revocable, minted in the settings-app process and verified in the runtime process, which is why the OS keyring (the DEC-32 secrets tier both processes already share) is the store and not an in-process object. A locked or broken vault fails CLOSED - nothing authenticates. Anti-enumeration is inherited verbatim - 401 on EVERY path including unknown ones, never a 404. (c) NARROW CLOSED ROUTE SET - two POSTs (voice, biometrics), two GETs (an authenticated liveness probe so a paired device can distinguish unreachable from unauthorized, and the sealed utterance), one optional WebSocket (the phone fast path). No read routes, no config routes, no control routes, no wipe route, no admin surface. Growing this set is a new decision, never an incremental addition. (d) CONSENT IS TWO SEPARATE PER-CHANNEL TOGGLES, DEFAULT OFF, STRUCTURAL - wombat_remote_voice (an explicit mic press and its spoken reply) and wombat_observe_biometrics (passive body data collected without any act) are genuinely different grants and bundling them would violate DEC-68(b)'s per-channel thesis. Both off means the surface, the credential store and every remote sink are NEVER CONSTRUCTED - inert by ABSENCE, not by flag-checking, the DEC-68(b) pattern verbatim. (e) THE CONNECTION DIRECTION NEVER INVERTS - the phone and watch are CLIENTS in every path; they POST audio and biometrics, they pull the sealed utterance, they open the WebSocket. wombat never dials a device. This is what keeps the surface small: no device-side server, no background-execution fight, no NAT traversal, no address discovery, no APNs, no cloud relay, and no additional architectural widening beyond the one listener. (f) NG-9 RULED EXPLICITLY, NOT PASSED SILENTLY - NG-9's STATEMENT forbids multi-camera / home-wide hive observation and its rationale elaborates 'one screen, one webcam, one mic, one host'. A phone and a watch ARE off-host, so the literal one-host phrasing is genuinely in tension and the architect declines to let that slide. THE RULING - the boundary NG-9 actually protects is fixed-home-fabric versus this-one-user's-own-body; Jim's verbatim rationale was 'thats like home stuff. Not this application', aimed at a home camera hive, and a wrist and a pocket are not a home. This design is therefore OUTSIDE what NG-9 forbids, and to make that a boundary rather than an argument, NG-10 is minted alongside it - no home-fixed sensor, no second person's device, no third device class, no internet-reachable listener, no wombat-initiated connection, each a NEW owner decision. NG-9 itself is UNCHANGED and unsuperseded. (g) RESIDENCY IS NAMED, NOT ASSUMED - ASMP-3 records the LAN transport as an accepted tradeoff in ASMP-1's register, including the honest note that a home LAN is a shared trust boundary. safety/local_residency.py is byte-untouched (it guards outbound storage endpoints and this is neither). (h) EGRESS - ZERO new egress endpoints. Audio travels wombat to LAN to device and never outward; biometrics travel device to LAN to wombat. The mouth's DeepSeek call remains the one default egress, and the only content class that widens is the bounded biometric grounding line, recorded in DEC-80(e). (i) ACCEPTED CONSEQUENCE, STATED PLAINLY - voice works only at home, on-network, while the laptop is awake. Biometrics buffer and drain gracefully; VOICE DOES NOT, because DEC-64's reply window says so structurally, so the devices REFUSE stale audio rather than delivering it late. Q-133 tracks whether Jim wants away-from-home badly enough to pay for an overlay mesh. (j) FULLY CURL-VERIFIABLE FIRST SLICE - the entire wombat side of this decision can be built and proven with curl from another machine on the LAN before one line of Swift exists, which is why EP-39 is sequenced first and why the Apple-side preconditions (Q-134, Q-136) block nothing here.",
+      consequences: "(+) The headline feature costs almost no new wombat machinery - DEC-58/DEC-64's shipped pipeline does everything except get the bytes into the directory, so the novel engineering is ONE authenticated route. (+) The default install is byte-identical to today on every axis - loopback bind, toggles off, nothing constructed, no port opened. (+) Per-device revocable tokens from ticket one mean losing a watch is a revoke, not a re-architecture. (+) The stdlib-only choice keeps the runtime process free of fastapi/uvicorn and matches the surface wombat already ships and trusts. (-) wombat now HAS an inbound listener; even bound to loopback by default, the code path exists and is a permanent part of the threat surface - mitigated by per-device tokens, anti-enumeration, size caps, a closed route set and structural absence when off. (-) A home LAN is a shared trust boundary and this design accepts that (ASMP-3). (-) Voice is home-only and laptop-awake-only, which is a real product limit Jim accepted with the LAN-only answer. (-) A FIXED port is a small operational cost (a collision is a config edit) accepted in exchange for pairing that survives a restart. (-) The NG-9 ruling is an interpretation the architect made rather than escalated; it is recorded loudly, bounded by NG-10, and cheap for Jim to veto because no device code exists yet.",
+      alternatives: ["Widen the settings API instead of a new surface (REJECTED ON A HARD FACT, not taste - settings_app is a separate process that structurally cannot import bootstrap/runtime, so it can never reach the origin register or the sealed-utterance buffer the return-audio path requires)", "An ephemeral port like chat and settings use (REJECTED - a device paired yesterday must find wombat today; restart-stability is the whole point)", "One shared secret for both devices (REJECTED - a phone and a watch must be revocable independently, and retrofitting per-device auth later would break every paired device)", "Bind to the LAN by default with a toggle to restrict it (REJECTED - inverts the safe default; the unconfigured state must be byte-identical to today)", "Cloud relay or an overlay mesh for away-from-home (REJECTED for MVP by Jim explicitly - cloud collides with NG-7; the mesh option is recorded at Q-133 as a decide-now-or-retrofit-later question)", "Bonjour/mDNS discovery (DEFERRED - host and port are entered or QR-encoded once at pairing; discovery is a convenience, not a capability)", "APNs push notifications from wombat to a device (REJECTED - a cloud dependency and a new egress class, and it would invert the connection direction (e) deliberately preserves)"],
+      links: ["ASMP-3","ASMP-1","NG-10","NG-9","NG-7","CON-3","CON-7","DEC-79","DEC-80","DEC-68","DEC-64","DEC-58","DEC-63","DEC-43","DEC-32","DEC-31","DEC-5","FEAT-15","EP-39","TK-338","TK-339","TK-340","TK-341","TK-342","Q-129","Q-133","Q-134","Q-135","Q-136"] }
+  - { id: DEC-79, type: decision, status: accepted, scope: FEAT-15, date_raised: "2026-08-01", title: "RETURN AUDIO - ONE PROTOCOL, THREE SINKS, AND THE REPLY FOLLOWS THE TURN'S ORIGIN (JIM DIRECTIVE, the expensive option chosen knowingly - 'Real audio streamed back to phone/watch' and 'Phone is often elsewhere - watch needs its own playback'); the watch's time-to-first-sound regression is ACCEPTED and NAMED with its escape hatch pinned, not built",
+      context: "Recorded 2026-08-01 alongside DEC-78. THE PLAN'S ONE OPEN IMPLEMENTATION UNKNOWN IS NOW CLOSED BY SOURCE READ, and it resolves favorably - voice/tts.py's _speak_streaming calls writer_factory() PER UTTERANCE inside the speak path, not once at construction, so a factory closure that reads an origin register at call time is an ordinary closure change with no lifecycle problem. voice/select.py currently passes the StreamingAudioWriter CLASS ITSELF as that zero-arg callable, so the change is swapping a class reference for a closure returning StreamingAudioWriter(stream_factory=...). ALSO VERIFIED - StreamingAudioWriter takes an injected stream_factory typed Callable returning AudioOutputStream, which is ALREADY a four-method Protocol (write/stop/abort/close) structurally matching sounddevice.RawOutputStream; the writer owns frame discipline (bytes cut to whole 2-byte frames with the remainder carried forward), so no sink re-implements it; the wire is raw 16-bit mono PCM at ONE shared STREAM_SAMPLE_RATE constant that the Fish request itself reads, with NO RIFF header anywhere because DEC-73(d) chose pcm precisely to sidestep the TK-262/TK-264 poisoned-header class; finish() calls stream.stop() then close() and abort() calls stream.abort() then close(), which is exactly the seal-versus-discard distinction a buffered sink needs. THE TWO OBVIOUS ORIGIN CARRIERS ARE RULED OUT BY SOURCE - compose/templates.format_payload_fields renders EVERY payload key into the mouth prompt, so an origin payload key would change what the reply SAYS; and QueueItem has no source_id field at all, only idempotency_key, payload and item_id.",
+      decision: "(a) EVERY PLAYBACK DESTINATION IS ONE MORE AudioOutputStream IMPLEMENTATION - PortAudio/sounddevice (today, byte-untouched), BufferedUtteranceSink (the watch - accumulate, seal on stop, publish, discard on abort; that is the whole class), and RemoteAudioStream (the phone - chunk-as-you-go over a WebSocket). voice/tts.py, sinks/speak.py, speech_shape and the compose path are BYTE-UNTOUCHED; frame discipline, the shared sample-rate constant and the headerless PCM format are all INHERITED. The recorded alternative - routing the watch through the buffered-WAV degrade branch instead - is REJECTED as the default because it forks routing at the adapter rather than the sink and re-introduces the RIFF headers DEC-73(d) deliberately removed. (b) ORIGIN RIDES A REGISTER, NOT THE PAYLOAD - a LastTurnOriginRegister mirroring LastSpokenRegister verbatim: single slot, TTL'd, in-memory, restart-forgets, written when the remote route accepts an utterance and read by the factory closure when the reply is spoken. Zero prompt pollution, zero queue-schema change, zero new pattern - DEC-64 already threads state between these exact two points this exact way. The remote ingest registers as a SECOND ASRSource with its own id over its own drop dir; the registry already drives N sources independently. (c) THE ROUTING TREE, EXPLICIT AND ADDITIVE - a laptop/desktop-originated turn plays on the local speakers BYTE-IDENTICALLY to today; a remote-originated turn goes to a live phone session if one is open, else to the watch buffered, else degrades loudly; and brief, draft, reflection and every proactive surfacing stay LOCAL. A wombat with no paired device behaves exactly as it does now. (d) NOTHING SPEAKS REMOTELY UNPROMPTED - only turn-originated replies are eligible for a remote sink, pinned by test. This is a DELIBERATE PRIVACY PROPERTY, not an accident: a watch speaker is inherently un-private and can play out loud in a room with other people, so it is recorded here explicitly so a future ticket cannot casually widen it. (e) THE WATCH BUFFER LIVES ON WOMBAT - in-memory, ONE slot, TTL pinned near DEC-64's reply window, discarded on fetch or expiry. Putting it on the phone would reintroduce exactly the dependency Q-m says cannot be relied on; wombat is the always-on party and should hold the bytes. No new persistence tier, nothing on disk, nothing for the DEC-75 wipe to reach. (f) TRANSPORT SHAPES CONVERGE - file-shaped by DEFAULT with ONE streaming fast path for the one device that can exploit it. Voice in is a discrete file POST both devices; voice out to the WATCH is a discrete authenticated GET pulling the sealed utterance (one request, no framing, no socket lifecycle on a constrained device, and a failed GET is retryable where a stalled socket is not); voice out to the PHONE keeps the WebSocket, the only place true streaming pays off. The watch - the device that actually matters to Jim - never opens a WebSocket at all. PULL, NEVER PUSH - the device asks; wombat never dials (DEC-78e). (g) MID-REPLY FAILURE NEEDS ZERO NEW MECHANISM - PartialSpeechError(played_any) already carries it exactly, and DEC-73(e)'s posture that heard-partial COUNTS AS SPOKEN was written for a completely different failure and fits this one perfectly, which is strong evidence the seam is right. Per-sink honesty, recorded: local means PortAudio accepted frames (honest); phone means frames reached the socket (a slight overstatement bounded by a sub-second jitter buffer); watch means the utterance was sealed and FETCHED - the cleanest of the three, since a completed GET is stronger evidence of playback than bytes handed to a buffer. DEC-73(e) already recorded a materially identical approximation, so this is consistent precedent and not a new class. (h) NO FALLBACK TO LAPTOP SPEAKERS, EVER - if every remote branch fails, degrade loudly with played_any=False and STOP. The turn came from the watch BECAUSE Jim was not at the laptop, so a rescue speaks into an empty room while logging success - DEC-73(e)'s lie-of-silence inverted. Cheap to revisit if Jim disagrees in practice. (i) THE LATENCY REGRESSION IS ACCEPTED AND NAMED WITHOUT SOFTENING - DEC-73's whole value proposition was time-to-first-sound dropping to first-chunk latency, and the WATCH PATH GIVES THAT UP: nothing plays until synthesis completes AND the whole utterance transfers, roughly 3-6s versus 0.3-1s locally. That is user-perceptible and unavoidable given the platform. The escape hatch - sentence-chunked publishing, so the first sentence plays while the rest is still being made - is PINNED AT DEF-21 WITH ITS TRIGGER, NOT BUILT; it is DEF-19's phase-2 pipelining aimed at a different seam and it adds gapless-playback complexity on a watch. (j) WATCH-FIRST, PHONE-SECOND - the research plan recommended building the phone sink first as a cheap de-risk; the ARCHITECT INVERTS IT, because Jim's value is on the wrist (his own answer - the phone is often elsewhere) and every shared part (the register, the closure, the resolver, the tree) lands with the watch path anyway, so a phone-first build would de-risk work already done by the time it runs. TK-345 is therefore P3 and explicitly optional, not load-bearing.",
+      consequences: "(+) The whole return-audio feature lands as ONE new class plus ONE closure plus ONE route, on a seam DEC-73 already built, with the entire speak path byte-untouched. (+) A wombat with no paired device is byte-identical to today on every audio path including brief and proactive. (+) The buffered watch path has BETTER played_any fidelity than either streaming path, so the failure semantics get more honest rather than less. (+) The wombat half can be built and proven against a fake LAN client before any device app exists - which is where all the risk actually lives. (-) The watch loses DEC-73's streaming win, stated plainly rather than softened, with a measured number owed back from TK-353's acceptance criteria. (-) Watch speaker playback costs roughly an hour of watch battery per ten minutes of audio, and is NOT SUPPORTED while the watch is charging - a genuine dead state where PTT works, wombat replies, and nothing plays; TK-353 must surface it rather than fail silently. (-) A third playback destination means three places a mid-reply failure can occur, mitigated by every one of them raising through the SAME PartialSpeechError path. (-) The origin register forgets across a restart (inherited from LastSpokenRegister, and correct - a reply across a restart is not a conversation).",
+      alternatives: ["An origin key on the payload (REJECTED ON A VERIFIED FACT - format_payload_fields renders every payload key into the compose prompt, so origin would leak into the mouth and could change the reply's wording)", "QueueItem.source_id (REJECTED - the field does not exist; origin is encoded in the idempotency key, but string-parsing a key inside a sink rots)", "Route the watch through the existing buffered-WAV degrade branch (RECORDED AND REJECTED as the default - forks routing at the adapter rather than the sink and re-introduces the RIFF headers DEC-73d removed on purpose; available if one fewer class is ever preferred over one fewer code path)", "Live-stream audio to the watch (REJECTED - WatchConnectivity and the watch's own Wi-Fi cannot sustain it reliably; buffer-then-play is what the platform can actually do)", "Buffer the utterance on the phone (REJECTED - reintroduces exactly the phone-is-elsewhere dependency Q-m rules out)", "Fall back to laptop speakers when the watch is unreachable (REJECTED - speaks into an empty room while logging success)", "Build sentence-chunked publishing now (DEFERRED to DEF-21 with a named trigger - do not build it from completeness instinct)", "Build the phone sink first as a de-risk (REJECTED as sequencing - see (j))"],
+      links: ["DEC-78","DEC-80","DEC-73","DEC-72","DEC-64","DEC-63","DEC-58","DEF-21","DEF-19","CON-3","FEAT-15","EP-40","TK-343","TK-345","TK-351","TK-353","Q-129","Q-133"] }
+  - { id: DEC-80, type: decision, status: accepted, scope: FEAT-15, date_raised: "2026-08-01", title: "PASSIVE BIOMETRICS - A NEW CHANNEL VALUE ON THE EXISTING LEDGER WITH NO MIGRATION, A CLOSED NUMERIC/ENUM PROJECTION SO NO FREE TEXT EVER CROSSES THE WIRE, AND JIM'S 'ALL OF THE ABOVE' LANDED AS THREE SEQUENCED TIERS - THE THIRD A NAMED BOUNDED CARVE-OUT FROM DEC-68(e), NEVER A REOPENING",
+      context: "Recorded 2026-08-01 alongside DEC-78/DEC-79. Jim's answers, verbatim - 'Real time biometric data is preferred' on cadence, and 'all of the above' on usage (silent context AND grounding AND interruption-worthy events). Seams re-verified against the live tree - observations.py owns wombat_observations as channel/kind/started_at/ended_at/payload jsonb/day_key, append-only, and its own docstring states the module ENFORCES NO CHANNEL VOCABULARY, so 'biometric' is a new channel VALUE and NOT a schema change and NOT a migration; _OBSERVATION_RETENTION_DAYS = 21 is a pinned module constant pruned once at boot (DEC-63 no-knob); DEC-68(b)'s consent pattern is per-channel, default-OFF and STRUCTURAL, with a disabled channel's collector never constructed - inert by ABSENCE, not by flag-checking; DEC-68(e) explicitly rejected observations as SourceRegistry sources feeding the queue on the grounds that they are not interruption candidates; DEC-75(b)'s wipe enumerates tables from information_schema, so biometric rows are swept for free with zero source edits; PushSource is the shipped push-shaped producer on sources/base.py so a push producer needs no contract change. PLATFORM FACT that keeps this cheap - a paired Apple Watch syncs heart rate, HRV, sleep, steps, workouts and SpO2 into the iPhone's HealthKit store automatically, so the passive biometric feed needs NO watch code at all and carries zero watch runtime cost.",
+      decision: "(a) ONE NEW CHANNEL VALUE, ZERO MIGRATION - biometrics land as channel='biometric' rows on the existing wombat_observations ledger with kinds drawn from a closed v1 set (sleep_session, workout, resting_hr_daily, hrv_daily, steps_hourly - the Q-131 proposal, ratifiable by Jim without any structural consequence). observations.py's schema, its append-only shape and its 21-day pinned retention are BYTE-UNTOUCHED. (b) NO FREE TEXT CROSSES THE WIRE IN v1 - HealthKit samples carry free-text metadata written by third-party apps (source app names, device names, user-entered workout titles and notes), which would be a genuine taint question. Rather than ANSWER it, v1 makes it NOT ARISE: the ingest route validates against a CLOSED per-kind schema of numbers, enumerated strings from a fixed vocabulary, and ISO timestamps, and ANY unknown key or out-of-vocabulary string rejects the WHOLE batch - a test, not a comment. This is DEC-68(c)'s derive-then-discard custody thesis applied literally, with the projection happening ON THE PHONE before anything leaves it. DEC-26's taint invariant is UNTOUCHED because no untrusted text enters. If Jim ever wants the free text, it rides the DEC-45/Q-120 grounding-only tier as a NEW decision - bounded context to the mouth, never tool-dispatch input. (c) CONSENT - wombat_observe_biometrics, a distinct toggle, default OFF, DEC-43 precedence, restart-to-apply, structural inertness (toggle off means no ingest route, no store construction, no projection, nothing). Deliberately SEPARATE from wombat_remote_voice: passive body data collected without any act and an explicit mic press are different grants, and bundling them would violate DEC-68(b)'s per-channel thesis. (d) 'ALL OF THE ABOVE' LANDS AS THREE TIERS IN A DELIBERATE ORDER - TIER 1 SILENT CONTEXT, first: a deterministic LLM-FREE nightly dream_biometrics pass on the dream_observe pattern, templating ledger regularities into third-person facts at UserFactsStore source='behavior'; CON-6 holds BY CONSTRUCTION because deterministic templates over closed numeric segments cannot state motive, and the model never sees a biometric row. TIER 2 GROUNDING, second: ONE bounded char-capped line on the EXISTING context closure, chat and voice payloads only, never brief/draft/reflection, ABSENT rather than stale when data is missing or old - DEC-68(d)(1)'s precedent exactly, with the TK-298 drift pin extended deliberately. TIER 3 INTERRUPTION, LAST and narrowest: a CLOSED three-kind event vocabulary (a workout ended, a resting-HR reading outside its own pinned personal band, a sleep-debt threshold crossed) derived deterministically, riding the shipped PushSource into the EXISTING queue and rated by the EXISTING gate with a NEW EventClass whose default ratings score BELOW the shipped threshold - so the DEFAULT posture is HOLD-SILENTLY, personalization is the existing dream_tune machinery, and there is no gate special-casing, no bypass, no flush exemption and no ceiling raised. THIS TIER IS A NAMED, BOUNDED CARVE-OUT FROM DEC-68(e)'s observations-are-not-interruption-candidates rule, justified ONLY because Jim asked for it, with a closed vocabulary as its boundary - it is NOT a general reopening, and a fourth event kind is a new decision. CON-2/CON-3/NG-4 are intact throughout: no model decides what becomes an event or how it rates. (e) EGRESS HONESTY - the DEFAULT configuration ships ZERO biometric data anywhere (toggle off, structural absence). Opted in, TIER 2 and only tier 2 widens what rides the EXISTING DeepSeek egress by one fixed-shape line of numbers - recorded here and nowhere silently. Tiers 1 and 3 add no egress at all. (f) 'REAL TIME' IS READ AS NOT-STALE PENDING Q-130 - background HealthKit delivery wakes hourly-ish, which is the platform ceiling and Apple's own recommendation, and the app must say so rather than imply more. LIVE second-by-second heart rate needs an always-running HKWorkoutSession with recurring daily battery cost AND phantom workouts polluting Jim's Activity rings; that is a SEPARATE, explicitly-decided, DEFAULT-OFF mode and it is NOT MVP. Push-to-talk is momentary and does not pay for it - a button and a continuous session are different things. (g) THE DEVICES HOLD SECOND COPIES, AND THE WIPE MUST SAY SO - the phone's sync buffer, its per-type anchors and any untransferred watch audio are OUTSIDE DEC-75/DEC-76's schema-driven blast radius. Minimum honest fix, ruled: the apps ship their own reset (TK-350) and the wipe dialog's what-does-NOT-die column names the devices (TK-342). wombat's own sealed-utterance buffer needs nothing - it is in-memory and TTL'd by DEC-79(e). (h) REVOKED PERMISSION MUST NEVER READ AS NO DATA - Apple returns empty results with no error, deliberately. The sync engine must never treat silence as a signal; last-successful-sample age is surfaced so a revoked permission looks like a problem rather than a quiet day. (i) NG-2 IS ABSOLUTE HERE - no clinical or diagnostic framing, no health advice, no emergency detection in any template, any grounding line or any event. Biometric events are ordinary gate candidates that usually lose.",
+      consequences: "(+) The entire biometric substrate is a channel VALUE - no migration, no new table, no retention decision, and DEC-75's wipe sweeps it for free with zero source edits. (+) The taint question does not arise rather than being answered, which is cheaper and stronger than answering it. (+) All three of Jim's tiers land on already-proven seams - the dream_observe pattern, the ONE context closure, PushSource and the real gate - with no new architecture. (+) The DEFAULT install is byte-identical to today. (-) A named carve-out from DEC-68(e) now exists; its boundary is the closed three-kind vocabulary and nothing else, and widening it is a new decision. (-) Tier 2 widens the existing DeepSeek egress content class by one line of numbers, recorded in (e). (-) 21-day retention is plenty for rhythm detection and useless for year-long trends; Q-132 tracks whether Jim wants a separate long-trend store, which would be its own table with its own retention rather than a knob on this one. (-) Second copies live on the devices outside the wipe's reach, mitigated by (g) rather than solved.",
+      alternatives: ["A new biometrics table with its own schema and retention (REJECTED - wombat_observations already has exactly this shape and enforces no channel vocabulary; a second ledger would be a second thing to wipe, prune and reason about)", "Transmit raw HealthKit samples and project server-side (REJECTED - derive-at-capture-then-discard IS the DEC-68(c) custody thesis; projecting on the phone is what makes the no-free-text rule structural)", "Answer the free-text taint question by assigning it the grounding-only tier now (REJECTED FOR v1 - making the question not arise is stronger, and Jim did not ask for the text)", "Reopen DEC-68(e) generally so observations may feed the queue (REJECTED - a closed three-kind carve-out is the smallest thing that satisfies Jim's ask; the general rule stands)", "An LLM deciding which biometric changes are interruption-worthy (REJECTED - NG-4/CON-2; derivation and rating stay deterministic)", "HKWorkoutSession continuous live HR in MVP (REJECTED - recurring battery cost and phantom workouts in Jim's Activity rings, for a signal PTT does not need; gated on Q-130 as a default-OFF mode)", "Bundle biometrics and remote voice under one consent toggle (REJECTED - different grants, DEC-68(b) per-channel thesis)"],
+      links: ["DEC-78","DEC-79","DEC-76","DEC-75","DEC-70","DEC-68","DEC-66","DEC-63","DEC-45","DEC-26","DEC-23","DEC-5","NG-2","NG-3","NG-4","NG-10","CON-2","CON-3","CON-6","FEAT-15","EP-41","TK-341","TK-342","TK-346","TK-347","TK-348","TK-350","Q-130","Q-131","Q-132"] }
+  - { id: DEF-21, type: deferral, status: deferred, scope: EP-40, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Defer SENTENCE-CHUNKED UTTERANCE PUBLISHING (sealing and publishing the first sentence as soon as it is synthesized so the watch starts playing while the rest is still being made) - the named escape hatch for DEC-79(i)'s accepted watch latency regression, pinned with its seam rather than built",
+      description: "The seam is already identified so this is a build, not a design, whenever it is wanted - BufferedUtteranceSink would seal at sentence boundaries instead of at stop(), publishing an ordered series of short utterances the watch fetches and plays back to back. It is essentially DEF-19's phase-2 pipelining aimed at a different seam. It is NOT built now for three reasons - gapless playback of chained clips on a constrained watch is real complexity, DEC-73's own phase-2 pipelining is already deferred at DEF-19 for the same class of reason, and nobody should build it from completeness instinct before the delay is known to bother anyone. TK-353's acceptance criteria owe a MEASURED first-sound number back into DEC-79's record, so the revisit trigger below will have evidence behind it rather than an estimate.",
+      revisit_trigger: "Jim uses the watch reply path and reports the pause before the reply starts - then rule sentence-chunked publishing against the measured number TK-353 recorded, at the pinned BufferedUtteranceSink seal seam.",
+      links: ["DEC-79","DEF-19","DEC-73","EP-40","TK-343","TK-353"] }
+  - { id: Q-129, type: open_question, status: open, scope: FEAT-15, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Which Apple Watch does Jim have - GPS-only or GPS + Cellular, and which model year? LOWER STAKES THAN IT LOOKS and NOT an architectural fork - research established that every Apple Watch model including GPS-only has Wi-Fi and can join networks the paired iPhone previously joined even with the phone off or absent, so watch-direct to the LAN listener is the primary path on either model, and cellular buys only away-from-home reachability which LAN-only already excludes (Q-133). What the answer actually changes is how RELIABLE to expect the direct path to be, whether 'voice anywhere' would even be possible later, and - via model year - watch-speaker quality and battery headroom against DEC-79's named playback cost",
+      links: ["DEC-78","DEC-79","EP-43","TK-352","TK-353","Q-133"] }
+  - { id: Q-130, type: open_question, status: open, scope: EP-41, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "'Real time biometric data is preferred' - does Jim mean NOT-STALE or LIVE-BY-THE-SECOND? Not-stale (wombat knows today's sleep and resting HR within minutes) is a cheap background sync and is what DEC-80(f) provisionally reads the answer as. Live (second-by-second pulse) requires an always-running HKWorkoutSession with recurring daily battery cost and PHANTOM WORKOUTS POLLUTING JIM'S ACTIVITY RINGS - a separate, explicitly-decided, default-OFF mode that push-to-talk does not pay for, since a momentary button and a continuous session are different things",
+      links: ["DEC-80","EP-41","EP-42","TK-350"] }
+  - { id: Q-131, type: open_question, status: open, scope: EP-41, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Which biometrics actually matter to Jim? Proposed v1 default set, ratifiable or trimmable with no structural consequence - resting heart rate, HRV, sleep duration plus stages, daily activity/steps, and workouts. Available but NOT proposed - blood oxygen, respiratory rate, wrist temperature, mindful minutes. Every type is a SEPARATE iOS authorization prompt, so the list should stay short and deliberate rather than complete",
+      links: ["DEC-80","EP-41","TK-341","TK-349"] }
+  - { id: Q-132, type: open_question, status: open, scope: EP-41, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Retention - wombat_observations prunes at 21 days as a pinned module constant (DEC-63 no-knob), which is plenty for rhythm detection and useless for 'how has my resting HR trended this year'. If Jim wants long trends the answer is a SEPARATE table with its own retention, NOT a knob on this one - which is a new decision and a new ticket, not a config change",
+      links: ["DEC-80","DEC-63","EP-41","TK-341"] }
+  - { id: Q-133, type: open_question, status: open, scope: FEAT-15, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Does Jim accept that LAN-only means the watch does NOTHING away from home? Biometrics buffer and drain gracefully; VOICE DOES NOT, because a four-hour-old utterance is not a conversation and DEC-78(i) makes the devices refuse stale audio rather than deliver it late. If he wants voice working anywhere, the answer is an overlay mesh (Tailscale/WireGuard) DECIDED NOW rather than retrofitted - and note DEC-79's return audio at roughly 88 KB/s is comfortable on a LAN and clearly not on cellular, so 'voice anywhere' is a materially bigger change than it looks",
+      links: ["DEC-78","DEC-79","EP-43","Q-129"] }
+  - { id: Q-134, type: open_question, status: open, scope: FEAT-15, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Apple Developer Program at 99 dollars a year - yes or no? WITHOUT it a personally-provisioned build's signature expires every SEVEN DAYS and must be reinstalled from Xcode, a treadmill that will make Jim stop using the thing, and materially worse now that a WATCH app is involved as well as a phone app. Whether the HealthKit entitlement is even usable on a free personal team should be confirmed at build time rather than assumed in either direction. This BLOCKS EP-42/EP-43 from being worth building, though it blocks nothing in EP-39/EP-40/EP-41",
+      links: ["FEAT-15","EP-42","EP-43","Q-136"] }
+  - { id: Q-135, type: open_question, status: open, scope: FEAT-15, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "Is this biometrics-plus-PTT only, or the SEED of a full phone-side wombat? With return audio accepted the devices now have inbound audio, outbound audio, pairing and auth - most of what a device-side front end would need. If that is where this is heading (the way the Electron app grew into wombat's front end per DEC-31/DEC-39), saying so NOW barely changes EP-39 and would be expensive to retrofit later. The architect's own read - DEC-78(c)'s deliberately closed route set is the thing that would have to widen, so this is worth an answer before EP-39 lands rather than after",
+      links: ["FEAT-15","DEC-78","DEC-31","DEC-39","EP-39"] }
+  - { id: Q-136, type: open_question, status: open, scope: FEAT-15, date_raised: "2026-08-01", date_updated: "2026-08-01", title: "ARCHITECT-RAISED, NOT IN THE RESEARCH PLAN - does Jim have a Mac running Xcode? wombat's host is Windows 11, and iOS/watchOS targets cannot be built, signed, provisioned or installed without macOS and Xcode. This is a HARDER precondition than the 99-dollar question (Q-134) because no amount of money removes it, and it is not mentioned anywhere in the four-round research plan. If the answer is no, EP-42 and EP-43 are UNBUILDABLE as written and the honest options are - acquire/borrow a Mac, rent a cloud Mac for build-and-install cycles (awkward for physical device provisioning), or stop at the wombat side. NOTE THIS COSTS NOTHING TO WAIT ON - EP-39/EP-40/EP-41 are pure Python, fully curl-verifiable, and deliver a working end-to-end voice loop (curl a WAV in from another LAN machine, hear wombat answer) with no Apple anything in existence. A SECOND CONSEQUENCE, recorded so nobody trips on it later - the project's every-AC-passes-a-runnable-check bar cannot hold for Swift the way it holds for Python (there is no pytest for a watch), which is why every EP-42/EP-43 ticket is engineering_level prototype with operator-executed acceptance criteria",
+      links: ["FEAT-15","EP-42","EP-43","Q-134"] }
 changelog:
   - { date: "2026-06-19", version: "0.0", change: "Contract scaffolded by planning-worx.", by: "planning-worx" }
   - { date: "2026-06-19", version: "0.1", change: "Stage vision: ingested pa-agent-profile.md + pa-agent-features.md into vision, non_goals (NG-1..7), constraints (CST-1..5), 12 feature nodes (FEAT-1..12), 9 open questions (Q-1..9).", by: "claude" }
@@ -10640,3 +11276,5 @@ changelog:
   - { date: "2026-08-01", version: "2.207", by: "architect (TK-334 close-out; within authority - ticket status only, no decision spine touched)", change: "TK-334 DONE - the archive-then-truncate CORE lands (EP-38, first of the four-ticket wipe arc). src/wombat/wipe.py exposes archive_and_wipe(dsn, archive_dir, *, connect=psycopg.connect) -> WipeReport plus WipeAborted, in the four fail-closed phases DEC-75 pinned: (1) ENUMERATE by information_schema introspection - the module names no table anywhere, so a future migration or the cogworx_* tables landing on the same DSN are swept with zero source edits (AC5 proves it with an unmigrated wombat_drift_probe that is archived AND emptied); (2) ARCHIVE FIRST - one JSON file per table plus manifest.json (row_count, sha256, ISO timestamp, the keep-list actually applied), every file fsync'd then READ BACK with its sha256 recomputed from the bytes ON DISK, never the in-memory bytes, before any destructive statement; (3) DESTROY - ONE TRUNCATE TABLE ... RESTART IDENTITY CASCADE naming every non-keep table inside the one open transaction, never DROP and never a per-table DELETE loop, so schema/indexes survive and ensure_all_schemas stays a no-op (AC3); (4) KEEP-LIST exactly {wombat_settings} per DEC-76 - archived but NOT truncated, the deliberate asymmetry nobody may tidy away. DEC-77 r4's injectable connect seam shipped as specified - keyword-only, psycopg.connect default, typed loosely so a fakes-only recording connection satisfies it - and it EARNED ITS KEEP on this machine: WOMBAT_TEST_PG_DSN is blank here, so the abort-before-destroy ordering is proven with zero Postgres by tests/unit/test_wipe.py, which asserts on a recording connection that a mid-archive failure AND a manifest-only write failure each raise WipeAborted having issued zero TRUNCATE/DELETE/DROP. DEC-77 r5's hard-fail guard (test DSN must not equal WOMBAT_PG_DSN) is in the pg module. QUALITY BAR: uv run pytest -q with the test DSN unset = 2248 passed / 134 skipped / 0 failed, test_wipe_pg.py skipping loudly with the Q-46 reason string while the 6 fakes-only tests run (AC6); the pg module separately run against a throwaway docker postgres:16 = 4/4 passed (AC1/AC2/AC3/AC5). NOT yet reachable by any operator - no CLI, no UI, no file tier; TK-335 is next and is what makes this runnable and whole-machine systemic. BATCH-VERIFY PENDING - the single batch-level Opus review audits TK-334/TK-335/TK-337/TK-336 together after the arc lands, per the v2 cadence." }
   - { date: "2026-08-01", version: "2.208", by: "architect (TK-335 close-out; within authority - ticket status only, no decision spine touched)", change: "TK-335 DONE - the wipe becomes WHOLE-MACHINE SYSTEMIC and OPERATOR-RUNNABLE in one safe command (EP-38, second of four). Three pieces landed exactly on the DEC-77 pre-build rulings. (a) FILE TIER - wipe.wipe_filesystem_tier(archive_dir, *, brief_path, feedback_path, trail_log_path, asr_drop_dir) -> FileWipeReport copies brief/feedback/trail byte-identically under archive_dir/files/ then TRUNCATES each to ZERO BYTES (the file keeps existing - the same empty-it-do-not-remove-the-thing-it-needs rule DEC-75 applies to tables), DELETES the trail's dedup-cursor sidecar outright (a cursor, not user data, resolved through trail.renderer._sidecar_path_for rather than a second path convention), and MOVES every ASR drop-dir audio file - root PLUS processed/ and failed/, reusing sources.asr's own dirnames - into files/voice_drop/ with a voice-drop-manifest.json of name/size/mtime/sha256, never base64'd into JSON. Subdirectory-prefixed manifest names ('processed/foo.wav') so same-named files from different subdirs cannot collide. Unset or missing artifacts are skipped, the sources.bootstrap optional-channel posture. (b) SUBSTRATE GUARD - wipe.check_substrate_guard(substrate_config=None) -> str implements DEC-77 r7 verbatim: it reads COGWORX_NEO4J_URI / COGWORX_PG_DSN straight from os.environ (deliberately NOT by constructing cog-worx's SubstrateSettings, which ships non-blank defaults and would read every unconfigured machine as configured - a real trap avoided) and raises DurableSubstrateConfigured, a WipeAborted SUBCLASS so every existing catch site still fail-closes, naming the specific store BEFORE any archive or destructive act; an explicit wombat SubstrateConfig handed in is the second, structural signal. Cold-boot default returns 'cold_boot' - AC3's 'nothing durable to wipe' record is that RETURN VALUE, not a new WipeReport field; normalized on the record as a shape choice, the tested property is identical and no v1 Neo4j purge code ships (DEC-75d names the reopening trigger). (c) ENTRYPOINT - DEC-77 r1's argv dispatch is main()'s literal FIRST statement: argparse with one `wipe` subcommand (--confirm, --archive-dir), so bare `python -m wombat` stays byte-identical and the wipe path NEVER configures per-boot logging, NEVER writes logs/runtime-*.log, NEVER binds the TK-261 singleton port and NEVER reaches serve(); an unknown subcommand or flag is argparse's own usage-to-stderr exit-2, not a hand-rolled fourth implementation. Dry-run is the DEFAULT (AC4): it prints the full config-driven enumeration plus the archives/wipe-<yyyyMMdd-HHmmss>/ path it would use, performs zero I/O and exits 1 - and a pinned test proves the dry-run does not even PROBE for liveness. --confirm refuses first (AC6, DEC-77 r2) via runtime._existing_handshake_port + _handshake_port_is_live on BOTH the chat-handshake port and the singleton port - either answering is a refusal, so a chat-disabled runtime cannot be wiped underneath itself, while a stale handshake file whose port does not answer is correctly read as not-live and the wipe proceeds. Order is guard -> Postgres tier -> filesystem tier, with the archive directory as the final stdout line on success (the TK-337/TK-336 contract) and every WipeAborted printed as an abort reason with a nonzero exit. AC2's named-exclusion list is a TEST, not a comment: logs/, chat-handshake.json, .env, wombat.settings.json(+.migrated), wombat_params.yaml and persona_policy.yaml are hashed before and after a full wipe and asserted byte-for-byte unchanged. QUALITY BAR (re-run by the architect at HEAD immediately before commit): uv run pytest -q = 2267 passed / 134 skipped / 0 failed, including the 19 new tests in tests/unit/test_wipe_files.py + tests/unit/test_wipe_cli.py and zero regressions; ruff check src tests clean; mypy clean over 384 files; manual CLI smoke of `python -m wombat wipe` and `python -m wombat bogus` confirming dry-run enumeration and exit-2 usage. THE COMMAND IS NOW OPERATOR-REACHABLE, and it is safe standing alone exactly as ISS-41 required - it cannot under-wipe (file tier shipped with the CLI in the same ticket, by that ruling) and it cannot split-brain (it refuses against a live runtime by itself, not merely via its wrapper). TK-337 next adds only the one-click quiesce wrapper; it adds no safety this command lacks. BATCH-VERIFY PENDING - the single batch-level Opus review audits TK-334/TK-335/TK-337/TK-336 together after the arc lands, per the v2 cadence." }
   - { date: "2026-08-01", version: "2.209", by: "architect (TK-337 close-out; within authority - ticket status only, no decision spine touched)", change: "TK-337 DONE - the one-click quiesce-then-wipe operator wrapper lands (EP-38, third of four), and with it the repo now holds exactly ONE runtime-stop implementation. DEC-77 r6 shipped exactly as ruled - restart-wombat.ps1 former inline stop block (kill every wombat-watchdog-host powershell match FIRST, then every -m wombat python match, then the ~10s bounded wait proving ZERO matches of BOTH kinds) moved VERBATIM into new scripts/stop-wombat.ps1, exiting 0 once proven gone and Write-Error plus nonzero otherwise; restart-wombat.ps1 now invokes it and propagates $LASTEXITCODE before it will touch wombat-console.ps1, so a stop that cannot be PROVEN is never followed by a fresh launch. AC2 is now a grep-checkable structural fact at HEAD - Stop-Process appears in scripts/ exactly twice, both inside stop-wombat.ps1, and both wrappers call that one script. scripts/wipe-wombat.ps1 is a pure sequencer with zero data-lifecycle logic - (1) invoke stop-wombat.ps1 and propagate its code, so a quiesce failure aborts BEFORE any archive or destructive act; (2) invoke the venv python -m wombat wipe --confirm with output UNREDIRECTED, so the CLI own stdout/stderr - the archive directory path on success, the abort reason on failure - surfaces verbatim to the operator and to TK-336 spawn, forwarding the optional -ArchiveDir as --archive-dir per DEC-77 r3, and propagating that exit code too; (3) deliberately STOPPING - no restart, no relaunch (DEC-75f) - with a closing line naming restart-wombat.ps1 or the app restart control as the operator separate, visible next act. The wrapper adds NO safety the CLI lacks (TK-335 command already refuses against a live runtime), so the worst a broken wrapper can do is fail loudly. Exit-code propagation across ampersand-invoked child scripts, and inline-versus-extracted Write-Error under ErrorActionPreference Stop, were both verified EMPIRICALLY in PowerShell rather than assumed - that is what makes the extraction a behavior-preserving move rather than a hopeful one. The three existing watchdog tests DEC-77 r6 named as breakage were repointed at the extracted script. QUALITY BAR, re-run by the architect at HEAD immediately before commit - uv run pytest -q = 2277 passed / 134 skipped / 0 failed (including the new tests/unit/test_wipe_wombat_ps1.py), ruff check src tests clean, mypy clean over 385 source files; no app/ files touched, so the npm bar is not applicable. TK-336, the typed-confirmation danger-zone UI, is the last ticket of the arc and the only one still open. BATCH-VERIFY PENDING - the single batch-level Opus review audits TK-334/TK-335/TK-337/TK-336 together after the arc lands, per the v2 cadence." }
+  - { date: "2026-08-01", version: "2.209", change: "FEAT-15 SCOPED - the iOS + watchOS companion surface, from the Jim-approved four-round research plan at planning/design/ios-companion-app-plan.md revision 4 FINAL. STRUCTURE RULED - a NEW TOP-LEVEL FEATURE rather than epics under FEAT-12/FEAT-3, on the project's own precedent: FEAT-13 is already a top-level feature for the DESKTOP companion surface, and this is its peer - it adds a whole platform (Swift, built off-repo) and a whole capability class (wombat's first inbound listener, its first remote audio destination) and its epics cut across voice, privacy and the user model rather than sitting under any one. THREE DECISIONS - DEC-78 the companion-device LAN listener (runtime-owned stdlib asyncio surface on the ChatSurface precedent; EXPLICIT bind config defaulting to loopback; FIXED configured port because ephemeral cannot survive a pairing; per-device keyring-hashed tokens minted in the settings process and verified in the runtime process; 401-never-404; closed four-route set; two separate consent toggles defaulting OFF to structural absence; wombat NEVER dials a device; NG-9 RULED EXPLICITLY rather than passed silently, with NG-10 minted as the structural bound and ASMP-3 naming the LAN residency tradeoff in ASMP-1's register). DEC-79 return audio (one AudioOutputStream Protocol, three sinks; origin carried by a LastSpokenRegister-shaped register because format_payload_fields renders every payload key into the prompt and QueueItem has no source_id; the watch's time-to-first-sound regression ACCEPTED and NAMED with DEF-21 pinning the sentence-chunked escape hatch unbuilt; NO laptop fallback ever; nothing speaks remotely unprompted, recorded as a deliberate privacy property; WATCH-FIRST, inverting the plan's phone-first de-risk because Jim's value is on the wrist). DEC-80 biometrics (channel VALUE on wombat_observations, ZERO migration; closed numeric/enum projection so the free-text taint question does NOT ARISE rather than being answered; Jim's 'all of the above' as three sequenced tiers, the third a NAMED BOUNDED carve-out from DEC-68(e) with a closed three-kind vocabulary, never a reopening). FIVE EPICS EP-39..EP-43 and SIXTEEN TICKETS TK-338..TK-353. FOUR SEAMS RE-VERIFIED AGAINST THE LIVE TREE, TWO OF WHICH CHANGED THE PLAN - (1) the plan's ONE open implementation unknown is CLOSED FAVORABLY: writer_factory is invoked PER UTTERANCE inside _speak_streaming and voice/select.py passes the StreamingAudioWriter class itself as that zero-arg callable, so per-turn routing is an ordinary closure swap; (2) settings_app runs as a SEPARATE PROCESS that structurally imports nothing from bootstrap/runtime, so the listener cannot be the settings API widened - a harder reason than the plan's narrow-surface argument; (3) chat/surface.py supplies a stdlib-only precedent needing no fastapi/uvicorn in the runtime process; (4) safety/local_residency.py guards OUTBOUND storage endpoints only and needs no change. EIGHT OPEN QUESTIONS Q-129..Q-136 recorded rather than resolved - seven from the plan (watch model, real-time meaning, metric set, retention, away-from-home, the 99-dollar program, seed-of-a-phone-wombat) and ONE ARCHITECT-RAISED AND ABSENT FROM THE PLAN - Q-136, whether Jim has a Mac running Xcode, since wombat's host is Windows 11 and no amount of money removes that precondition; EP-42/EP-43 are therefore status BLOCKED and engineering_level prototype with operator-executed acceptance criteria (there is no pytest for a watch), while EP-39/EP-40/EP-41 are pure Python, fully curl-verifiable, and blocked by nothing.", by: "architect" }
+  - { date: "2026-08-01", version: "2.210", change: "ATOMICITY GATE RUN over the v2.209 FEAT-15 board rather than asserted, and it caught TWO real failures, both fixed before anything was handed to a build workflow. (1) TK-339 shipped a listener with an EMPTY route table - a socket that answers nothing is ONE LAYER, not a behavior, and it fails the vertical-slice bar exactly the way build-the-DB-table does. Fixed by giving it ONE authenticated liveness GET, which is not scope creep: TK-349 pairing already has to probe something to tell the operator Paired versus unreachable. The ticket is now end-to-end observable with curl from a second machine on the LAN (token 200, everything else 401) and DEC-78(c)s closed route set names the liveness probe. (2) TK-343 (origin register plus factory closure) was a PURE SEAM whose entire acceptance criterion set reduced to nothing changed - it would have spent a whole build-and-verify pass proving a no-op. MERGED with TK-344 into a single TK-343 whose slice is one observable behavior: a turn that came from a watch is answered TO that watch. Every byte-identity criterion survives as a REGRESSION PIN rather than as the point, TK-344 is retired, and TK-345/TK-353 are repointed. NET - FIFTEEN tickets, not sixteen: EP-39 TK-338..TK-342, EP-40 TK-343 plus TK-345, EP-41 TK-346..TK-348, EP-42 TK-349..TK-351, EP-43 TK-352/TK-353. THREE TICKETS DELIBERATELY FAIL the fits-one-agent-pass check and are recorded as accepted rather than split - TK-349, TK-352 and TK-353 are Swift, engineering_level prototype, built in Xcode by the operator and not by any build agent, and splitting them further would produce fragments that individually deliver nothing usable on a wrist. GATE STATE, honest - vision/design/tickets PASS; clarify/analyze FAIL on exactly the eight new open questions Q-129..Q-136, which is the correct signal that Jim owes eight answers and not a defect in the board.", by: "architect" }
