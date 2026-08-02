@@ -43,6 +43,15 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $venvPython = Join-Path $repoRoot '.venv\Scripts\python.exe'
 $stopScript = Join-Path $PSScriptRoot 'stop-wombat.ps1'
 
+# TK-337 repair: wombat's .env, brief/feedback/trail/drop paths and the
+# archives default are all cwd-relative (see wombat.config._resolve_pg_dsn
+# and wombat.__main__._default_wipe_archive_dir), and wipe-control.ts spawns
+# this script with no cwd. Pin the working directory to the repo root BEFORE
+# invoking the CLI - without it, a CLI launched from any other cwd dies with
+# an unhandled ConfigurationError (missing DEEPSEEK_API_KEY) instead of
+# running the wipe.
+Set-Location -LiteralPath $repoRoot
+
 # (1) Stop the runtime FIRST - see .DESCRIPTION. Propagate failure before
 # any archive or destructive act runs.
 & $stopScript

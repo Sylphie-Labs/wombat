@@ -973,3 +973,16 @@ Batch = TK-330 -> TK-331 -> TK-332 -> TK-333, the last four open tickets (246/25
 **EP-38 closes:** TK-334 (pg archive-then-truncate core) → TK-335 (file tier + substrate guard + safe CLI) → TK-337 (quiesce-then-wipe ps1, collapsing the repo to one stop implementation) → TK-336 (this UI). Board **254/269**; every remaining open ticket is FEAT-15. **Batch-verify pending** — one Opus review over all four now that the arc has landed.
 
 **Housekeeping note:** the parallel FEAT-15 scoping that v2.209's note above described as deliberately unstaged was committed on its own immediately before this close-out (`5b3ca60`), precisely so this TK-336 commit is a clean single-ticket blob.
+
+---
+
+## 2026-08-01 — batch-review round 1 repair over the EP-38 wipe arc (contract v2.212)
+
+**Within authority.** Two MAJOR findings from the batch Opus review of TK-334/TK-335/TK-337/TK-336, both fixed in one commit. They share one root cause worth remembering: **wombat resolves both its configuration and its data paths relative to the current working directory**, and two pieces of the wipe arc silently assumed a cwd (or an exported env var) that the real operator path never supplies.
+
+- **TK-337** — `scripts/wipe-wombat.ps1` never pinned its cwd, and `app/electron/wipe-control.ts` spawns it with **no cwd**. The repo-root `.env` (DEEPSEEK_API_KEY, WOMBAT_PG_DSN via `wombat.config._resolve_pg_dsn`), the brief/feedback/trail/drop paths, and the `archives` default in `wombat.__main__._default_wipe_archive_dir` all resolve cwd-relative — so the danger-zone button would have died on an unhandled `ConfigurationError` instead of wiping. Fix: one `Set-Location -LiteralPath $repoRoot` after `$repoRoot` is derived and before **either** invocation, mirroring `wombat-console.ps1`'s existing convention. Pinned by a static ordering test **and** a dynamic test that runs a copy of the script from an unrelated caller cwd with a stub `stop-wombat.ps1` recording `$PWD`.
+- **TK-334** — the DEC-77 r5 collection-time hard-fail compared `WOMBAT_TEST_PG_DSN` against a bare `os.environ` read of `WOMBAT_PG_DSN`. The operator's real DSN lives **only** in the repo-root `.env`, so the one guard standing between a copy-pasted production DSN and a schema-wide TRUNCATE was comparing against `None`. Fix: resolve the live DSN with `wombat.config._resolve_pg_dsn` — the same env-else-`.env` path `load_config()` uses. **DEC-77 r5 is unchanged as a rule; this makes it actually bite.**
+
+**Quality bar:** `uv run pytest -q` → 2279 passed / 134 skipped / 0 failed (TK-336's 2277 baseline + exactly the two new PowerShell tests). No `src/wombat` change, no `app/` change, no decision spine touched.
+
+**State:** EP-38 review-clean and CLOSED 4/4. Board 254/269; every remaining open ticket is FEAT-15 (TK-338..TK-353), and EP-42/EP-43 stay BLOCKED on Q-129..Q-136 — which is why `gate_check analyze` still FAILs by design while `tickets` PASSes.

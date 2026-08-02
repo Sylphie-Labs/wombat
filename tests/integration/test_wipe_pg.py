@@ -10,8 +10,11 @@ test_pattern_detector.py``): absent it, the whole module is skipped LOUDLY at co
 
 DEC-77 r5 (test-DSN safety, non-negotiable): this is the ONE suite on the board that truncates an
 entire public schema, so it additionally HARD-FAILS at collection — not skips, not runs — if the
-resolved ``WOMBAT_TEST_PG_DSN`` is identical to ``WOMBAT_PG_DSN``. A copy-pasted production DSN
-must be a loud failure here, never a wipe.
+resolved ``WOMBAT_TEST_PG_DSN`` is identical to the live DSN. The live DSN is resolved with
+``wombat.config._resolve_pg_dsn`` — the SAME env-else-cwd-relative-``.env`` resolution
+``load_config()`` uses (TK-334 repair) — not a bare ``os.environ`` read, because the operator's
+real DSN normally lives only in the repo-root ``.env``, never in an exported env var. A
+copy-pasted production DSN must be a loud failure here, never a wipe.
 
   AC1 archive fidelity — every public base table seeded, ``archive_and_wipe`` run, one JSON file
       per table plus ``manifest.json`` land under ``archive_dir``, every seeded row appears
@@ -38,18 +41,22 @@ import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 
+from wombat.config import _resolve_pg_dsn
 from wombat.schema_preflight import ensure_all_schemas
 from wombat.wipe import archive_and_wipe
 
 _DSN = os.environ.get("WOMBAT_TEST_PG_DSN")
-_LIVE_DSN = os.environ.get("WOMBAT_PG_DSN")
+# TK-334 repair: the operator's real DSN normally lives only in the repo-root .env, not an
+# exported WOMBAT_PG_DSN env var — resolve it the SAME way load_config() does (env, else
+# cwd-relative .env) so a copy-pasted live DSN is actually caught, not missed.
+_LIVE_DSN = _resolve_pg_dsn()
 
 if _DSN and _LIVE_DSN and _DSN == _LIVE_DSN:
     raise RuntimeError(
-        "WOMBAT_TEST_PG_DSN is identical to WOMBAT_PG_DSN — refusing to collect the TK-334 "
-        "archive-then-truncate suite (DEC-77 r5). This suite TRUNCATEs an entire public schema; "
-        "a copy-pasted production DSN here must be a loud failure, never a wipe. Point "
-        "WOMBAT_TEST_PG_DSN at a throwaway Postgres instead."
+        "WOMBAT_TEST_PG_DSN is identical to the live WOMBAT_PG_DSN (env or repo-root .env) — "
+        "refusing to collect the TK-334 archive-then-truncate suite (DEC-77 r5). This suite "
+        "TRUNCATEs an entire public schema; a copy-pasted production DSN here must be a loud "
+        "failure, never a wipe. Point WOMBAT_TEST_PG_DSN at a throwaway Postgres instead."
     )
 
 if not _DSN:
