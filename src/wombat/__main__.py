@@ -58,7 +58,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from wombat.config import WombatConfig, load_config
+from wombat.config import ConfigurationError, WombatConfig, load_config
 from wombat.runtime import _existing_handshake_port, _handshake_port_is_live, serve
 from wombat.trail.renderer import _DEFAULT_LOG_PATH
 from wombat.wipe import (
@@ -201,8 +201,18 @@ def _run_wipe_command(*, confirm: bool, archive_dir_override: str | None) -> int
     runtime (AC6, DEC-77 r2) and a configured durable substrate (AC3, DEC-77 r7) BEFORE any
     archive or destructive act, then performs the Postgres tier (TK-334) followed by the
     filesystem tier (TK-335), printing the archive directory as the final stdout line on success.
+
+    Batch-review repair (round 3, minor finding): ``load_config()`` can raise
+    ``ConfigurationError`` (e.g. a missing required env var) — caught here and printed as the
+    SAME clean ``wombat wipe: aborted - <reason>`` line every other failure mode in this command
+    already produces, rather than a raw Python traceback. Exit code stays nonzero either way (the
+    ps1/Electron exit-code contract is unchanged).
     """
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigurationError as exc:
+        print(f"wombat wipe: aborted - {exc}", file=sys.stderr)
+        return 1
     archive_dir = (
         Path(archive_dir_override) if archive_dir_override else _default_wipe_archive_dir()
     )
@@ -229,8 +239,8 @@ def _run_wipe_command(*, confirm: bool, archive_dir_override: str | None) -> int
 
     trail_log_path = Path(_DEFAULT_LOG_PATH)
     try:
-        check_substrate_guard()
-        pg_report = archive_and_wipe(config.wombat_pg_dsn, archive_dir)
+        substrate = check_substrate_guard()
+        pg_report = archive_and_wipe(config.wombat_pg_dsn, archive_dir, substrate=substrate)
         wipe_filesystem_tier(
             archive_dir,
             brief_path=Path(config.wombat_brief_path) if config.wombat_brief_path else None,

@@ -82,7 +82,15 @@ class WipeAborted(Exception):
 
 @dataclass
 class WipeReport:
-    """What ``archive_and_wipe`` actually did, for a caller (TK-335's CLI) to report."""
+    """What ``archive_and_wipe`` actually did, for a caller (TK-335's CLI) to report.
+
+    ``substrate`` (batch-review repair, round 3 minor finding): AC3 says the report records the
+    substrate as ``"cold_boot"`` — ``check_substrate_guard()`` already computes exactly that
+    string (or raises before this function is ever reached), but nothing previously threaded the
+    already-computed value through to the report, so the fact was computed and then discarded.
+    Defaults to ``"cold_boot"`` (the only value ``check_substrate_guard`` ever returns without
+    raising) so existing callers that do not pass ``substrate`` explicitly are unaffected.
+    """
 
     tables: list[str]
     row_counts: dict[str, int]
@@ -91,6 +99,7 @@ class WipeReport:
     archive_dir: Path
     manifest_path: Path
     timestamp: str
+    substrate: str = "cold_boot"
 
 
 def archive_and_wipe(
@@ -98,12 +107,18 @@ def archive_and_wipe(
     archive_dir: Path,
     *,
     connect: Callable[[str], _PgConnection] = psycopg.connect,
+    substrate: str = "cold_boot",
 ) -> WipeReport:
     """Archive every public base table on ``dsn`` to JSON under ``archive_dir``, verify every
     file, then ``TRUNCATE`` everything except ``wombat_settings`` in one transaction.
 
     Raises ``WipeAborted`` (zero rows touched) on any archive write/verification failure. Never
     ``DROP``s, never runs a per-table ``DELETE`` — see the module docstring for the four phases.
+
+    ``substrate`` (batch-review repair, round 3): the value AC3's guard (``check_substrate_
+    guard()``) already computed before this function was ever called — threaded straight through
+    onto the returned ``WipeReport`` so it is actually recorded, not just computed. Keyword-only,
+    defaulting to ``"cold_boot"`` (mirrors ``connect``'s own already-established seam shape).
     """
     archive_dir = Path(archive_dir)
     conn = connect(dsn)
@@ -144,6 +159,7 @@ def archive_and_wipe(
             archive_dir=archive_dir,
             manifest_path=manifest_path,
             timestamp=timestamp,
+            substrate=substrate,
         )
     finally:
         conn.close()

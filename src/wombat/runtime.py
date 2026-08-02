@@ -87,10 +87,6 @@ _SCHEDULE_RUN_ID_PREFIX = "wombat-brief-schedule"
 # TK-52: the dream schedule pathway's initial-drive run-id prefix — arms the nightly dream timer
 # at boot (also the crash-miss catch, mirrors _SCHEDULE_RUN_ID_PREFIX above).
 _DREAM_SCHEDULE_RUN_ID_PREFIX = "wombat-dream-schedule"
-# TK-268 (ISS-20): the pre-write live-handshake probe's bounded connect timeout — deliberately a
-# plain module constant (no env flag, no config field per the ruling: the guard derives from
-# observable state only). Tests shrink this via monkeypatch to keep the timeout-elapses case fast.
-_HANDSHAKE_PROBE_TIMEOUT_SECONDS = 1.0
 
 
 def _read_params_overlay(dsn: str) -> dict[str, str]:
@@ -207,17 +203,37 @@ def _existing_handshake_port(path: Path) -> int | None:
 
 
 def _handshake_port_is_live(port: int) -> bool:
-    """Bounded loopback TCP connect-then-close probe (TK-268, ISS-20): answers ``True`` iff some
-    process currently holds ``port`` on 127.0.0.1. No HTTP, no token use — the raw TCP connect is
-    the whole question (per ruling: no token validation on the probe). A refusal, timeout, or any
-    other OS error just means "not live"."""
+    """Exclusive-bind-then-close probe (TK-268/ISS-20; repaired at the TK-335 batch-review round
+    3 MAJOR finding): answers ``True`` iff something already holds ``port`` on 127.0.0.1.
+
+    This attempts the IDENTICAL bind ``wombat.__main__._acquire_singleton_lock`` performs — same
+    socket family/type (``AF_INET``/``SOCK_STREAM``), no ``SO_REUSEADDR`` or other options set,
+    never ``listen()`` — because a plain TCP *connect* cannot see a bind-only holder. The
+    singleton-lock socket ``_acquire_singleton_lock`` binds is NEVER ``listen()``-ed (it is a
+    pure OS-level mutex, not a server socket), so a connect against it always gets
+    ``ECONNREFUSED`` even while a real wombat runtime genuinely holds that exact port — this was
+    live-proven on-machine with two real ``-m wombat`` runtime processes running: the old
+    connect-based probe reported "not live" against a port that in fact refused the connect
+    because a live runtime owned it. Mirroring the SAME bind exactly (rather than reusing
+    ``connect``) is what makes this probe agree with what ``_acquire_singleton_lock`` itself would
+    see, including on Windows, where ``SO_REUSEADDR`` semantics differ from POSIX and could
+    otherwise make a naively-reused-option probe falsely report "not live" against a genuine
+    holder.
+
+    If OUR OWN bind succeeds, the port is free: release it immediately (never listen, never hold
+    it) and report ``False``. Any ``OSError`` (address already in use, etc.) means something else
+    already owns it: ``True``. There is no timeout dimension any more — a bind is a local,
+    non-blocking-on-the-network syscall, unlike the connect it replaces, so it also answers a
+    black-holed/firewalled port instantly rather than waiting out a bounded timeout."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        with socket.create_connection(
-            ("127.0.0.1", port), timeout=_HANDSHAKE_PROBE_TIMEOUT_SECONDS
-        ):
-            return True
+        sock.bind(("127.0.0.1", port))
     except OSError:
+        return True
+    else:
         return False
+    finally:
+        sock.close()
 
 
 def _write_chat_handshake(surface: ChatSurface) -> None:

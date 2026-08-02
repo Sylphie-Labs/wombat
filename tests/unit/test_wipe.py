@@ -278,3 +278,28 @@ def test_wipe_report_is_a_plain_dataclass_with_the_documented_fields(tmp_path: P
     assert report.archive_dir == tmp_path
     assert report.manifest_path == tmp_path / "manifest.json"
     assert isinstance(report.timestamp, str) and report.timestamp
+
+
+# ================================================================================================
+# Batch-review repair (round 3, minor finding) — AC3's "WipeReport records the substrate as
+# cold_boot" is threaded through from the already-computed check_substrate_guard() value, not
+# just computed and discarded.
+# ================================================================================================
+
+
+def test_wipe_report_defaults_substrate_to_cold_boot_when_caller_passes_nothing(
+    tmp_path: Path,
+) -> None:
+    conn = _FakeConnection(_seeded_tables())
+    report = archive_and_wipe("fake-dsn", tmp_path, connect=_make_connect(conn))
+    assert report.substrate == "cold_boot"
+
+
+def test_wipe_report_carries_the_substrate_value_the_caller_passed_through(
+    tmp_path: Path,
+) -> None:
+    conn = _FakeConnection(_seeded_tables())
+    report = archive_and_wipe(
+        "fake-dsn", tmp_path, connect=_make_connect(conn), substrate="cold_boot"
+    )
+    assert report.substrate == "cold_boot"

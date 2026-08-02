@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 
 from wombat import __main__ as wombat_main
-from wombat.config import WombatConfig
+from wombat.config import ConfigurationError, WombatConfig
 from wombat.wipe import WipeAborted
 
 
@@ -226,6 +226,62 @@ def test_confirmed_run_with_archive_dir_override(
     assert capsys.readouterr().out.splitlines()[-1] == str(override_dir)
 
 
+def test_confirmed_run_threads_substrate_guard_value_into_archive_and_wipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batch-review repair (round 3, minor finding): ``check_substrate_guard()``'s return value
+    must actually reach ``archive_and_wipe`` — previously it was computed and then discarded, so
+    AC3's "WipeReport records the substrate as cold_boot" was never actually true anywhere."""
+    monkeypatch.chdir(tmp_path)
+    config = _make_config()
+    monkeypatch.setattr(wombat_main, "load_config", lambda: config)
+
+    captured: dict[str, object] = {}
+
+    class _FakeReport:
+        archive_dir = tmp_path / "archives" / "wipe-x"
+
+    def _fake_archive_and_wipe(dsn: str, archive_dir: Path, **kwargs: object) -> _FakeReport:
+        captured.update(kwargs)
+        return _FakeReport()
+
+    monkeypatch.setattr(wombat_main, "check_substrate_guard", lambda: "cold_boot")
+    monkeypatch.setattr(wombat_main, "archive_and_wipe", _fake_archive_and_wipe)
+    monkeypatch.setattr(wombat_main, "wipe_filesystem_tier", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["wombat", "wipe", "--confirm"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        wombat_main.main()
+    assert exc_info.value.code == 0
+    assert captured.get("substrate") == "cold_boot"
+
+
+# ================================================================================================
+# Batch-review repair (round 3, minor finding) — a ConfigurationError from load_config() (e.g. a
+# missing required env var) must print the SAME clean "wombat wipe: aborted - <reason>" line
+# every other failure mode in this command already produces, not a raw Python traceback.
+# ================================================================================================
+
+
+def test_configuration_error_from_load_config_prints_clean_abort_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _boom() -> WombatConfig:
+        raise ConfigurationError("missing required environment variable FOO")
+
+    monkeypatch.setattr(wombat_main, "load_config", _boom)
+    monkeypatch.setattr(sys, "argv", ["wombat", "wipe", "--confirm"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        wombat_main.main()
+    assert exc_info.value.code != 0
+
+    err = capsys.readouterr().err
+    assert "wombat wipe: aborted -" in err
+    assert "missing required environment variable FOO" in err
+    assert "Traceback" not in err
+
+
 # ================================================================================================
 # AC6 — quiesce refusal (DEC-77 r2).
 # ================================================================================================
@@ -264,6 +320,49 @@ def test_confirm_refuses_when_singleton_port_is_live(
         assert not (tmp_path / "archives").exists()
     finally:
         live_socket.close()
+
+
+def test_confirm_refuses_when_singleton_port_is_bind_only_held_not_listening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Batch-review repair (round 3, MAJOR — the regression this whole repair exists to pin): a
+    real wombat runtime's singleton lock (``wombat.__main__._acquire_singleton_lock``) binds its
+    port but NEVER calls ``listen()`` — it is a pure OS-level mutex, not a server socket. This
+    test holds the port the SAME way (bind-only, no ``listen()``) rather than the older sibling
+    test's ``listen(1)`` shape, which — unlike a real runtime — happens to make a plain TCP
+    connect succeed too and so would have passed even under the pre-fix, broken connect-based
+    probe. This is the live-proven bug: with two real ``-m wombat`` processes running, port 63218
+    refused connect and the OLD probe still returned "not live", proceeding straight toward
+    TRUNCATE against a live runtime. The fixed probe must refuse here."""
+    monkeypatch.chdir(tmp_path)
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))  # bind-only — deliberately NEVER listen(), mirrors the real lock
+    try:
+        port = holder.getsockname()[1]
+        config = _make_config(wombat_singleton_port=port)
+        monkeypatch.setattr(wombat_main, "load_config", lambda: config)
+
+        brief = tmp_path / "brief.md"
+        brief.write_text("hello", encoding="utf-8")
+
+        engine_calls = {"n": 0}
+        monkeypatch.setattr(
+            wombat_main, "archive_and_wipe", lambda *a, **k: engine_calls.__setitem__("n", 1)
+        )
+        monkeypatch.setattr(sys, "argv", ["wombat", "wipe", "--confirm"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wombat_main.main()
+        assert exc_info.value.code != 0
+
+        err = capsys.readouterr().err
+        assert "live" in err.lower()
+        assert "stop the runtime" in err.lower()
+        assert engine_calls["n"] == 0
+        assert brief.read_text(encoding="utf-8") == "hello"
+        assert not (tmp_path / "archives").exists()
+    finally:
+        holder.close()
 
 
 def test_confirm_refuses_when_handshake_port_is_live(

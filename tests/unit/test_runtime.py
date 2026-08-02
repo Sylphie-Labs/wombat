@@ -2374,28 +2374,60 @@ def test_write_chat_handshake_writes_as_today_when_no_live_owner(
     assert json.loads(path.read_text(encoding="utf-8")) == {"port": 54321, "token": "fresh-token"}
 
 
-def test_write_chat_handshake_proceeds_once_bounded_probe_timeout_elapses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_write_chat_handshake_refuses_overwrite_when_recorded_port_is_bind_only_held(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """AC3: a probe that neither answers nor refuses promptly (simulated black-hole/firewall) still
-    proceeds to write once the bounded timeout elapses — the whole call completes within the bound
-    and the write happens. Shrinks the module's probe timeout via monkeypatch (no env flag, no
-    config field) so this test stays fast instead of actually blocking a full second."""
-    monkeypatch.setattr(runtime, "_HANDSHAKE_PROBE_TIMEOUT_SECONDS", 0.05)
+    """Batch-review repair (round 3, MAJOR): the probe must detect a BIND-ONLY held port — one
+    that is bound but never ``listen()``-ed, mirroring EXACTLY what
+    ``wombat.__main__._acquire_singleton_lock``'s own singleton-lock socket does — as live, not
+    just a genuinely listening one. The pre-fix probe used ``socket.create_connection`` (a TCP
+    *connect*), which always gets ``ECONNREFUSED`` against a bind-only holder and so always
+    reported "not live" even while the port was genuinely, exclusively held; this was live-proven
+    on-machine against a real singleton-lock socket. The fixed probe binds the same way
+    ``_acquire_singleton_lock`` does and must therefore see this holder as live too."""
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))  # bind-only — deliberately NEVER listen()
+    try:
+        held_port = holder.getsockname()[1]
+        path = tmp_path / "chat-handshake.json"
+        original = json.dumps({"port": held_port, "token": "old-token"})
+        path.write_text(original, encoding="utf-8")
 
-    def _blackhole_create_connection(*args: Any, **kwargs: Any) -> socket.socket:
-        time.sleep(0.05)  # stands in for the OS actually waiting out the connect timeout
-        raise TimeoutError("simulated black-hole: neither SYN-ACK nor RST ever arrives")
+        surface = _FakeHandshakeSurface(handshake_path=path, port=99999, token="new-token")
+        with caplog.at_level(logging.WARNING):
+            runtime._write_chat_handshake(surface)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(socket, "create_connection", _blackhole_create_connection)
+        assert path.read_text(encoding="utf-8") == original  # byte-unchanged
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert str(held_port) in warnings[0].getMessage()
+    finally:
+        holder.close()
 
-    path = tmp_path / "chat-handshake.json"
-    path.write_text(json.dumps({"port": 65000, "token": "stale"}), encoding="utf-8")
-    surface = _FakeHandshakeSurface(handshake_path=path, port=11111, token="fresh-token")
+
+def test_handshake_port_is_live_probe_completes_instantly_with_no_timeout_dimension(
+    tmp_path: Path,
+) -> None:
+    """The bind-based probe that replaced the old bounded-timeout TCP connect (TK-268/ISS-20's
+    original AC3) has no network-blocking dimension at all — a bind is a local syscall, so even a
+    black-holed/firewalled port answers instantly rather than waiting out a timeout. Proves the
+    probe returns well within what the old 1s default bound allowed, on both the free-port (not
+    live) and held-port (live) cases."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    free_port = probe.getsockname()[1]
+    probe.close()
 
     start = time.monotonic()
-    runtime._write_chat_handshake(surface)  # type: ignore[arg-type]
-    elapsed = time.monotonic() - start
+    assert runtime._handshake_port_is_live(free_port) is False
+    assert time.monotonic() - start < 1.0
 
-    assert elapsed < 1.0  # comfortably under the real 1s default — proves the bound, not a hang
-    assert json.loads(path.read_text(encoding="utf-8")) == {"port": 11111, "token": "fresh-token"}
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    try:
+        held_port = holder.getsockname()[1]
+        start = time.monotonic()
+        assert runtime._handshake_port_is_live(held_port) is True
+        assert time.monotonic() - start < 1.0
+    finally:
+        holder.close()
