@@ -148,6 +148,11 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 # (voice/context_prefetch.py's build_current_activity_context, merged into the SAME asr_context_
 # hook closure) joins the set. The tests/unit/test_compose_stage.py TK-298 drift pin updates in
 # this SAME diff, precisely because it exists to make an addition like this one loud.
+#
+# TK-347 (R7): grows to six DELIBERATELY — ``current_body_state``
+# (devices/biometric_projection.py's project_current_body_state, merged into the SAME
+# asr_context_hook closure) joins the set. Same drift-pin discipline: the
+# tests/unit/test_compose_stage.py TK-298 pin updates in this SAME diff.
 _GROUNDING_ONLY_KEYS = frozenset(
     {
         "replying_to",
@@ -155,6 +160,7 @@ _GROUNDING_ONLY_KEYS = frozenset(
         "context_calendar_today",
         "context_recent_email",
         "current_activity",
+        "current_body_state",
     }
 )
 

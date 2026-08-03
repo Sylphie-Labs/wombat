@@ -222,6 +222,7 @@ from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
 from .devices.biometric_ingest import BiometricIngestHandler
+from .devices.biometric_projection import project_current_body_state
 from .devices.credentials import DeviceCredentialStore, KeyringDeviceVault
 from .devices.surface import DeviceSurface
 from .devices.voice_ingest import VoiceIngestHandler
@@ -1372,6 +1373,14 @@ def assemble_runtime(
     # screenpipe snippet. screenpipe_client is constructed further below still (RULING R-A, TK-324)
     # — the SAME forward-reference safety applies: None on a wombat_observe_screenpipe-off boot,
     # a live ScreenpipeClient otherwise, resolved at call time.
+    #
+    # TK-347 (R7): ALSO merged into this SAME closure — project_current_body_state reads the SAME
+    # biometric_observation_store constructed further below (TK-341/TK-346 hoisted name), the SAME
+    # forward-reference safety as user_facts_store/current_activity above applies. None on a
+    # wombat_observe_biometrics-off boot (biometric_observation_store stays None — the SAME
+    # toggle-gated construction TK-341's route already uses, no separate toggle check lives here)
+    # or when no fresh row exists in devices/biometric_projection.py's pinned freshness window:
+    # the key is left ABSENT ENTIRELY (absent-not-wrong), never an empty string.
     def asr_context_hook() -> dict[str, str]:
         text = last_spoken_register.current()
         extra: dict[str, str] = {} if text is None else {"replying_to": text}
@@ -1382,6 +1391,9 @@ def assemble_runtime(
                 current_activity, screenpipe_client, clock=_utc_now
             )
         )
+        body_state = project_current_body_state(biometric_observation_store, clock=_utc_now)
+        if body_state is not None:
+            extra["current_body_state"] = body_state
         return extra
 
     if chat_source is not None:

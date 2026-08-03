@@ -480,11 +480,12 @@ async def test_ac4_chat_turn_degrade_renders_template_line_exactly_as_today() ->
 
 # --- REPAIR (batch review, TK-293 x TK-296): a chat degrade must not leak the grounding-only
 # fields context_hook stamps (known_user_context/context_calendar_today/context_recent_email/
-# replying_to/current_activity) verbatim to the user, even though the model-facing prompt still
-# needs to see them (voice is shielded downstream by SpeechShapeStage's DEC-55c never-verbatim;
-# typed chat is not — ChatReplyStage resolves this stage's degrade text straight to the chat pane,
-# unshaped). current_activity (TK-311, DEC-68(d)(1)) folded into the SAME fixture/test rather than
-# a new one — it is stamped by the SAME closure and must pass through the SAME filter. -----------
+# replying_to/current_activity/current_body_state) verbatim to the user, even though the
+# model-facing prompt still needs to see them (voice is shielded downstream by SpeechShapeStage's
+# DEC-55c never-verbatim; typed chat is not — ChatReplyStage resolves this stage's degrade text
+# straight to the chat pane, unshaped). current_activity (TK-311, DEC-68(d)(1)) and
+# current_body_state (TK-347, R7) are folded into the SAME fixture/test rather than new ones — both
+# are stamped by the SAME closure and must pass through the SAME filter. --------------------------
 
 _GROUNDED_CHAT_PAYLOAD: dict[str, Any] = {
     "text": "hey",
@@ -493,6 +494,7 @@ _GROUNDED_CHAT_PAYLOAD: dict[str, Any] = {
     "context_recent_email": "Re: divorce paperwork - lawyer@example.com",
     "replying_to": "sure, want me to book it?",
     "current_activity": "notepad.exe - Untitled - Notepad",
+    "current_body_state": "resting_hr_daily: bpm=62",
 }
 
 
@@ -521,6 +523,8 @@ async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_t
     assert "replying_to: sure, want me to book it?" in user_msg.content
     # AC1 (TK-311, DEC-68(d)(1)): the one-line current_activity reaches the prompt too, within cap.
     assert "current_activity: notepad.exe - Untitled - Notepad" in user_msg.content
+    # AC1 (TK-347, R7): the one-line current_body_state reaches the prompt too.
+    assert "current_body_state: resting_hr_daily: bpm=62" in user_msg.content
 
     # but the DEGRADED reply text — what ChatReplyStage resolves verbatim to the typed chat pane
     # — never echoes any grounding field back.
@@ -532,8 +536,46 @@ async def test_repair_chat_degrade_strips_grounding_only_keys_but_prompt_keeps_t
     assert "divorce paperwork" not in text
     assert "sure, want me to book it?" not in text
     assert "notepad.exe" not in text
+    # AC5 (TK-347, R7): the degrade template never echoes current_body_state verbatim either.
+    assert "resting_hr_daily" not in text
+    assert "bpm=62" not in text
     # the item's own genuine content still renders — the fix isn't a black hole, just a filter.
     assert text == TemplateComposer().render(ItemKind.CHAT, {"text": "hey"})
+
+
+# --- TK-347 (R7): current_body_state merged into the SAME asr_context_hook closure -----------
+
+
+async def test_ac1_current_body_state_renders_into_prompt_with_no_other_payload_change() -> None:
+    """AC1: a chat payload carrying ``current_body_state`` (as the SAME shared asr_context_hook
+    closure would stamp it) renders into the model prompt via format_payload_fields exactly like
+    every other grounding field — and the ONLY difference from the baseline chat payload's own
+    prompt is that one added ``current_body_state: ...`` field."""
+    model = FakeModel(
+        response=ModelResponse(text="phrased!", model_id="deepseek-chat", finish_reason="stop")
+    )
+    stage = ComposeStage(config=_config(), template_composer=TemplateComposer())
+
+    await stage.run(_ctx_with(model, _chat_compose_request_artifact()))
+    _, baseline_user_msg = model.calls[0]
+
+    grounded_payload = {**_PAYLOAD, "current_body_state": "resting_hr_daily: bpm=62"}
+    grounded_artifact = Artifact(
+        kind=COMPOSE_REQUEST,
+        produced_by="compose_dispatch",
+        provenance=Provenance(source="system", confidence=1.0, recorded_at=_FIXED_NOW),
+        data=compose_request_to_artifact_data(_ITEM_ID, ItemKind.CHAT, grounded_payload),
+    )
+    await stage.run(_ctx_with(model, grounded_artifact))
+    _, grounded_user_msg = model.calls[1]
+
+    assert "current_body_state: resting_hr_daily: bpm=62" in grounded_user_msg.content
+    # no other payload change: stripping exactly the one rendered field (plus its "; " join)
+    # recovers the baseline prompt byte-for-byte.
+    stripped = grounded_user_msg.content.replace(
+        "current_body_state: resting_hr_daily: bpm=62; ", ""
+    )
+    assert stripped == baseline_user_msg.content
 
 
 # --- TK-298 (ISS-30 fold-in): pin _GROUNDING_ONLY_KEYS to the exact set bootstrap.py's
@@ -544,10 +586,11 @@ def test_grounding_only_keys_pinned_to_the_exact_context_hook_stampable_set() ->
     """``_GROUNDING_ONLY_KEYS`` must equal EXACTLY the keys ``assemble_runtime``'s shared
     ``asr_context_hook`` closure can stamp onto a chat payload: ``replying_to`` (TK-289),
     ``known_user_context``/``context_calendar_today``/``context_recent_email`` (TK-290/TK-296),
-    and now ``current_activity`` (TK-311, DEC-68(d)(1)) — the FIVE-key set, grown DELIBERATELY.
-    This pin exists precisely so a future grounding key added to that closure without a matching
-    addition here fails loudly instead of silently reopening the v2.165 degrade leak (a grounding
-    field dumped verbatim to the typed chat pane) — TK-311 cites this test per its briefing."""
+    ``current_activity`` (TK-311, DEC-68(d)(1)), and now ``current_body_state`` (TK-347, R7) — the
+    SIX-key set, grown DELIBERATELY. This pin exists precisely so a future grounding key added to
+    that closure without a matching addition here fails loudly instead of silently reopening the
+    v2.165 degrade leak (a grounding field dumped verbatim to the typed chat pane) — TK-311/TK-347
+    both cite this test per their briefings."""
 
     assert frozenset(
         {
@@ -556,6 +599,7 @@ def test_grounding_only_keys_pinned_to_the_exact_context_hook_stampable_set() ->
             "context_calendar_today",
             "context_recent_email",
             "current_activity",
+            "current_body_state",
         }
     ) == _GROUNDING_ONLY_KEYS
 
