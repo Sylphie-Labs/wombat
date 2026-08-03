@@ -151,8 +151,9 @@ inertness lives in the collectors, not the graph). No new ``RuntimeBundle`` fiel
 
 TK-324 (EP-37, DEC-70h): the dream graph's new ``dream_screenpipe`` stage —
 ``DreamScreenpipeStage`` (``build_dream_pathway``'s new ``screenpipe`` arg), inserted between
-``dream_observe`` and ``dream_behavior_log`` — composes over a NEW composition-root
-``screenpipe_client`` (a ``ScreenpipeClient`` constructed here iff
+``dream_observe`` and ``dream_biometrics`` (TK-346's stage, its new downstream neighbor,
+superseding ``dream_behavior_log`` as the immediate next stage) — composes over a NEW
+composition-root ``screenpipe_client`` (a ``ScreenpipeClient`` constructed here iff
 ``config.wombat_observe_screenpipe``, ``None`` otherwise — RULING R-A; ``sources/bootstrap.py``
 keeps its OWN separate ``ScreenpipeClient`` instance for the change-event source, TK-322, never
 touched by this ticket), the SAME budget-guarded ``dream_substrate.model`` every other
@@ -161,6 +162,19 @@ dream-consolidation call site uses (DEC-23, never a second model/guard), and the
 is ``None`` and the stage is structurally inert (zero client/model contact) — the graph shape is
 IDENTICAL either way. No new ``RuntimeBundle`` field: like ``dream_observe_stage`` this stage owns
 no closeable resource of its own.
+
+TK-346 (EP-41, RULING R6): the dream graph's new ``dream_biometrics`` stage —
+``DreamBiometricsStage`` (``build_dream_pathway``'s new ``biometrics`` arg), inserted between
+``dream_screenpipe`` and ``dream_behavior_log`` — the only splice touching neither
+``dream_observe`` nor ``dream_facts``. The ``dream_observe`` pattern (TK-314) pointed at
+``channel='biometric'``: PURE CODE, no model call. Composes over a ``biometric_observation_store``
+constructed here iff ``config.wombat_observe_biometrics`` (the SAME toggle
+``BiometricIngestHandler`` gates on, HOISTED into a named local so both share the ONE
+``ObservationStore`` instance rather than opening a second lazy connection to the same table) and
+the SAME ``user_facts_store`` the other distillation passes use. On a toggle-off boot
+``biometric_observation_store`` is ``None`` and the stage degrades to a one-line no-op each night —
+the graph shape is IDENTICAL either way. No new ``RuntimeBundle`` field: like
+``dream_screenpipe_stage`` this stage owns no closeable resource of its own.
 """
 
 from __future__ import annotations
@@ -194,6 +208,7 @@ from cogworx.substrate.journal import Journal, RunState
 from cogworx.testing.doubles import InMemoryEntityKG
 
 from .behavior.event_log import BehaviorEventLog
+from .behavior.stages.dream_biometrics import DreamBiometricsStage
 from .behavior.stages.dream_derive import DreamDeriveStage
 from .behavior.stages.dream_facts import DreamFactsStage
 from .behavior.stages.dream_observe import DreamObserveStage
@@ -1506,9 +1521,15 @@ def assemble_runtime(
     # dedicated ObservationStore is used rather than reusing observation_store: construction does
     # zero I/O (Q-46 lazy-connection convention), and biometrics must remain wired even when both
     # screen and mic are off.
+    # TK-346 HOIST: the ObservationStore instance is now named (biometric_observation_store) so
+    # DreamBiometricsStage below can share it — never a second lazy connection to the same table.
+    biometric_observation_store: ObservationStore | None = None
     biometric_ingest_handler: BiometricIngestHandler | None = None
     if config.wombat_observe_biometrics:
-        biometric_ingest_handler = BiometricIngestHandler(store=ObservationStore(dsn), tz=tz)
+        biometric_observation_store = ObservationStore(dsn)
+        biometric_ingest_handler = BiometricIngestHandler(
+            store=biometric_observation_store, tz=tz
+        )
 
     # TK-343 (R1): the OPTIONAL GET /v1/utterance route handler — constructed iff sealed_
     # utterance_store was built above (itself gated on config.wombat_remote_voice), the SAME
@@ -1637,6 +1658,15 @@ def assemble_runtime(
         user_facts=user_facts_store,
         tz=tz,
     )
+    # TK-346 (EP-41, RULING R6): DreamBiometricsStage over the SAME toggle-gated
+    # biometric_observation_store BiometricIngestHandler writes through (hoisted above — None on
+    # a toggle-off boot, where the stage degrades to a one-line nightly no-op) and the SAME
+    # user_facts_store the other distillation passes use. UNCONDITIONAL splice — the graph shape
+    # is pinned identical whether or not the biometrics toggle is on; pure code, no model.
+    dream_biometrics_stage = DreamBiometricsStage(
+        observations=biometric_observation_store,
+        user_facts=user_facts_store,
+    )
 
     def _record_persona_feedback(
         token: FeedbackToken, event_key: str, timestamp: datetime
@@ -1693,6 +1723,7 @@ def assemble_runtime(
         dream_derive_stage,
         dream_observe_stage,
         dream_screenpipe_stage,
+        dream_biometrics_stage,
         dream_behavior_log_stage,
         dream_window_stage,
         dream_pattern_stage,

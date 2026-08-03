@@ -21,7 +21,7 @@ its own documented never-raise degrade makes this fast and safe, no real screenp
       transition; a genuinely degraded client (unreachable port) -> at least one WARNING (the
       client's own, DEC-70i), zero model calls, still transitions; zero timeline data (a healthy
       fake returning nothing) -> zero model calls, NO warning, still transitions. Every case:
-      ``new_facts == 0`` and the stage still ``Transition``s to ``dream_behavior_log``.
+      ``new_facts == 0`` and the stage still ``Transition``s to ``dream_biometrics``.
   AC(fold): ``_build_projection``'s own caps (line count / total chars / per-line length) hold
       even when the raw fold would overflow them — a stable, deterministic prefix truncation,
       logged loud when it bites.
@@ -188,7 +188,7 @@ async def test_ac1_rich_timeline_makes_one_search_per_day_and_one_capped_model_c
     assert "Evenings mostly Chrome" in lines
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_biometrics"
     assert result.output.data == {"new_facts": 2}
     assert all(source == "behavior" for _key, _fact, source in upsert_calls)
     landed_facts = [fact for _key, fact, _source in upsert_calls]
@@ -237,7 +237,7 @@ async def test_ac2_mixed_proposal_lands_at_most_five_new_facts_dropping_the_rest
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_biometrics"
     assert result.output.data == {"new_facts": 5}
 
     landed_facts = [fact for _key, fact, _source in upsert_calls]
@@ -269,7 +269,7 @@ async def test_ac3_client_none_is_structurally_inert(monkeypatch: pytest.MonkeyP
     result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_biometrics"
     assert result.output.data == {"new_facts": 0}
     assert model.calls == []
     assert upsert_calls == []
@@ -292,7 +292,7 @@ async def test_ac3_degraded_client_logs_one_warning_and_makes_zero_model_calls(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_biometrics"
     assert result.output.data == {"new_facts": 0}
     assert model.calls == []
     assert upsert_calls == []
@@ -311,7 +311,7 @@ async def test_ac3_zero_timeline_data_makes_zero_model_calls_no_warning(
         result = await stage.run(StageContextFake(now_fn=lambda: _NOW))
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_biometrics"
     assert result.output.data == {"new_facts": 0}
     assert model.calls == []
     assert upsert_calls == []

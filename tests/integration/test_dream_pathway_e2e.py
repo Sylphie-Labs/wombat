@@ -42,6 +42,7 @@ from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
 from wombat.behavior.event_log import BehaviorEventLog
 from wombat.behavior.event_log import ensure_schema as ensure_behavior_event_log_schema
+from wombat.behavior.stages.dream_biometrics import DreamBiometricsStage
 from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.dream_observe import DreamObserveStage
@@ -321,6 +322,9 @@ def _build_stack_with_raising_dream(
         user_facts=UserFactsStore(_DSN),
         tz=ZoneInfo("UTC"),
     )
+    stub_biometrics_stage = DreamBiometricsStage(
+        observations=None, user_facts=UserFactsStore(_DSN)
+    )
     stub_behavior_log_stage = DreamBehaviorLogStage(
         store=BehaviorEventLog(_DSN), entity_kg=stub_entity_kg, user_id="test-user"
     )
@@ -343,6 +347,7 @@ def _build_stack_with_raising_dream(
         stub_derive_stage,
         stub_observe_stage,
         stub_screenpipe_stage,
+        stub_biometrics_stage,
         stub_behavior_log_stage,
         stub_window_stage,
         stub_pattern_stage,

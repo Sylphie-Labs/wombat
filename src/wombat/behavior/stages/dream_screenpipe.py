@@ -359,7 +359,7 @@ class DreamScreenpipeStage:
     module docstring for the full read/fold/extract/filter/write contract."""
 
     name: str = "dream_screenpipe"
-    transitions: tuple[str, ...] = ("dream_behavior_log",)
+    transitions: tuple[str, ...] = ("dream_biometrics",)
 
     def __init__(
         self,
@@ -451,7 +451,7 @@ class DreamScreenpipeStage:
                         logger.info("dream_screenpipe: accepted new fact fact_key=%s", key)
 
         return Transition(
-            to="dream_behavior_log",
+            to="dream_biometrics",
             output=Artifact(
                 kind=DREAM_SCREENPIPE_REPORT_KIND,
                 produced_by=self.name,

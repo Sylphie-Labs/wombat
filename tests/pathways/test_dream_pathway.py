@@ -1,16 +1,17 @@
-"""TK-297/TK-299/TK-314/TK-324 — the ``build_dream_pathway`` graph-shape proof (EP-13/EP-37,
-DEC-65g/DEC-66/DEC-68(d)(2)/DEC-70h).
+"""TK-297/TK-299/TK-314/TK-324/TK-346 — the ``build_dream_pathway`` graph-shape proof (EP-13/EP-37/
+EP-41, DEC-65g/DEC-66/DEC-68(d)(2)/DEC-70h).
 
 Not pg-gated (mirrors ``test_dream_persona_stage.py``'s own AC4 engine-drive idiom): a REAL
 ``Engine`` drives ``wombat.dream`` end-to-end over ``_PassthroughStage`` doubles for every stage
-EXCEPT ``DreamFactsStage``, ``DreamDeriveStage``, ``DreamObserveStage``, and
-``DreamScreenpipeStage`` (real ones, over in-memory/monkeypatched collaborators —
+EXCEPT ``DreamFactsStage``, ``DreamDeriveStage``, ``DreamObserveStage``, ``DreamScreenpipeStage``,
+and ``DreamBiometricsStage`` (real ones, over in-memory/monkeypatched collaborators —
 ``DreamDeriveStage`` given a ``None`` ``ExternalItemStore``, ``DreamObserveStage`` a ``None``
-``ObservationStore``, and ``DreamScreenpipeStage`` a ``None`` client, each's own degrade shape, so
-all three derive zero facts and still transition cleanly) — proving the landed graph order is
-exactly ``dream_consolidate -> dream_outcome -> dream_tune -> dream_persona -> dream_facts ->
-dream_derive -> dream_observe -> dream_screenpipe -> dream_behavior_log -> dream_window ->
-dream_pattern -> dream_run`` (AC4/AC5).
+``ObservationStore``, ``DreamScreenpipeStage`` a ``None`` client, and ``DreamBiometricsStage`` a
+``None`` ``ObservationStore``, each's own degrade shape, so all four derive zero facts and still
+transition cleanly) — proving the landed graph order is exactly ``dream_consolidate ->
+dream_outcome -> dream_tune -> dream_persona -> dream_facts -> dream_derive -> dream_observe ->
+dream_screenpipe -> dream_biometrics -> dream_behavior_log -> dream_window -> dream_pattern ->
+dream_run`` (AC4/AC5).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from cogworx.model.registry import ModelRegistry
 from cogworx.runtime.engine import Engine
 
 from tests.support.stage_context_fake import FakeModel
+from wombat.behavior.stages.dream_biometrics import DreamBiometricsStage
 from wombat.behavior.stages.dream_derive import DreamDeriveStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.dream_observe import DreamObserveStage
@@ -115,6 +117,14 @@ async def test_ac4_the_landed_graph_walks_all_twelve_stages_in_order_to_completi
         tz=ZoneInfo("UTC"),
     )
 
+    # A real DreamBiometricsStage over a None ObservationStore (its own toggle-off degrade shape,
+    # TK-346 AC2) — zero rows in, zero facts derived, zero UserFactsStore calls made, still
+    # transitions on with NO model call (this stage never calls one).
+    biometrics_stage = DreamBiometricsStage(
+        observations=None,
+        user_facts=UserFactsStore(_UNREACHABLE_DSN),
+    )
+
     dream_graph = build_dream_pathway(
         _PassthroughStage(name="dream_consolidate", to="dream_outcome"),
         _PassthroughStage(name="dream_outcome", to="dream_tune"),
@@ -124,6 +134,7 @@ async def test_ac4_the_landed_graph_walks_all_twelve_stages_in_order_to_completi
         derive_stage,
         observe_stage,
         screenpipe_stage,
+        biometrics_stage,
         _PassthroughStage(name="dream_behavior_log", to="dream_window"),
         _PassthroughStage(name="dream_window", to="dream_pattern"),
         _PassthroughStage(name="dream_pattern", to="dream_run"),
@@ -141,6 +152,7 @@ async def test_ac4_the_landed_graph_walks_all_twelve_stages_in_order_to_completi
         "dream_derive",
         "dream_observe",
         "dream_screenpipe",
+        "dream_biometrics",
         "dream_behavior_log",
         "dream_window",
         "dream_pattern",
@@ -183,6 +195,7 @@ async def test_ac4_the_landed_graph_walks_all_twelve_stages_in_order_to_completi
         "dream_derive",
         "dream_observe",
         "dream_screenpipe",
+        "dream_biometrics",
         "dream_behavior_log",
         "dream_window",
         "dream_pattern",

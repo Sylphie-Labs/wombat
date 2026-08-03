@@ -252,13 +252,36 @@ class _PassthroughScreenpipeStage:
     ``tests/pathways/test_dream_screenpipe_stage.py``)."""
 
     name: str = "dream_screenpipe"
+    transitions: tuple[str, ...] = ("dream_biometrics",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_biometrics",
+            output=Artifact(
+                kind="wombat.dream_screenpipe_report",
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={"new_facts": 0},
+            ),
+        )
+
+
+class _PassthroughBiometricsStage:
+    """TK-346 mechanical reshape (flagged per the ticket's own sanction): ``build_dream_pathway``
+    now also requires a ``biometrics`` stage, inserted between ``screenpipe`` and
+    ``behavior_log`` — this suite's own AC1-AC3 witnesses are all about
+    ``DreamConsolidationStage``, so a trivial always-transitions-onward double merely satisfies
+    the shape without asserting anything about it (a real ``DreamBiometricsStage``'s own ACs live
+    in ``tests/pathways/test_dream_biometrics_stage.py``)."""
+
+    name: str = "dream_biometrics"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
         return Transition(
             to="dream_behavior_log",
             output=Artifact(
-                kind="wombat.dream_screenpipe_report",
+                kind="wombat.dream_biometrics_report",
                 produced_by=self.name,
                 provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
                 data={"new_facts": 0},
@@ -423,6 +446,7 @@ async def test_ac1_drain_with_work_reflects_reconciler_merges_and_terminates() -
         _PassthroughDeriveStage(),
         _PassthroughObserveStage(),
         _PassthroughScreenpipeStage(),
+        _PassthroughBiometricsStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),
@@ -492,6 +516,7 @@ async def test_ac2_clean_night_terminates_in_one_pass_with_zero_model_calls(
         _PassthroughDeriveStage(),
         _PassthroughObserveStage(),
         _PassthroughScreenpipeStage(),
+        _PassthroughBiometricsStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),
@@ -553,6 +578,7 @@ async def test_ac3_extractor_stall_still_transitions_and_run_completes(
         _PassthroughDeriveStage(),
         _PassthroughObserveStage(),
         _PassthroughScreenpipeStage(),
+        _PassthroughBiometricsStage(),
         _PassthroughBehaviorLogStage(),
         _PassthroughWindowStage(),
         _PassthroughPatternStage(),

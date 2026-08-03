@@ -29,6 +29,7 @@ import wombat.sources.bootstrap as sources_bootstrap_module
 import wombat.voice.select as voice_select_module
 from tests.support.stage_context_fake import FakeModel
 from wombat import bootstrap
+from wombat.behavior.stages.dream_biometrics import DreamBiometricsStage
 from wombat.behavior.stages.dream_facts import DreamFactsStage
 from wombat.behavior.stages.dream_observe import DreamObserveStage
 from wombat.behavior.stages.dream_screenpipe import DreamScreenpipeStage
@@ -2356,9 +2357,12 @@ def test_tk324_dream_screenpipe_splices_none_client_when_toggle_off() -> None:
     dream_graph = bundle.pathways.get(bundle.dream_pathway_id)
     observe_stage = dream_graph.get("dream_observe")
     screenpipe_stage = dream_graph.get("dream_screenpipe")
+    biometrics_stage = dream_graph.get("dream_biometrics")
     assert isinstance(screenpipe_stage, DreamScreenpipeStage)
+    assert isinstance(biometrics_stage, DreamBiometricsStage)
     assert observe_stage.transitions == ("dream_screenpipe",)
-    assert screenpipe_stage.transitions == ("dream_behavior_log",)
+    assert screenpipe_stage.transitions == ("dream_biometrics",)
+    assert biometrics_stage.transitions == ("dream_behavior_log",)
     assert screenpipe_stage._client is None  # toggle off => no client, by construction
 
 

@@ -1,16 +1,17 @@
 """build_dream_pathway — the wombat.dream pathway (TK-46 scaffold, TK-175 outcome pass, TK-47
 consolidation sweep, TK-49 tuner pass, TK-111 behavior-log pass, TK-112 window-detect pass, TK-113
-pattern-detect pass, TK-297 facts pass, TK-299 derive pass, TK-324 screenpipe pass,
-Q-33/Q-85/Q-90/Q-91/Q-98/Q-99e/Q-99f, DEC-12/DEC-23/DEC-66/DEC-70h).
+pattern-detect pass, TK-297 facts pass, TK-299 derive pass, TK-324 screenpipe pass, TK-346
+biometrics pass, Q-33/Q-85/Q-90/Q-91/Q-98/Q-99e/Q-99f, DEC-12/DEC-23/DEC-66/DEC-70h).
 
 MIRRORS ``brief_pathway.py``'s posture: pure graph assembly, no bootstrap import (avoids an import
-cycle — ``bootstrap.py`` imports this module, not the reverse). TK-324 (superseding TK-314's shape)
-RULES the dream graph's end-state: ``dream_consolidate`` (entry, TK-47) -> ``dream_outcome``
-(TK-175) -> ``dream_tune`` (TK-49) -> ``dream_persona`` (TK-214) -> ``dream_facts`` (TK-297) ->
-``dream_derive`` (TK-299) -> ``dream_observe`` (TK-314) -> ``dream_screenpipe`` (TK-324) ->
-``dream_behavior_log`` (TK-111) -> ``dream_window`` (TK-112) -> ``dream_pattern`` (TK-113) ->
-``dream_run`` (terminal) — TK-52's later recurrence/fence inserts UPSTREAM of ``dream_consolidate``
-so ``dream_run`` stays the ONE reachable terminal and TK-46's isolation proofs keep passing.
+cycle — ``bootstrap.py`` imports this module, not the reverse). TK-346 (RULING R6, superseding
+TK-324's shape) RULES the dream graph's end-state: ``dream_consolidate`` (entry, TK-47) ->
+``dream_outcome`` (TK-175) -> ``dream_tune`` (TK-49) -> ``dream_persona`` (TK-214) ->
+``dream_facts`` (TK-297) -> ``dream_derive`` (TK-299) -> ``dream_observe`` (TK-314) ->
+``dream_screenpipe`` (TK-324) -> ``dream_biometrics`` (TK-346) -> ``dream_behavior_log`` (TK-111)
+-> ``dream_window`` (TK-112) -> ``dream_pattern`` (TK-113) -> ``dream_run`` (terminal) — TK-52's
+later recurrence/fence inserts UPSTREAM of ``dream_consolidate`` so ``dream_run`` stays the ONE
+reachable terminal and TK-46's isolation proofs keep passing.
 
 ``DreamConsolidationStage`` (TK-47, EP-13) is the nightly consolidation sweep: it drives
 cog-worx's ``CoherenceReconciler`` + ``ClaimExtractor`` sweepers to drain, off-path (S1) model
@@ -71,13 +72,23 @@ screen/mic segments through closed templates into ``UserFactsStore`` rows with
 
 ``DreamScreenpipeStage`` (TK-324, EP-37, DEC-70h; ``wombat.behavior.stages.dream_screenpipe``) is
 the nightly ``dream_screenpipe`` stage — also NOT defined in this module, spliced in between
-``dream_observe`` and ``dream_behavior_log``. Deterministically folds a trailing 21-day window of
-the injected ``ScreenpipeClient``'s search results into a bounded projection, THEN makes the ONE
-DEC-23-admitted model call this stage ever makes (the ``DreamFactsStage`` seam pattern) to propose
-facts, clamped by the SAME custody ``DreamFactsStage`` carries, and writes accepted proposals as
-``UserFactsStore`` rows with ``source='behavior'`` (DEC-70h: the observational tier regardless of
-distillation mechanism). A ``None`` client (the observe-toggle-off default) makes the stage
-structurally inert — zero client/model contact, immediate onward transition.
+``dream_observe`` and ``dream_biometrics`` (TK-346's stage, its new downstream neighbor, superseding
+``dream_behavior_log``). Deterministically folds a trailing 21-day window of the injected
+``ScreenpipeClient``'s search results into a bounded projection, THEN makes the ONE DEC-23-admitted
+model call this stage ever makes (the ``DreamFactsStage`` seam pattern) to propose facts, clamped by
+the SAME custody ``DreamFactsStage`` carries, and writes accepted proposals as ``UserFactsStore``
+rows with ``source='behavior'`` (DEC-70h: the observational tier regardless of distillation
+mechanism). A ``None`` client (the observe-toggle-off default) makes the stage structurally inert —
+zero client/model contact, immediate onward transition.
+
+``DreamBiometricsStage`` (TK-346, EP-41; ``wombat.behavior.stages.dream_biometrics``) is the
+nightly ``dream_biometrics`` stage — also NOT defined in this module, spliced in between
+``dream_screenpipe`` and ``dream_behavior_log`` (RULING R6: the only splice that touches neither
+``dream_observe`` nor ``dream_facts``, both protected). The ``dream_observe`` pattern (TK-314)
+pointed at a second ``wombat_observations`` channel, ``channel='biometric'`` (TK-341): PURE CODE,
+NO model call, distilling closed sleep/resting-HR segments through two closed templates into
+``UserFactsStore`` rows with ``source='behavior'``. A ``None`` ``ObservationStore`` (the
+``wombat_observe_biometrics`` toggle-off default) degrades to a one-line nightly no-op.
 
 ``PatternDetectorStage`` (TK-113, EP-22, Q-99b/f/g; ``wombat.behavior.stages.pattern_detector``)
 is the nightly ``dream_pattern`` stage — also NOT defined in this module (it lives alongside
@@ -774,26 +785,27 @@ def build_dream_pathway(
     derive: Stage,
     observe: Stage,
     screenpipe: Stage,
+    biometrics: Stage,
     behavior_log: Stage,
     window: Stage,
     pattern: Stage,
     terminal: Stage | None = None,
 ) -> StageGraph:
-    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (TK-324
-    end-state, superseding TK-314's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
+    """Assemble the ``wombat.dream`` ``StageGraph``, entered at ``consolidate.name`` (TK-346
+    end-state, superseding TK-324's shape: ``dream_consolidate`` -> ``dream_outcome`` ->
     ``dream_tune`` -> ``dream_persona`` -> ``dream_facts`` -> ``dream_derive`` ->
-    ``dream_observe`` -> ``dream_screenpipe`` -> ``dream_behavior_log`` -> ``dream_window`` ->
-    ``dream_pattern`` -> ``dream_run``,
-    TK-47/TK-175/TK-49/TK-214/TK-297/TK-299/TK-314/TK-324/TK-111/TK-112/TK-113).
+    ``dream_observe`` -> ``dream_screenpipe`` -> ``dream_biometrics`` -> ``dream_behavior_log`` ->
+    ``dream_window`` -> ``dream_pattern`` -> ``dream_run``,
+    TK-47/TK-175/TK-49/TK-214/TK-297/TK-299/TK-314/TK-324/TK-346/TK-111/TK-112/TK-113).
 
     ``consolidate``, ``outcome``, ``tune``, ``persona``, ``facts``, ``derive``, ``observe``,
-    ``screenpipe``, ``behavior_log``, ``window``, and ``pattern`` are ALL REQUIRED and supplied by
-    the caller (mirrors ``build_brief_pathway``'s all-stages-injected convention) — production
-    callers pass a ``DreamConsolidationStage`` built with its real ``reconciler``/``extractor``
-    collaborators (TK-54's ``build_dream_substrate``), a ``DreamOutcomeStage`` built with its real
-    ``entity_kg``/``labeler``/``user_id`` collaborators, a ``DreamTuneStage`` built with its real
-    ``RatingTuner``, a ``DreamPersonaStage`` (TK-214) built with its real
-    ``event_log``/``live_persona`` collaborators, a ``DreamFactsStage``
+    ``screenpipe``, ``biometrics``, ``behavior_log``, ``window``, and ``pattern`` are ALL REQUIRED
+    and supplied by the caller (mirrors ``build_brief_pathway``'s all-stages-injected convention) —
+    production callers pass a ``DreamConsolidationStage`` built with its real
+    ``reconciler``/``extractor`` collaborators (TK-54's ``build_dream_substrate``), a
+    ``DreamOutcomeStage`` built with its real ``entity_kg``/``labeler``/``user_id`` collaborators,
+    a ``DreamTuneStage`` built with its real ``RatingTuner``, a ``DreamPersonaStage`` (TK-214)
+    built with its real ``event_log``/``live_persona`` collaborators, a ``DreamFactsStage``
     (``wombat.behavior.stages.dream_facts``, TK-297) built with its real
     ``model``/``chat_turns``/``user_facts`` collaborators, a ``DreamDeriveStage``
     (``wombat.behavior.stages.dream_derive``, TK-299) built with its real
@@ -801,10 +813,12 @@ def build_dream_pathway(
     (``wombat.behavior.stages.dream_observe``, TK-314) built with its real
     ``observations``/``user_facts`` collaborators, a ``DreamScreenpipeStage``
     (``wombat.behavior.stages.dream_screenpipe``, TK-324) built with its real
-    ``client``/``model``/``user_facts``/``tz`` collaborators, a ``DreamBehaviorLogStage`` built
-    with its real ``store``/``entity_kg``/``user_id`` collaborators, a
-    ``WriteWindowSummariesStage`` (``wombat.behavior.stages.write_window_summaries``, TK-112)
-    built with its real ``store``/``writer``/``tz`` collaborators, and a ``PatternDetectorStage``
+    ``client``/``model``/``user_facts``/``tz`` collaborators, a ``DreamBiometricsStage``
+    (``wombat.behavior.stages.dream_biometrics``, TK-346) built with its real
+    ``observations``/``user_facts`` collaborators, a ``DreamBehaviorLogStage`` built with its real
+    ``store``/``entity_kg``/``user_id`` collaborators, a ``WriteWindowSummariesStage``
+    (``wombat.behavior.stages.write_window_summaries``, TK-112) built with its real
+    ``store``/``writer``/``tz`` collaborators, and a ``PatternDetectorStage``
     (``wombat.behavior.stages.pattern_detector``, TK-113) built with its real
     ``entity_kg``/``kb``/``enqueue``/``user_id``/``tz`` collaborators; this module never constructs
     those (no bootstrap import, pure graph assembly). ``terminal`` KEEPS the TK-46
@@ -824,6 +838,7 @@ def build_dream_pathway(
             derive,
             observe,
             screenpipe,
+            biometrics,
             behavior_log,
             window,
             pattern,

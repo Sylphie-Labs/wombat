@@ -256,6 +256,28 @@ class _PassthroughScreenpipeStage:
     for the TK-52 timer/fence suite this file tests)."""
 
     name: str = "dream_screenpipe"
+    transitions: tuple[str, ...] = ("dream_biometrics",)
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        return Transition(
+            to="dream_biometrics",
+            output=Artifact(
+                kind=DREAM_REPORT_KIND,
+                produced_by=self.name,
+                provenance=Provenance(source="system", confidence=1.0, recorded_at=ctx.clock()),
+                data={},
+            ),
+        )
+
+
+@dataclass
+class _PassthroughBiometricsStage:
+    """TK-346 mechanical reshape (flagged per the ticket's own sanction): ``wombat.dream``'s new
+    ``dream_biometrics`` stage — always transitions straight onward; it carries none of
+    ``DreamBiometricsStage``'s own biometric-distillation behavior (TK-346 owns that, out of scope
+    for the TK-52 timer/fence suite this file tests)."""
+
+    name: str = "dream_biometrics"
     transitions: tuple[str, ...] = ("dream_behavior_log",)
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -406,6 +428,7 @@ def _build_scheduler(*, now_holder: list[datetime], dream_stage: Stage | None = 
             _PassthroughDeriveStage(),
             _PassthroughObserveStage(),
             _PassthroughScreenpipeStage(),
+            _PassthroughBiometricsStage(),
             _PassthroughBehaviorLogStage(),
             _PassthroughWindowStage(),
             _PassthroughPatternStage(),
