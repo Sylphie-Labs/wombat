@@ -22,6 +22,14 @@ audio bytes — this module mints ``utterance_id`` server-side at accept and kee
 restart) so a duplicate POST of identical bytes returns the SAME ``utterance_id`` and — since the
 write is skipped entirely on a repeat — never reintroduces a second copy of the file into the
 watched directory, regardless of whether a poll already moved the first copy to ``processed/``.
+
+TK-343: an OPTIONAL keyword-only ``origin_register`` (``voice.turn_origin.LastTurnOriginRegister``,
+default ``None``) — the ONE origin stamp this ticket adds. Every accepted request (a fresh write
+OR a dedup repeat — either way a real POST just arrived) calls ``origin_register.note_origin
+(device_id, utterance_id)`` right before returning its ``202``, so the SAME device_id/utterance_id
+pair this response carries is what ``voice.select``'s writer_factory closure later reads at speak
+time. ``None`` (the default) preserves every existing/standalone construction byte-identically —
+no stamp happens, and the accept/reject logic below is otherwise untouched.
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from pathlib import Path
 
 from wombat.devices.surface import STALE_AUDIO_WINDOW_SECONDS
 from wombat.sources.asr import _AUDIO_SUFFIXES
+from wombat.voice.turn_origin import LastTurnOriginRegister
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +116,15 @@ class VoiceIngestHandler:
         clock: Callable[[], datetime] = _utc_now,
         max_body_bytes: int = MAX_VOICE_BODY_BYTES,
         stale_window_seconds: int = STALE_AUDIO_WINDOW_SECONDS,
+        origin_register: LastTurnOriginRegister | None = None,
     ) -> None:
         self._drop_dir = drop_dir
         self._clock = clock
         self.max_body_bytes = max_body_bytes
         self._stale_window_seconds = stale_window_seconds
+        # TK-343: the ONE origin-stamp seam — None (the default) is a pure no-op, byte-identical
+        # to before this ticket.
+        self._origin_register = origin_register
         # sha256(bytes) -> utterance_id, process-lifetime only (see module docstring).
         self._dedup: dict[str, str] = {}
 
@@ -148,6 +161,7 @@ class VoiceIngestHandler:
             # A repeat of identical bytes: same utterance_id, drop_dir is never touched again —
             # this is what keeps ASRSource.poll() at exactly one SourceEvent for this content
             # regardless of whether an earlier poll already moved the first copy to processed/.
+            self._note_origin(device_id, existing_utterance_id)
             return 202, {
                 "v": 1,
                 "accepted": True,
@@ -159,12 +173,19 @@ class VoiceIngestHandler:
         self._drop_dir.mkdir(parents=True, exist_ok=True)
         (self._drop_dir / f"{digest}{_WRITE_SUFFIX}").write_bytes(body)
         self._dedup[digest] = utterance_id
+        self._note_origin(device_id, utterance_id)
         return 202, {
             "v": 1,
             "accepted": True,
             "utterance_id": utterance_id,
             "device_id": device_id,
         }
+
+    def _note_origin(self, device_id: str, utterance_id: str) -> None:
+        """TK-343: the one origin-stamp call, shared by both 202 branches above — a no-op when no
+        ``origin_register`` was injected (the default)."""
+        if self._origin_register is not None:
+            self._origin_register.note_origin(device_id, utterance_id)
 
 
 __all__ = ["MAX_VOICE_BODY_BYTES", "VoiceIngestHandler"]

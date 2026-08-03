@@ -35,11 +35,32 @@ factory into the adapter iff ``stream_playback.streaming_available()`` — a mis
 (sounddevice, part of the ``voice-cloud`` extra) is ONE loud warning, never a boot failure; the
 adapter still builds, just without streaming. Streaming is orthogonal to expressive tags/model
 choice — no interaction with the TK-328 ``TTSBuildInfo`` decision above.
+
+TK-343 (DEC-79, R5): ``build_tts_adapter_with_info`` gains an OPTIONAL keyword-only
+``turn_origin_register``/``sealed_utterance_store`` pair — wired ONLY at ``assemble_runtime``'s
+drain-graph ``SpeakSink`` adapter construction, NEVER at ``make_speak_callable``'s separate brief
+adapter, so a morning brief is structurally never remote-eligible (no register even reachable from
+that call site) rather than merely usually-local. When BOTH are given AND
+``stream_playback.streaming_available()`` (R5: remote routing is orthogonal to, and strictly
+requires, the existing streaming gate), ``_construct_cloud_tts``'s fish branch wires an
+origin-aware CLOSURE (``_build_remote_aware_writer_factory``) instead of the bare
+``StreamingAudioWriter`` class — the closure re-reads ``turn_origin_register`` at EVERY call
+(``voice.tts._speak_streaming`` invokes ``writer_factory()`` once per utterance, never once at
+construction), claiming and consuming a fresh origin to route that ONE utterance to a fresh
+``voice.remote_sinks.BufferedUtteranceSink``; an empty/stale/already-claimed register routes to
+the SAME real local hardware ``StreamingAudioWriter()`` as today. ``_RemoteRouteAttempted`` is a
+tiny same-seam flag the closure marks the instant it commits an utterance remotely and
+``FallbackTTSAdapter`` consumes right after a primary failure — DEC-79's "no laptop fallback on
+remote failure, ever": a remote-origin turn's total Fish failure must re-raise rather than
+rescue-speak into an empty room while logging success. Either arg omitted (``None``, the default)
+preserves EVERY existing call site byte-identically — the bare class, no flag, today's exact
+fallback-on-any-failure posture.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -52,9 +73,11 @@ from wombat.sources.asr import FasterWhisperTranscriber, Transcriber
 from wombat.voice import tts as voice_tts
 from wombat.voice.expressive import strip_allowed_tags
 from wombat.voice.key_store import KeyringVoiceKeyStore, VoiceKeyStore, resolve_provider_key
+from wombat.voice.remote_sinks import BufferedUtteranceSink, SealedUtteranceStore
 from wombat.voice.stream_playback import StreamingAudioWriter, streaming_available
 from wombat.voice.stt import DeepgramTranscriber, ElevenLabsScribeTranscriber, FishAudioTranscriber
 from wombat.voice.tts import DeepgramAuraTTSAdapter, ElevenLabsTTSAdapter, FishAudioTTSAdapter
+from wombat.voice.turn_origin import LastTurnOriginRegister
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +142,18 @@ class FallbackTTSAdapter:
     rebinds the class in that module's namespace, and a value-bound import here would freeze the
     pre-reload identity."""
 
-    def __init__(self, primary: TTSAdapter, *, fallback: TTSAdapter | None) -> None:
+    def __init__(
+        self,
+        primary: TTSAdapter,
+        *,
+        fallback: TTSAdapter | None,
+        remote_attempt: _RemoteRouteAttempted | None = None,
+    ) -> None:
         self._primary = primary
         self._fallback = fallback
+        # TK-343 (DEC-79): the SAME flag object `voice.select`'s writer_factory closure marks —
+        # None (the default) preserves every existing call site's behavior byte-identically.
+        self._remote_attempt = remote_attempt
 
     def speak(self, text: str) -> None:
         try:
@@ -132,10 +164,25 @@ class FallbackTTSAdapter:
                 # Partial playback already reached the user -- re-raise unchanged, no fallback
                 # attempt.
                 raise
-            # No audio ever played -- degrades exactly like any other primary failure below.
+            if self._remote_route_was_attempted():
+                # TK-343 (DEC-79): a remote-origin turn's total Fish failure -- no chunk ever
+                # reached the (would-be) watch buffer either -- must never rescue-speak on the
+                # laptop into an empty room while logging success.
+                raise
+            # No audio ever played, and this was not a remote-origin turn -- degrades exactly
+            # like any other primary failure below.
             self._warn_and_fallback(text)
         except Exception:
+            if self._remote_route_was_attempted():
+                raise
             self._warn_and_fallback(text)
+
+    def _remote_route_was_attempted(self) -> bool:
+        """TK-343 (DEC-79): consumes the ONE-shot flag ``voice.select``'s writer_factory closure
+        marked the instant it committed THIS ``speak()`` call to the remote sink. ``False`` when
+        no ``remote_attempt`` was ever wired (every pre-TK-343 caller, and the brief adapter,
+        which never receives one) -- byte-identical to before."""
+        return self._remote_attempt is not None and self._remote_attempt.take()
 
     def _warn_and_fallback(self, text: str) -> None:
         """Today's exact degrade posture (shared by the bare ``Exception`` arm and the
@@ -147,6 +194,56 @@ class FallbackTTSAdapter:
         if self._fallback is None:
             raise
         self._fallback.speak(strip_allowed_tags(text))
+
+
+class _RemoteRouteAttempted:
+    """TK-343 (DEC-79): a tiny mutable flag shared between ONE origin-aware writer_factory
+    closure and the ``FallbackTTSAdapter`` wrapping the SAME primary — both built together at
+    this construction seam. The closure ``mark()``s it the instant it commits a given utterance
+    to the remote sink (BEFORE Fish's transport is ever called); ``FallbackTTSAdapter`` ``take()``
+    s it right after a primary failure to decide whether a laptop-speaker rescue is even
+    permitted. Not a register, not a config knob — a same-object, same-call-stack handoff."""
+
+    def __init__(self) -> None:
+        self._value = False
+
+    def mark(self) -> None:
+        self._value = True
+
+    def take(self) -> bool:
+        value, self._value = self._value, False
+        return value
+
+
+def _build_remote_aware_writer_factory(
+    turn_origin_register: LastTurnOriginRegister,
+    sealed_utterance_store: SealedUtteranceStore,
+    remote_attempt: _RemoteRouteAttempted,
+) -> Callable[[], StreamingAudioWriter]:
+    """TK-343 (DEC-79, R5): the ONE closure at this construction seam, wired into
+    ``FishAudioTTSAdapter``'s ``writer_factory`` in place of the bare ``StreamingAudioWriter``
+    class. ``voice.tts._speak_streaming`` invokes the returned callable once PER UTTERANCE, never
+    once at construction — so this reads ``turn_origin_register`` at CALL time on every
+    invocation, letting two utterances spoken back to back through the identical closure route
+    differently (TK-343 AC2). A claimed (fresh, unconsumed) origin marks ``remote_attempt`` and
+    routes to a fresh ``voice.remote_sinks.BufferedUtteranceSink``; an empty register (nothing
+    noted, already claimed by an earlier speak, or aged past its TTL) routes to the SAME real
+    local-hardware ``StreamingAudioWriter()`` every pre-TK-343 caller gets."""
+
+    def factory() -> StreamingAudioWriter:
+        origin = turn_origin_register.take()
+        if origin is None:
+            return StreamingAudioWriter()
+        remote_attempt.mark()
+        return StreamingAudioWriter(
+            stream_factory=lambda: BufferedUtteranceSink(
+                origin_device_id=origin.device_id,
+                utterance_id=origin.utterance_id,
+                store=sealed_utterance_store,
+            )
+        )
+
+    return factory
 
 
 def _cloud_api_key_field(config: WombatConfig, provider: str) -> SecretStr | None:
@@ -236,12 +333,20 @@ def _construct_cloud_transcriber(provider: str, api_key: str, config: WombatConf
 
 
 def _construct_cloud_tts(
-    provider: str, api_key: str, voice_id: str | None, config: WombatConfig
-) -> TTSAdapter:
-    """Construct the named cloud ``TTSAdapter`` (plain constructor args only, Q-104). Raises
-    ``ImportError`` when the ``voice-cloud`` extra is not installed. ``voice_id`` is REQUIRED for
-    fish/elevenlabs (checked by the caller before this is reached) and OPTIONAL for deepgram
-    (``DeepgramAuraTTSAdapter`` applies its own ``DEEPGRAM_AURA_DEFAULT_MODEL`` default).
+    provider: str,
+    api_key: str,
+    voice_id: str | None,
+    config: WombatConfig,
+    *,
+    turn_origin_register: LastTurnOriginRegister | None = None,
+    sealed_utterance_store: SealedUtteranceStore | None = None,
+) -> tuple[TTSAdapter, _RemoteRouteAttempted | None]:
+    """Construct the named cloud ``TTSAdapter`` (plain constructor args only, Q-104), alongside
+    the TK-343 remote-attempt flag (``None`` unless the fish branch actually wired the
+    remote-aware closure below). Raises ``ImportError`` when the ``voice-cloud`` extra is not
+    installed. ``voice_id`` is REQUIRED for fish/elevenlabs (checked by the caller before this is
+    reached) and OPTIONAL for deepgram (``DeepgramAuraTTSAdapter`` applies its own
+    ``DEEPGRAM_AURA_DEFAULT_MODEL`` default).
 
     TK-326 (DEC-71a/DEC-72a): the fish branch also threads ``config.wombat_fish_model`` into the
     adapter's ``model`` ctor param, pinning the Fish engine version on every TTS POST — the
@@ -251,26 +356,46 @@ def _construct_cloud_tts(
     itself, a zero-arg callable) iff ``stream_playback.streaming_available()`` — otherwise ONE
     loud WARNING naming the missing extra and the adapter is built WITHOUT streaming (the buffered
     wav+winsound path, byte-identical to today). Structural, no new config (DEC-63); the
-    elevenlabs/deepgram branches are byte-untouched."""
+    elevenlabs/deepgram branches are byte-untouched.
+
+    TK-343 (DEC-79, R5): when streaming IS available AND both ``turn_origin_register``/
+    ``sealed_utterance_store`` are given, the ``writer_factory`` becomes the origin-aware closure
+    (``_build_remote_aware_writer_factory``) instead of the bare class, and the returned flag is
+    non-``None``. Either arg omitted (the default) is the EXACT TK-332 wiring above, unchanged —
+    the elevenlabs/deepgram branches never receive either arg and always return ``None`` for the
+    flag."""
     if provider == "fish":
         assert voice_id is not None, "fish TTS requires voice_id (checked by the caller)"
         if streaming_available():
-            return FishAudioTTSAdapter(
-                api_key,
-                voice_id=voice_id,
-                model=config.wombat_fish_model,
-                writer_factory=StreamingAudioWriter,
+            remote_attempt: _RemoteRouteAttempted | None = None
+            writer_factory: Callable[[], StreamingAudioWriter] = StreamingAudioWriter
+            if turn_origin_register is not None and sealed_utterance_store is not None:
+                remote_attempt = _RemoteRouteAttempted()
+                writer_factory = _build_remote_aware_writer_factory(
+                    turn_origin_register, sealed_utterance_store, remote_attempt
+                )
+            return (
+                FishAudioTTSAdapter(
+                    api_key,
+                    voice_id=voice_id,
+                    model=config.wombat_fish_model,
+                    writer_factory=writer_factory,
+                ),
+                remote_attempt,
             )
         logger.warning(
             "voice: fish TTS streaming playback is unavailable — install the 'voice-cloud' "
             "extra's sounddevice dependency (`uv sync --extra voice-cloud`) to enable low-latency "
             "streamed playback; using buffered playback for this boot"
         )
-        return FishAudioTTSAdapter(api_key, voice_id=voice_id, model=config.wombat_fish_model)
+        return (
+            FishAudioTTSAdapter(api_key, voice_id=voice_id, model=config.wombat_fish_model),
+            None,
+        )
     if provider == "elevenlabs":
         assert voice_id is not None, "elevenlabs TTS requires voice_id (checked by the caller)"
-        return ElevenLabsTTSAdapter(api_key, voice_id=voice_id)
-    return DeepgramAuraTTSAdapter(api_key, voice_id=voice_id)
+        return ElevenLabsTTSAdapter(api_key, voice_id=voice_id), None
+    return DeepgramAuraTTSAdapter(api_key, voice_id=voice_id), None
 
 
 def build_transcriber(
@@ -326,13 +451,23 @@ class TTSBuildInfo:
 
 
 def build_tts_adapter_with_info(
-    config: WombatConfig, key_store: VoiceKeyStore | None = None
+    config: WombatConfig,
+    key_store: VoiceKeyStore | None = None,
+    *,
+    turn_origin_register: LastTurnOriginRegister | None = None,
+    sealed_utterance_store: SealedUtteranceStore | None = None,
 ) -> tuple[TTSAdapter | None, TTSBuildInfo]:
     """Build the ``TTSAdapter`` ``config.wombat_tts_provider`` selects, or ``None`` (TK-193,
     Q-105(d)), alongside the ``TTSBuildInfo`` recording whether that build's primary is a truly
     constructed Fish instance (TK-328, ruling v2.187 r1). ``build_tts_adapter`` below is a thin
     adapter-only wrapper over this. ``key_store`` defaults to ``KeyringVoiceKeyStore()`` — tests
-    always inject an in-memory fake (never the real keyring)."""
+    always inject an in-memory fake (never the real keyring).
+
+    ``turn_origin_register``/``sealed_utterance_store`` (TK-343, DEC-79) are OPTIONAL and
+    threaded straight through to ``_construct_cloud_tts``/``FallbackTTSAdapter`` —
+    ``assemble_runtime`` passes them ONLY for the drain-graph's SpeakSink adapter, never for
+    ``make_speak_callable``'s separate brief adapter. Omitting either (the default) preserves
+    every existing call site byte-identically."""
     store = key_store if key_store is not None else KeyringVoiceKeyStore()
     provider = config.wombat_tts_provider
     no_info = TTSBuildInfo(fish_primary=False, fish_model=None)
@@ -360,7 +495,14 @@ def build_tts_adapter_with_info(
         return _build_local_tts(config), no_info
 
     try:
-        primary: TTSAdapter = _construct_cloud_tts(provider, key, voice_id, config)
+        primary, remote_attempt = _construct_cloud_tts(
+            provider,
+            key,
+            voice_id,
+            config,
+            turn_origin_register=turn_origin_register,
+            sealed_utterance_store=sealed_utterance_store,
+        )
     except ImportError:
         logger.warning(
             "voice: cloud TTS provider %r selected but the 'voice-cloud' extra is not "
@@ -370,7 +512,9 @@ def build_tts_adapter_with_info(
         )
         return _build_local_tts(config), no_info
 
-    adapter = FallbackTTSAdapter(primary, fallback=_build_local_tts(config, role="fallback"))
+    adapter = FallbackTTSAdapter(
+        primary, fallback=_build_local_tts(config, role="fallback"), remote_attempt=remote_attempt
+    )
     if provider == "fish":
         return adapter, TTSBuildInfo(fish_primary=True, fish_model=config.wombat_fish_model)
     return adapter, no_info

@@ -312,8 +312,10 @@ from .voice.context_prefetch import (
     build_voice_context,
 )
 from .voice.expressive import EXPRESSIVE_FISH_MODELS, strip_allowed_tags
+from .voice.remote_sinks import SealedUtteranceStore, UtteranceFetchHandler
 from .voice.reply_context import LastSpokenRegister
 from .voice.select import TTSBuildInfo, build_tts_adapter, build_tts_adapter_with_info
+from .voice.turn_origin import LastTurnOriginRegister
 
 logger = logging.getLogger(__name__)
 
@@ -1215,12 +1217,35 @@ def assemble_runtime(
     # TK-267 (DEC-55): the TTS adapter is built ONCE here (inlining what build_speak_sink itself
     # does) so speech_shape_stage's adapter-presence gate reads the SAME adapter SpeakSink speaks
     # through, rather than constructing (and possibly loud-logging) a second one.
+    # TK-343 (DEC-79): HOISTED above the TTS adapter construction (behavior-neutral — both are
+    # pure in-memory objects, zero I/O at construction, mirroring last_spoken_register's own
+    # unconditional-construction precedent just below): last_turn_origin_register is ALWAYS built
+    # (harmless if never fed — only VoiceIngestHandler.handle ever calls note_origin, and that
+    # handler is itself only constructed when WOMBAT_DEVICE_REMOTE_DROP_DIR is set, further down).
+    # sealed_utterance_store is gated on config.wombat_remote_voice specifically (structural
+    # inertness, the DEC-68(b) pattern): with the toggle off, the store stays None, so
+    # build_tts_adapter_with_info below never wires the remote-aware closure at all and every
+    # reply plays locally, byte-identical to today (AC1).
+    last_turn_origin_register = LastTurnOriginRegister(
+        clock=_epoch_now, ttl_seconds=config.wombat_reply_window_seconds
+    )
+    sealed_utterance_store: SealedUtteranceStore | None = None
+    if config.wombat_remote_voice:
+        sealed_utterance_store = SealedUtteranceStore(clock=_epoch_now)
     # TK-328 (ruling v2.187 r1): build_tts_adapter_with_info is the with_info consumer here — its
     # TTSBuildInfo drives expressive_tags below (fish_primary AND fish_model in the enumerated
     # EXPRESSIVE_FISH_MODELS family, DEC-72d) while the adapter itself is byte-identical to what
     # build_tts_adapter would have returned.
+    #
+    # TK-343 (DEC-79, R5): turn_origin_register/sealed_utterance_store are threaded ONLY here —
+    # the drain-graph's SpeakSink adapter — NEVER into make_speak_callable's separate brief
+    # adapter further below, so a morning brief is structurally never remote-eligible.
     tts_adapter, tts_build_info = (
-        build_tts_adapter_with_info(config)
+        build_tts_adapter_with_info(
+            config,
+            turn_origin_register=last_turn_origin_register,
+            sealed_utterance_store=sealed_utterance_store,
+        )
         if config.wombat_voice_enabled
         else (None, TTSBuildInfo(fish_primary=False, fish_model=None))
     )
@@ -1460,10 +1485,15 @@ def assemble_runtime(
     # bootstrap.py). A blank dir logs ONE loud WARNING and the handler stays None; DeviceSurface
     # then falls the route through to its own DEC-78(b) 401 fallback, exactly as if the path
     # were unknown (R1).
+    # TK-343: the SAME last_turn_origin_register built above (hoisted ahead of the TTS adapter
+    # construction) is threaded through so every accepted POST /v1/voice stamps the ONE origin
+    # voice.select's writer_factory closure later reads.
     voice_ingest_handler: VoiceIngestHandler | None = None
     raw_remote_drop_dir = (config.wombat_device_remote_drop_dir or "").strip()
     if raw_remote_drop_dir:
-        voice_ingest_handler = VoiceIngestHandler(drop_dir=Path(raw_remote_drop_dir))
+        voice_ingest_handler = VoiceIngestHandler(
+            drop_dir=Path(raw_remote_drop_dir), origin_register=last_turn_origin_register
+        )
     else:
         logger.warning(
             "POST /v1/voice not wired: WOMBAT_DEVICE_REMOTE_DROP_DIR not configured — "
@@ -1480,6 +1510,13 @@ def assemble_runtime(
     if config.wombat_observe_biometrics:
         biometric_ingest_handler = BiometricIngestHandler(store=ObservationStore(dsn), tz=tz)
 
+    # TK-343 (R1): the OPTIONAL GET /v1/utterance route handler — constructed iff sealed_
+    # utterance_store was built above (itself gated on config.wombat_remote_voice), the SAME
+    # instance BufferedUtteranceSink publishes into via the TTS adapter's writer_factory closure.
+    utterance_fetch_handler: UtteranceFetchHandler | None = None
+    if sealed_utterance_store is not None:
+        utterance_fetch_handler = UtteranceFetchHandler(store=sealed_utterance_store)
+
     # TK-339 (DEC-78): wombat's first inbound LAN listener — constructed ONLY when EITHER
     # companion-device consent toggle is true (structural inertness, the DEC-68(b) pattern
     # verbatim): both off means DeviceSurface AND its DeviceCredentialStore are never even
@@ -1495,6 +1532,7 @@ def assemble_runtime(
             biometrics_enabled=config.wombat_observe_biometrics,
             voice_ingest_handler=voice_ingest_handler,
             biometric_ingest_handler=biometric_ingest_handler,
+            utterance_fetch_handler=utterance_fetch_handler,
         )
 
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both

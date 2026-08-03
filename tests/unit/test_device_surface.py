@@ -1,5 +1,6 @@
 """tests/unit/test_device_surface.py — TK-339 acceptance criteria — DeviceSurface, the
-consent-gated LAN listener (DEC-78).
+consent-gated LAN listener (DEC-78). TK-343 (DEC-79) adds the ``GET /v1/utterance`` route section
+at the bottom — the sealed-reply pull, wire-contract.md §5.
 
 ALL socket-level tests are pure-asyncio: a REAL ``DeviceSurface`` (``asyncio.start_server`` on a
 loopback or explicit host) driven by a hand-rolled minimal HTTP client (stdlib-only, mirrors
@@ -15,6 +16,8 @@ import asyncio
 import contextlib
 import json
 import logging
+from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -28,9 +31,12 @@ from wombat.devices.surface import (
     UTTERANCE_TTL_SECONDS,
     DeviceSurface,
 )
+from wombat.devices.voice_ingest import VoiceIngestHandler
 from wombat.params import load_operating_params
 from wombat.runtime import _start_device_surface, _stop_device_surface
+from wombat.voice.remote_sinks import SealedUtterance, SealedUtteranceStore, UtteranceFetchHandler
 from wombat.voice.stream_playback import STREAM_SAMPLE_RATE
+from wombat.voice.turn_origin import LastTurnOriginRegister
 
 _UNAUTHORIZED_BODY = b'{"error": "unauthorized"}'
 
@@ -527,3 +533,246 @@ def test_biometric_ingest_handler_wired_into_bundle_only_when_biometrics_toggle_
     )
     assert bundle_on.device_surface is not None
     assert bundle_on.device_surface._biometric_ingest_handler is not None
+
+
+# --- TK-343 (R1, DEC-79): GET /v1/utterance — the sealed-reply pull, wire-contract.md §5 --------
+
+
+async def test_get_utterance_falls_to_401_when_no_handler_is_wired() -> None:
+    store, _device_id, token = _paired_store()
+    surface = DeviceSurface(
+        credential_store=store,
+        host="127.0.0.1",
+        port=0,
+        remote_voice_enabled=True,
+        biometrics_enabled=False,
+        # utterance_fetch_handler defaults to None — indistinguishable from an unknown path (R1).
+    )
+    try:
+        await surface.start()
+        host, port = surface.address
+
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path="/v1/utterance",
+            headers={"X-Wombat-Device-Token": token},
+        )
+        assert status == 401
+        assert status != 404
+        assert body == _UNAUTHORIZED_BODY
+    finally:
+        await surface.stop()
+
+
+def _build_utterance_surface(
+    handler: UtteranceFetchHandler,
+) -> tuple[DeviceSurface, str]:
+    store, _device_id, token = _paired_store()
+    surface = DeviceSurface(
+        credential_store=store,
+        host="127.0.0.1",
+        port=0,
+        remote_voice_enabled=True,
+        biometrics_enabled=False,
+        utterance_fetch_handler=handler,
+    )
+    return surface, token
+
+
+async def test_get_utterance_answers_204_when_nothing_is_sealed() -> None:
+    sealed_store = SealedUtteranceStore(clock=lambda: 0.0)
+    handler = UtteranceFetchHandler(store=sealed_store)
+    surface, token = _build_utterance_surface(handler)
+
+    try:
+        await surface.start()
+        host, port = surface.address
+        status, headers, body = await _http_request(
+            host, port, method="GET", path="/v1/utterance", headers={"X-Wombat-Device-Token": token}
+        )
+    finally:
+        await surface.stop()
+
+    assert status == 204
+    assert body == b""
+    assert "content-length" not in headers or headers["content-length"] == "0"
+
+
+async def test_get_utterance_answers_200_with_the_full_wire_header_set_and_raw_pcm_body() -> None:
+    sealed_store = SealedUtteranceStore(clock=lambda: 0.0)
+    sealed_store.publish(
+        SealedUtterance(utterance_id="utt-1", origin_device_id="watch-1", pcm=b"\x01\x02\x03\x04")
+    )
+    handler = UtteranceFetchHandler(store=sealed_store)
+    surface, token = _build_utterance_surface(handler)
+
+    try:
+        await surface.start()
+        host, port = surface.address
+        status, headers, body = await _http_request(
+            host, port, method="GET", path="/v1/utterance", headers={"X-Wombat-Device-Token": token}
+        )
+    finally:
+        await surface.stop()
+
+    assert status == 200
+    assert headers["content-type"] == "application/octet-stream"
+    assert headers["x-wombat-utterance-id"] == "utt-1"
+    assert headers["x-wombat-origin-device-id"] == "watch-1"
+    assert headers["x-wombat-sample-rate-hz"] == str(STREAM_SAMPLE_RATE)
+    assert headers["x-wombat-audio-format"] == "pcm_s16le"
+    assert headers["x-wombat-channels"] == "1"
+    assert body == b"\x01\x02\x03\x04"
+
+
+async def test_get_utterance_is_single_fetch_then_discard_over_the_wire() -> None:
+    """AC4: an authenticated repeat GET right after a 200 finds nothing."""
+    sealed_store = SealedUtteranceStore(clock=lambda: 0.0)
+    sealed_store.publish(
+        SealedUtterance(utterance_id="utt-1", origin_device_id="watch-1", pcm=b"\x01")
+    )
+    handler = UtteranceFetchHandler(store=sealed_store)
+    surface, token = _build_utterance_surface(handler)
+
+    try:
+        await surface.start()
+        host, port = surface.address
+        first_status, _h1, _b1 = await _http_request(
+            host, port, method="GET", path="/v1/utterance", headers={"X-Wombat-Device-Token": token}
+        )
+        second_status, _h2, second_body = await _http_request(
+            host, port, method="GET", path="/v1/utterance", headers={"X-Wombat-Device-Token": token}
+        )
+    finally:
+        await surface.stop()
+
+    assert first_status == 200
+    assert second_status == 204
+    assert second_body == b""
+
+
+def test_utterance_fetch_handler_wired_into_bundle_only_when_remote_voice_toggle_is_on() -> None:
+    op = load_operating_params()
+
+    bundle_off = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle_off.device_surface is None
+
+    bundle_on = bootstrap.assemble_runtime(
+        config=_config(wombat_remote_voice=True),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle_on.device_surface is not None
+    assert bundle_on.device_surface._utterance_fetch_handler is not None
+
+
+def test_utterance_fetch_handler_absent_when_only_biometrics_toggle_is_on() -> None:
+    """Sealed-reply fetching is a remote-VOICE concern (DEC-79) — the biometrics toggle alone
+    must not wire it, mirroring wombat_remote_voice/wombat_observe_biometrics' own independence
+    (TK-339's DEC-78(d) two-separate-grants rule)."""
+    op = load_operating_params()
+
+    bundle = bootstrap.assemble_runtime(
+        config=_config(wombat_observe_biometrics=True),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.device_surface is not None
+    assert bundle.device_surface._utterance_fetch_handler is None
+
+
+# --- AC9: the ORIGIN device's id survives a POST /v1/voice -> (a simulated seal) -> GET fetch ---
+
+
+async def test_ac9_origin_device_id_names_the_originating_device_not_the_fetcher(
+    tmp_path: Path,
+) -> None:
+    """A turn accepted from one paired device (the phone) — POST /v1/voice stamps the register
+    with ITS device_id/utterance_id — is later fetched by a DIFFERENT paired device (the watch,
+    DEC-79(c)'s cross-device fall-through). The sealed reply's X-Wombat-Origin-Device-Id must
+    name the ORIGINATING device throughout, never the fetcher."""
+    credential_store = DeviceCredentialStore(vault=_FakeDeviceVault())
+    phone_id, phone_token = credential_store.mint("phone")
+    watch_id, watch_token = credential_store.mint("watch")
+    assert phone_id != watch_id
+
+    origin_register = LastTurnOriginRegister(clock=lambda: 0.0)
+    drop_dir = tmp_path / "remote-drop"
+    voice_handler = VoiceIngestHandler(
+        drop_dir=drop_dir,
+        clock=lambda: datetime(2026, 8, 3, 12, tzinfo=UTC),
+        origin_register=origin_register,
+    )
+    sealed_store = SealedUtteranceStore(clock=lambda: 0.0)
+    utterance_handler = UtteranceFetchHandler(store=sealed_store)
+    surface = DeviceSurface(
+        credential_store=credential_store,
+        host="127.0.0.1",
+        port=0,
+        remote_voice_enabled=True,
+        biometrics_enabled=False,
+        voice_ingest_handler=voice_handler,
+        utterance_fetch_handler=utterance_handler,
+    )
+
+    try:
+        await surface.start()
+        host, port = surface.address
+
+        # 1) the phone posts one utterance.
+        audio = b"RIFF" + (36).to_bytes(4, "little") + b"WAVEfmt "
+        post_status, _h, post_body = await _http_request(
+            host,
+            port,
+            method="POST",
+            path="/v1/voice",
+            headers={
+                "X-Wombat-Device-Token": phone_token,
+                "Content-Type": "audio/wav",
+                "X-Wombat-Captured-At": "2026-08-03T12:00:00+00:00",
+            },
+            body=audio,
+        )
+        assert post_status == 202
+        posted_utterance_id = json.loads(post_body)["utterance_id"]
+
+        # 2) simulate the reply pipeline sealing THAT turn's reply — the register now holds the
+        # SAME (phone_id, posted_utterance_id) pair a real writer_factory closure would read.
+        origin = origin_register.take()
+        assert origin is not None
+        assert origin.device_id == phone_id
+        assert origin.utterance_id == posted_utterance_id
+        sealed_store.publish(
+            SealedUtterance(
+                utterance_id=origin.utterance_id, origin_device_id=origin.device_id, pcm=b"\x01\x02"
+            )
+        )
+
+        # 3) the WATCH fetches it — a different device's own token, DEC-79(c) fall-through.
+        get_status, get_headers, get_body = await _http_request(
+            host,
+            port,
+            method="GET",
+            path="/v1/utterance",
+            headers={"X-Wombat-Device-Token": watch_token},
+        )
+    finally:
+        await surface.stop()
+
+    assert get_status == 200
+    assert get_headers["x-wombat-origin-device-id"] == phone_id
+    assert get_headers["x-wombat-origin-device-id"] != watch_id
+    assert get_headers["x-wombat-utterance-id"] == posted_utterance_id
+    assert get_body == b"\x01\x02"

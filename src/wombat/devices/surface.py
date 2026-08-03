@@ -46,6 +46,16 @@ and constructed at the composition root. ``_dispatch`` gains exactly ONE more ``
 branch, which falls through to the SAME 401 when the handler is ``None``. No batch-validation
 logic lives in this module: the branch only resolves the route and forwards to the handler's own
 ``handle()`` plus this module's existing ``_respond``.
+
+TK-343 (R1): ``GET /v1/utterance`` (planning/design/wire-contract.md §5) adds this module's
+FOURTH route via the SAME ruled seam — an OPTIONAL handler object
+(``voice.remote_sinks.UtteranceFetchHandler``) injected as a keyword arg on ``__init__`` and
+constructed at the composition root. ``_dispatch`` gains exactly ONE more ``(method, path)``
+branch, which falls through to the SAME 401 when the handler is ``None``. Unlike the two POST
+routes above, its response body is raw PCM, not JSON — ``_respond_bytes`` (a sibling to the
+existing JSON-only ``_respond``) writes the handler's own headers dict verbatim plus the body
+bytes, so this module still owns zero wire-format knowledge (no field name, no header value is
+invented here — the handler already built them from wire-contract.md §5).
 """
 
 from __future__ import annotations
@@ -72,6 +82,7 @@ _AUTH_HEADER = "x-wombat-device-token"
 _HEALTH_PATH = "/v1/health"
 _VOICE_PATH = "/v1/voice"  # TK-340
 _BIOMETRICS_PATH = "/v1/biometrics"  # TK-341
+_UTTERANCE_PATH = "/v1/utterance"  # TK-343
 
 # Defensive bound on the hand-rolled HTTP parse below — this is wombat's first LAN-reachable
 # listener (DEC-78), so a malformed/adversarial connection must never hang or exhaust memory even
@@ -85,6 +96,7 @@ _BAD_REQUEST_BODY: dict[str, object] = {"error": "bad_request"}
 _REASON_PHRASES: dict[int, str] = {
     200: "OK",
     202: "Accepted",
+    204: "No Content",
     400: "Bad Request",
     401: "Unauthorized",
     409: "Conflict",
@@ -115,6 +127,14 @@ class _BiometricIngestRoute(Protocol):
     async def handle(
         self, *, device_id: str, headers: dict[str, str], body: bytes
     ) -> tuple[int, dict[str, object]]: ...
+
+
+class _UtteranceFetchRoute(Protocol):
+    """The structural shape ``GET /v1/utterance`` (TK-343, R1) needs from its handler — a
+    Protocol, not an import of ``voice.remote_sinks.UtteranceFetchHandler``, mirroring
+    ``_VoiceIngestRoute``/``_BiometricIngestRoute`` above for the SAME reason."""
+
+    async def handle(self) -> tuple[int, dict[str, str], bytes]: ...
 
 
 async def _read_request_headers(reader: asyncio.StreamReader) -> dict[str, str] | None:
@@ -150,6 +170,7 @@ class DeviceSurface:
         biometrics_enabled: bool,
         voice_ingest_handler: _VoiceIngestRoute | None = None,
         biometric_ingest_handler: _BiometricIngestRoute | None = None,
+        utterance_fetch_handler: _UtteranceFetchRoute | None = None,
     ) -> None:
         self._credential_store = credential_store
         self._host = host
@@ -162,6 +183,9 @@ class DeviceSurface:
         # TK-341 (R1): the OPTIONAL POST /v1/biometrics handler — the SAME None-means-unknown-path
         # contract as voice_ingest_handler above.
         self._biometric_ingest_handler = biometric_ingest_handler
+        # TK-343 (R1): the OPTIONAL GET /v1/utterance handler — the SAME None-means-unknown-path
+        # contract as the two handlers above.
+        self._utterance_fetch_handler = utterance_fetch_handler
         self._server: asyncio.Server | None = None
 
     @property
@@ -266,10 +290,10 @@ class DeviceSurface:
         """DEC-78(b) anti-enumeration, STRONGER than ``ChatSurface``: the token is checked FIRST,
         before any routing decision, and an unrecognized method/path answers the SAME 401 as a
         missing/wrong token — never a 404, even with a token that verifies. ``(GET, /v1/health)``,
-        ``(POST, /v1/voice)`` and ``(POST, /v1/biometrics)`` are the three (method, path) pairs
-        that can proceed past this gate; TK-340/TK-341's branches each fall through to the SAME
-        401 when their handler is ``None`` (R1) — a route whose handler is absent stays
-        indistinguishable from an unknown path."""
+        ``(POST, /v1/voice)``, ``(POST, /v1/biometrics)`` and ``(GET, /v1/utterance)`` are the
+        four (method, path) pairs that can proceed past this gate; TK-340/TK-341/TK-343's branches
+        each fall through to the SAME 401 when their handler is ``None`` (R1) — a route whose
+        handler is absent stays indistinguishable from an unknown path."""
         device_id = self._credential_store.verify(headers.get(_AUTH_HEADER, ""))
         if device_id is None:
             await self._respond(writer, 401, _UNAUTHORIZED_BODY)
@@ -292,6 +316,14 @@ class DeviceSurface:
                 device_id=device_id, headers=headers, body=body
             )
             await self._respond(writer, status, payload)
+            return
+        if (
+            method == "GET"
+            and path == _UTTERANCE_PATH
+            and self._utterance_fetch_handler is not None
+        ):
+            status, extra_headers, raw_body = await self._utterance_fetch_handler.handle()
+            await self._respond_bytes(writer, status, extra_headers, raw_body)
             return
         await self._respond(writer, 401, _UNAUTHORIZED_BODY)
 
@@ -336,6 +368,28 @@ class DeviceSurface:
             "",
             "",
         ]
+        writer.write("\r\n".join(header_lines).encode("latin-1") + body)
+        await writer.drain()
+
+    async def _respond_bytes(
+        self,
+        writer: asyncio.StreamWriter,
+        status: int,
+        extra_headers: dict[str, str],
+        body: bytes,
+    ) -> None:
+        """TK-343: the raw-body sibling of ``_respond`` — ``GET /v1/utterance``'s ``200`` carries
+        raw PCM, never a JSON envelope. ``extra_headers`` is written verbatim (the handler already
+        built the exact wire-contract.md §5 header set); this method only adds ``Content-Length``
+        and ``Connection: close``, mirroring ``_respond``'s own framing."""
+        reason = _REASON_PHRASES.get(status, "OK")
+        header_lines = [f"HTTP/1.1 {status} {reason}"]
+        for name, value in extra_headers.items():
+            header_lines.append(f"{name}: {value}")
+        header_lines.append(f"Content-Length: {len(body)}")
+        header_lines.append("Connection: close")
+        header_lines.append("")
+        header_lines.append("")
         writer.write("\r\n".join(header_lines).encode("latin-1") + body)
         await writer.drain()
 
