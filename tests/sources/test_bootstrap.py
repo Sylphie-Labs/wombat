@@ -659,6 +659,39 @@ def test_asr_local_and_asr_remote_coexist_under_distinct_ids(
     assert consent_calls == []
 
 
+def test_asr_remote_source_threads_turn_hook_and_context_hook_straight_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TK-340 repair: ``RemoteASRSource`` must get the SAME ``turn_hook``/``context_hook``
+    wiring the local ``asr`` source gets (reply threading, grounding context, TK-347's
+    current_body_state key) — the remote voice channel is not a second-class citizen."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
+    config = _make_config(device_remote_drop_dir=str(tmp_path))
+
+    def turn_hook(event_key: str, transcript: str, captured_at: str) -> None:
+        raise AssertionError("never called by this test -- identity-through-wiring only")
+
+    def context_hook() -> dict[str, str]:
+        raise AssertionError("never called by this test -- identity-through-wiring only")
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+        turn_hook=turn_hook,
+        context_hook=context_hook,
+    )
+
+    remote_source = registry._sources["asr_remote"]
+    assert remote_source._turn_hook is turn_hook  # type: ignore[attr-defined]
+    assert remote_source._context_hook is context_hook  # type: ignore[attr-defined]
+    assert consent_calls == []
+
+
 def test_asr_remote_source_not_wired_when_faster_whisper_not_installed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

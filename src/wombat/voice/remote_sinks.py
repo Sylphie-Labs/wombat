@@ -20,11 +20,14 @@ device reads off ``GET /v1/health``, never a second literal).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from wombat.devices.surface import UTTERANCE_TTL_SECONDS
 from wombat.voice.stream_playback import STREAM_SAMPLE_RATE
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -68,7 +71,19 @@ class SealedUtteranceStore:
         utterance, sealed_at = self._utterance, self._sealed_at
         self._utterance = None
         self._sealed_at = None
-        if self._clock() - sealed_at > self._ttl_seconds:
+        age_seconds = self._clock() - sealed_at
+        if age_seconds > self._ttl_seconds:
+            # TK-343 AC7 repair: SpeakSink already fired on_spoken/updated LastSpokenRegister for
+            # this utterance the instant it was sealed -- an expiry that reaches HERE means the
+            # device never fetched it, i.e. wombat recorded a spoken reply nobody heard. ONE loud
+            # warning names it rather than the silent discard this branch had before.
+            logger.warning(
+                "voice: sealed utterance %r (origin device %r) expired unfetched after %.1fs -- "
+                "the reply was recorded as spoken but never delivered",
+                utterance.utterance_id,
+                utterance.origin_device_id,
+                age_seconds,
+            )
             return None
         return utterance
 

@@ -512,6 +512,48 @@ async def test_post_biometrics_falls_to_401_when_no_handler_is_wired() -> None:
         await surface.stop()
 
 
+def test_voice_ingest_handler_stays_none_when_remote_voice_toggle_is_off(
+    tmp_path: Path,
+) -> None:
+    """TK-340 repair: a configured drop dir alone must NOT wire POST /v1/voice — the biometric
+    toggle is on (so device_surface constructs) but wombat_remote_voice is OFF, and the drop dir
+    IS configured. Before the fix this was the consent-gate bypass: the route would bind and
+    transcribe watch audio even though GET /v1/health reports remote_voice=false."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(
+            wombat_observe_biometrics=True,
+            wombat_remote_voice=False,
+            wombat_device_remote_drop_dir=str(tmp_path),
+        ),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.device_surface is not None
+    assert bundle.device_surface._voice_ingest_handler is None
+
+
+def test_voice_ingest_handler_wired_when_remote_voice_toggle_is_on_and_drop_dir_set(
+    tmp_path: Path,
+) -> None:
+    """TK-340: both the consent toggle AND the drop dir present -- the route wires normally."""
+    op = load_operating_params()
+    bundle = bootstrap.assemble_runtime(
+        config=_config(
+            wombat_remote_voice=True,
+            wombat_device_remote_drop_dir=str(tmp_path),
+        ),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle.device_surface is not None
+    assert bundle.device_surface._voice_ingest_handler is not None
+
+
 def test_biometric_ingest_handler_wired_into_bundle_only_when_biometrics_toggle_is_on() -> None:
     op = load_operating_params()
 

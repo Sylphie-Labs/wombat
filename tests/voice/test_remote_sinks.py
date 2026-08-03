@@ -16,6 +16,10 @@ sounddevice, exactly like ``tests/voice/test_stream_playback.py``.
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from wombat.voice.remote_sinks import (
     BufferedUtteranceSink,
     SealedUtterance,
@@ -100,6 +104,42 @@ def test_unfetched_utterance_expires_at_the_ttl() -> None:
     clock.advance(120.001)
 
     assert store.take() is None
+
+
+def test_unfetched_utterance_expiry_logs_one_loud_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """TK-343 AC7 repair: a sealed utterance the device never fetches must not expire silently —
+    SpeakSink already recorded it as spoken (on_spoken/LastSpokenRegister), so an unfetched expiry
+    is a spoken-reply-nobody-heard case and gets ONE loud warning naming the utterance."""
+    clock = _FakeClock(now=0.0)
+    store = SealedUtteranceStore(clock=clock, ttl_seconds=120.0)
+    store.publish(
+        SealedUtterance(utterance_id="u-never-fetched", origin_device_id="watch-1", pcm=b"\x01")
+    )
+    clock.advance(120.001)
+
+    with caplog.at_level(logging.WARNING, logger="wombat.voice.remote_sinks"):
+        result = store.take()
+
+    assert result is None
+    assert any(
+        "u-never-fetched" in record.message and "watch-1" in record.message
+        for record in caplog.records
+    )
+
+
+def test_fetched_before_ttl_logs_no_expiry_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """The happy path (fetched in time) must NOT log the unfetched-expiry warning."""
+    clock = _FakeClock(now=0.0)
+    store = SealedUtteranceStore(clock=clock, ttl_seconds=120.0)
+    store.publish(SealedUtterance(utterance_id="u-1", origin_device_id="watch-1", pcm=b"\x01"))
+
+    with caplog.at_level(logging.WARNING, logger="wombat.voice.remote_sinks"):
+        result = store.take()
+
+    assert result is not None
+    assert caplog.records == []
 
 
 def test_default_ttl_matches_the_devices_surface_pinned_constant() -> None:

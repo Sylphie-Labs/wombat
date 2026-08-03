@@ -1506,18 +1506,25 @@ def assemble_runtime(
             clock=_utc_now,
         )
 
-    # TK-340 (R1, CON-3): the optional POST /v1/voice route handler — constructed iff
-    # config.wombat_device_remote_drop_dir is non-blank, INDEPENDENTLY of the two DEC-78(d)
-    # consent toggles below (mirrors _maybe_register_asr's own independent skip check, sources/
-    # bootstrap.py). A blank dir logs ONE loud WARNING and the handler stays None; DeviceSurface
-    # then falls the route through to its own DEC-78(b) 401 fallback, exactly as if the path
-    # were unknown (R1).
+    # TK-340 (R1, CON-3, repaired): the optional POST /v1/voice route handler — constructed iff
+    # BOTH config.wombat_remote_voice is true AND config.wombat_device_remote_drop_dir is
+    # non-blank, mirroring biometric_ingest_handler's own consent-gated construction just below.
+    # Gating on the drop dir alone (the original wiring) let the route bind and transcribe watch
+    # audio even with the consent toggle off, while GET /v1/health reported remote_voice=false —
+    # a consent-gate bypass. Either gap logs ONE loud WARNING and the handler stays None;
+    # DeviceSurface then falls the route through to its own DEC-78(b) 401 fallback, exactly as if
+    # the path were unknown (R1).
     # TK-343: the SAME last_turn_origin_register built above (hoisted ahead of the TTS adapter
     # construction) is threaded through so every accepted POST /v1/voice stamps the ONE origin
     # voice.select's writer_factory closure later reads.
     voice_ingest_handler: VoiceIngestHandler | None = None
     raw_remote_drop_dir = (config.wombat_device_remote_drop_dir or "").strip()
-    if raw_remote_drop_dir:
+    if not config.wombat_remote_voice:
+        logger.warning(
+            "POST /v1/voice not wired: WOMBAT_REMOTE_VOICE is false — skipping the device "
+            "voice-ingest route (boot continues without it)"
+        )
+    elif raw_remote_drop_dir:
         voice_ingest_handler = VoiceIngestHandler(
             drop_dir=Path(raw_remote_drop_dir), origin_register=last_turn_origin_register
         )

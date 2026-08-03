@@ -391,7 +391,7 @@ async def test_dream_screenpipe_distills_fake_content_into_next_known_user_conte
             user_facts_for_stage.close()
 
     assert isinstance(result, Transition)
-    assert result.to == "dream_behavior_log"
+    assert result.to == "dream_biometrics"
     assert result.output.data["new_facts"] == 1
     assert len(fake_dream_model.calls) == 1
 

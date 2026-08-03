@@ -33,6 +33,7 @@ from dotenv import dotenv_values
 from pydantic import SecretStr
 
 from wombat.config import WombatConfig
+from wombat.devices.credentials import DeviceCredentialStore, KeyringDeviceVault
 from wombat.external_store import ExternalItemStore
 from wombat.integrations.gcal.auth import CalendarAuth
 from wombat.integrations.gcal.token_store import KeyringTokenStore
@@ -148,8 +149,19 @@ def main() -> None:
         external_store = ExternalItemStore(dsn)
 
     google_connections = _build_google_connections()
+    # TK-342 repair: the ONLY production call site was omitting device_store, so GET /devices
+    # always returned an empty list and POST/DELETE always answered 503 — the pairing UI could
+    # never actually pair anything. Mirrors KeyringVoiceKeyStore's service-override wiring above
+    # (same _KEYRING_SERVICE_ENV_VAR test/ops override) so a disposable keyring service redirects
+    # both the voice-key vault and the device-credential vault together.
+    device_store = DeviceCredentialStore(vault=KeyringDeviceVault(service=service))
     app = create_app(
-        store, KeyringVoiceKeyStore(service=service), token, external_store, google_connections
+        store,
+        KeyringVoiceKeyStore(service=service),
+        token,
+        external_store,
+        google_connections,
+        device_store,
     )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

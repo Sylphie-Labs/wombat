@@ -703,13 +703,19 @@ def _maybe_register_asr_remote(
     config: WombatConfig,
     *,
     poll_interval_seconds: float,
+    turn_hook: Callable[[str, str, str], None] | None = None,
+    context_hook: Callable[[], Mapping[str, str]] | None = None,
 ) -> None:
     """TK-340 (R2): register ``RemoteASRSource`` under id ``"asr_remote"`` iff
     ``config.wombat_device_remote_drop_dir`` is non-blank AND a ``Transcriber`` is constructible
     — the EXACT SAME two-independent-skip-condition, loud-skip pattern as ``_maybe_register_asr``
     above, over its OWN independently constructed ``Transcriber`` (never shared with the local
     ``"asr"`` source — two enabled channels simply each load their own model). Neither missing
-    piece ever raises."""
+    piece ever raises.
+
+    ``turn_hook``/``context_hook`` pass straight through to ``RemoteASRSource`` — the SAME
+    pass-through shape ``_maybe_register_asr`` uses for the local ``"asr"`` source, so remote
+    voice turns get the same reply-threading/grounding-context wiring as local ones."""
     raw_dir = (config.wombat_device_remote_drop_dir or "").strip()
     if not raw_dir:
         logger.warning(
@@ -726,6 +732,8 @@ def _maybe_register_asr_remote(
             drop_dir=Path(raw_dir),
             transcriber=transcriber,
             poll_interval_seconds=poll_interval_seconds,
+            turn_hook=turn_hook,
+            context_hook=context_hook,
         )
     )
 
@@ -883,6 +891,8 @@ def build_source_registry(
         registry,
         config,
         poll_interval_seconds=asr_remote_poll_interval_seconds,
+        turn_hook=turn_hook,
+        context_hook=context_hook,
     )
     _maybe_register_screenpipe(
         registry,

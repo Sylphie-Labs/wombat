@@ -176,6 +176,13 @@ class FallbackTTSAdapter:
             if self._remote_route_was_attempted():
                 raise
             self._warn_and_fallback(text)
+        else:
+            # TK-343 repair: a SUCCESSFUL primary speak still may have marked remote_attempt
+            # (the writer_factory closure marks it before Fish's transport runs, not after a
+            # failure). Left uncleared, the mark leaks into the NEXT speak() call and wrongly
+            # blocks that call's local-TTS fallback on a Fish failure. Consume it here so every
+            # speak() call starts this flag fresh, regardless of primary outcome.
+            self._remote_route_was_attempted()
 
     def _remote_route_was_attempted(self) -> bool:
         """TK-343 (DEC-79): consumes the ONE-shot flag ``voice.select``'s writer_factory closure

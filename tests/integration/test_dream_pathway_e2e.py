@@ -173,6 +173,7 @@ async def test_ac1_dream_run_completes_and_a_subsequent_drain_drive_stays_clean_
             "dream_derive",
             "dream_observe",
             "dream_screenpipe",
+            "dream_biometrics",
             "dream_behavior_log",
             "dream_window",
             "dream_pattern",

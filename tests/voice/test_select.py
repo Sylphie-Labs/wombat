@@ -824,6 +824,23 @@ class _RaisingTTS:
         raise RuntimeError("primary exploded (simulated, TK-328)")
 
 
+class _SucceedsThenRaisesTTS:
+    """Minimal ``TTSAdapter`` stand-in whose FIRST ``speak`` call succeeds and every call after
+    raises -- reproduces a successful remote-routed reply followed by a failing local one on the
+    SAME adapter instance (TK-343 repair regression coverage)."""
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+        self._calls = 0
+
+    def speak(self, text: str) -> None:
+        self._calls += 1
+        if self._calls == 1:
+            self.spoken.append(text)
+            return
+        raise RuntimeError("primary exploded on a later call (simulated)")
+
+
 def test_fallback_tts_adapter_strips_tags_only_on_the_fallback_branch() -> None:
     """AC2: a raising primary degrades to the fallback with every ALLOWED_TAGS marker stripped
     (whitespace collapsed) -- the local engine never speaks Fish's bracket markers aloud."""
@@ -1186,6 +1203,24 @@ def test_fallback_tts_adapter_remote_attempt_is_consumed_only_once() -> None:
     adapter.speak("second (local, falls back)")
 
     assert spy.spoken == ["second (local, falls back)"]
+
+
+def test_fallback_tts_adapter_remote_attempt_success_then_local_failure_still_falls_back() -> (
+    None
+):
+    """TK-343 repair: a SUCCESSFUL remote-routed reply must consume the one-shot mark exactly
+    like a failure does -- otherwise the mark leaks into the NEXT (local, unmarked-by-this-call)
+    turn and its primary failure wrongly re-raises instead of degrading to local TTS."""
+    tracker = select_module._RemoteRouteAttempted()
+    tracker.mark()
+    spy = _RecordingTTS()
+    primary = _SucceedsThenRaisesTTS()
+    adapter = FallbackTTSAdapter(primary, fallback=spy, remote_attempt=tracker)
+
+    adapter.speak("first (remote, succeeds)")
+    adapter.speak("second (local, primary fails)")
+
+    assert spy.spoken == ["second (local, primary fails)"]
 
 
 # --------------------------------------------------------------------------------------------- AC8
