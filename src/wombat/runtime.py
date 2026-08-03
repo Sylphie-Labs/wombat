@@ -69,6 +69,7 @@ from cogworx.runtime.sweeper import Sweeper
 from wombat.bootstrap import _DRAIN_POLL_INTERVAL_SECONDS, RuntimeBundle, assemble_runtime
 from wombat.chat.surface import ChatSurface
 from wombat.config import ConfigurationError, load_config, resolve_wombat_zone
+from wombat.devices.surface import DeviceSurface
 from wombat.external_store import EXTERNAL_ITEMS_PRUNE_DAYS
 from wombat.params import PARAMS_APP_EDITABLE, OperatingParams, load_operating_params
 from wombat.pathways.brief_pathway import brief_timer_tick_artifact
@@ -294,6 +295,35 @@ async def _stop_chat_surface(surface: ChatSurface | None) -> None:
         logger.warning("serve: chat surface failed to stop cleanly", exc_info=True)
 
 
+async def _start_device_surface(surface: DeviceSurface | None) -> None:
+    """Start ``surface``, GUARDED (CON-3, TK-339) — mirrors ``_start_chat_surface``'s posture
+    exactly: a ``None`` surface (both companion-device consent toggles off) is a silent no-op; a
+    bind failure (e.g. the configured port already in use) is caught, logged as ONE loud
+    WARNING, and never propagates — the drain loop/brief/other sources are unaffected either
+    way."""
+    if surface is None:
+        return
+    try:
+        await surface.start()
+    except Exception:
+        logger.warning(
+            "serve: device surface failed to start; the companion-device input surface is "
+            "disabled for this run (drain loop/brief/other sources unaffected)",
+            exc_info=True,
+        )
+
+
+async def _stop_device_surface(surface: DeviceSurface | None) -> None:
+    """Stop ``surface``, GUARDED — mirrors ``_stop_chat_surface``'s posture so a stop failure
+    never blocks the rest of the ``finally`` teardown below."""
+    if surface is None:
+        return
+    try:
+        await surface.stop()
+    except Exception:
+        logger.warning("serve: device surface failed to stop cleanly", exc_info=True)
+
+
 class _PendingCountableQueue(Protocol):
     """The one queue method the drain pump needs — a structural seam so tests can inject a bare
     stub instead of the real ``WombatQueue`` (mirrors ``DrainQueueStage``'s own ``_DrainableQueue``
@@ -367,6 +397,7 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
     """
     await bundle.source_registry.start()
     await _start_chat_surface(bundle.chat_surface)
+    await _start_device_surface(bundle.device_surface)
     try:
         # TK-97: a SECOND initial drive arms the once-daily brief timer (and catches a brief missed
         # while the process was down: a boot past this morning's brief_time fires it once). Only
@@ -437,6 +468,7 @@ async def _drive_and_serve(bundle: RuntimeBundle, *, params: OperatingParams) ->
     finally:
         await bundle.source_registry.stop()
         await _stop_chat_surface(bundle.chat_surface)
+        await _stop_device_surface(bundle.device_surface)
         bundle.queue.close()
         bundle.daily_ledger.close()
         bundle.pending_journal.close()

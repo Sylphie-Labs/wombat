@@ -105,6 +105,11 @@ APP_EDITABLE_FIELDS: tuple[str, ...] = (
     # TK-319 (DEC-70(c)): the fourth ambient-observability channel — Screenpipe capture consent,
     # False by default (opt-in, never assumed) and app-editable like its three siblings above.
     "wombat_observe_screenpipe",
+    # TK-339 (DEC-78(d)): the two companion-device consent toggles — each False by default and
+    # app-editable so a settings UI can flip them without an env var, same shape as the
+    # ambient-observability toggles above.
+    "wombat_remote_voice",
+    "wombat_observe_biometrics",
 )
 
 
@@ -376,6 +381,24 @@ class WombatConfig(BaseSettings):
     # preference). TK-320's loopback guard is the structural backstop against a non-local URL;
     # nothing reads this field yet — TK-320/TK-322 own wiring an actual collector to it.
     wombat_screenpipe_url: str = "http://127.0.0.1:3030"
+
+    # OPTIONAL (TK-339, DEC-78(d)): the two companion-device consent toggles — genuinely
+    # SEPARATE grants (an explicit mic press versus passive body data collected without any
+    # act), each False by default (opt-in, never assumed) and app-editable like the ambient-
+    # observability toggles above. Restart-tier (no hot-apply); assemble_runtime reads them
+    # once at boot to gate DeviceSurface/DeviceCredentialStore construction — BOTH false means
+    # neither is even constructed (structural inertness, the DEC-68(b) pattern).
+    wombat_remote_voice: bool = False
+    wombat_observe_biometrics: bool = False
+
+    # OPTIONAL (TK-339, DEC-78(a)): DeviceSurface's bind host and fixed port — an operator
+    # .env-tier pair, deliberately NOT in APP_EDITABLE_FIELDS (the ``wombat_singleton_port``
+    # precedent: this is launch-time network-exposure wiring, not a settings-UI preference).
+    # The host defaults to loopback so an unconfigured wombat is byte-identical to today and
+    # reaching the LAN is an act, never a drift; the port is FIXED (never the ephemeral port-0
+    # chat/settings surfaces use) because a device paired yesterday must find wombat today.
+    wombat_device_bind_host: str = "127.0.0.1"
+    wombat_device_port: int = 8788
 
     @classmethod
     def settings_customise_sources(

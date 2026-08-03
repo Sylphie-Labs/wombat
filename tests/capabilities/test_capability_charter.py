@@ -23,12 +23,32 @@ sentence, again conditionally phrased ("when they have turned on detailed screen
 appears in what you are given") so it stays TRUE whether ``wombat_observe_screenpipe`` is on or
 off.
 
-This test diffs the CURRENT (imported, live) ``CAPABILITY_CHARTER`` against three hand-pinned
-baselines at SENTENCE granularity — the PRE-TK-298 text, the POST-TK-298/PRE-TK-312 text, and the
-POST-TK-312/PRE-TK-325 text (the byte-identical string this ticket found in the repo before
-editing it) — proving in each stage that exactly one sentence was inserted and every other
-sentence, including every "cannot"/"never" clause, is byte-identical and untouched (a structural
-assert, not a human eyeball diff).
+TK-354 (DEC-81) inserts a FOURTH sentence: the charter enumerated the morning brief as the only use
+of Calendar/Gmail grounding and never said the same data may answer an on-demand question in
+ordinary chat, so a model following the charter literally disclaimed a capability it was already
+holding live data for. ONE more sentence, conditionally phrased ("when they appear in what you are
+given") so it stays TRUE on a Google-less boot, an empty calendar day, or the CON-3 degrade, with an
+inline bound (subjects and senders, not message bodies) since the projection carries no body text.
+Stage 3 was re-pointed to run baseline-to-baseline (POST-TK-312 -> POST-TK-325, both fixed) so that
+stage stops depending on the live import, exactly as stage 2 already does.
+
+TK-339 (DEC-78, DeviceSurface) inserts a FIFTH sentence: paired personal devices (a phone or watch)
+can now carry a spoken message into the same reply pipeline and passively feed body-activity data,
+gated on the two DEC-78(d) consent toggles and on a device actually being paired. ONE more
+sentence, conditionally phrased ("when the user has enabled that and it appears in what you are
+given") so it stays TRUE with both toggles off, with a toggle on but no device ever paired, and on
+every boot in between. Stage 4 is re-pointed to run baseline-to-baseline (POST-TK-325 ->
+POST-TK-354, both fixed) so that stage stops depending on the live import, exactly as stages 2/3
+already do; a new stage 5 diffs the POST-TK-354 baseline against the live import for this ticket's
+own single insert.
+
+This test diffs the CURRENT (imported, live) ``CAPABILITY_CHARTER`` against five hand-pinned
+baselines at SENTENCE granularity — the PRE-TK-298 text, the POST-TK-298/PRE-TK-312 text, the
+POST-TK-312/PRE-TK-325 text, the POST-TK-325/PRE-TK-354 text, and the POST-TK-354/PRE-TK-339 text
+(the byte-identical string this ticket found in the repo before editing it) — proving in each
+stage that exactly one sentence was inserted and every other sentence, including every
+"cannot"/"never" clause, is byte-identical and untouched (a structural assert, not a human
+eyeball diff).
 """
 
 from __future__ import annotations
@@ -106,6 +126,68 @@ _INSERTED_SENTENCE_SCREENPIPE = (
     "they have turned on detailed screen capture and it appears in what you are given."
 )
 
+# The charter exactly as it stood after TK-325 and before TK-354 (verified against the repo
+# pre-TK-354-change, lines 24-38 of src/wombat/persona/capabilities.py) — the fourth-stage diff
+# oracle below measures the CURRENT (live, imported) charter against this fixed baseline. Never
+# edited by this ticket; it is the "before" snapshot TK-354's insert is taken against. Stage 3
+# above is re-pointed to run against this baseline instead of the live import, so it stays scoped
+# to exactly TK-325's own insertion regardless of any later stage.
+_POST_TK325_CHARTER = (
+    "Your abilities are fixed and known. You can converse and answer from what you are given, "
+    "deliver the morning brief from read-only Calendar and Gmail, draft Gmail replies that the "
+    "user must approve, and read web pages when asked. "
+    "You remember personal details the user has shared in earlier conversations when they appear "
+    "in what you are given. "
+    "You can see which application and window the user is currently working in when they have "
+    "turned on screen observation and it appears in what you are given. "
+    "You can also know specific details about what is currently shown on the user's screen when "
+    "they have turned on detailed screen capture and it appears in what you are given. "
+    "You cannot set alarms, timers, or "
+    "reminders, cannot send email or modify the calendar, and cannot perform any other action on "
+    "any device or service. If the user asks for something outside these abilities, say plainly "
+    "that you can't do that - never say an action was done, is being done, or is scheduled."
+)
+
+# DEC-81(a): the ONE sentence TK-354 inserts, verbatim and binding, conditionally phrased so it is
+# TRUE on a Google-less boot, an empty calendar day, a zero-row store, and the CON-3 degrade where
+# build_voice_context returns an empty dict.
+_INSERTED_SENTENCE_CALENDAR_EMAIL = (
+    "You can tell the user what is on their calendar today and which emails they have recently "
+    "received - subjects and senders, not message bodies - when they appear in what you are given."
+)
+
+# The charter exactly as it stood after TK-354 and before TK-339 (verified against the repo
+# pre-TK-339-change, lines 35-51 of src/wombat/persona/capabilities.py) — the fifth-stage diff
+# oracle below measures the CURRENT (live, imported) charter against this fixed baseline. Never
+# edited by this ticket; it is the "before" snapshot TK-339's insert is taken against. Stage 4
+# above is re-pointed to run against this baseline instead of the live import, so it stays scoped
+# to exactly TK-354's own insertion regardless of any later stage.
+_POST_TK354_CHARTER = (
+    "Your abilities are fixed and known. You can converse and answer from what you are given, "
+    "deliver the morning brief from read-only Calendar and Gmail, draft Gmail replies that the "
+    "user must approve, and read web pages when asked. "
+    "You remember personal details the user has shared in earlier conversations when they appear "
+    "in what you are given. "
+    "You can see which application and window the user is currently working in when they have "
+    "turned on screen observation and it appears in what you are given. "
+    "You can also know specific details about what is currently shown on the user's screen when "
+    "they have turned on detailed screen capture and it appears in what you are given. "
+    "You can tell the user what is on their calendar today and which emails they have recently "
+    "received - subjects and senders, not message bodies - when they appear in what you are given. "
+    "You cannot set alarms, timers, or "
+    "reminders, cannot send email or modify the calendar, and cannot perform any other action on "
+    "any device or service. If the user asks for something outside these abilities, say plainly "
+    "that you can't do that - never say an action was done, is being done, or is scheduled."
+)
+
+# DEC-78: the ONE sentence TK-339 inserts, conditionally phrased so it is TRUE with both
+# companion-device consent toggles off, with a toggle on but no device ever paired, and on every
+# boot in between.
+_INSERTED_SENTENCE_DEVICES = (
+    "You can also receive spoken messages and passive body-activity data from the user's own "
+    "paired phone or watch when the user has enabled that and it appears in what you are given."
+)
+
 _SENTENCE_BOUNDARY = re.compile(r"(?<=\. )")
 
 
@@ -168,12 +250,34 @@ def test_charter_diff_inserts_the_screen_observation_sentence_and_touches_nothin
 
 
 def test_charter_diff_inserts_the_screenpipe_content_sentence_and_touches_nothing_else() -> None:
-    # Stage 3 (TK-325, DEC-70h): POST-TK-312 baseline -> CURRENT (live) charter. The oracle
-    # enforces shape (one contiguous insert, zero deletes/replaces), not position.
+    # Stage 3 (TK-325, DEC-70h): POST-TK-312 baseline -> POST-TK-325/PRE-TK-354 baseline. Both
+    # fixed baselines (never the live import) so this stage's oracle stays scoped to exactly
+    # TK-325's own insertion, unaffected by TK-354's later stage-4 insertion below.
     post_tk312_sentences = _sentences(_POST_TK312_CHARTER)
+    post_tk325_sentences = _sentences(_POST_TK325_CHARTER)
+    _assert_single_contiguous_insert(
+        post_tk312_sentences, post_tk325_sentences, _INSERTED_SENTENCE_SCREENPIPE
+    )
+
+
+def test_charter_diff_inserts_the_calendar_email_sentence_and_touches_nothing_else() -> None:
+    # Stage 4 (TK-354, DEC-81): POST-TK-325 baseline -> POST-TK-354/PRE-TK-339 baseline. Both
+    # fixed baselines (never the live import) so this stage's oracle stays scoped to exactly
+    # TK-354's own insertion, unaffected by TK-339's later stage-5 insertion below.
+    post_tk325_sentences = _sentences(_POST_TK325_CHARTER)
+    post_tk354_sentences = _sentences(_POST_TK354_CHARTER)
+    _assert_single_contiguous_insert(
+        post_tk325_sentences, post_tk354_sentences, _INSERTED_SENTENCE_CALENDAR_EMAIL
+    )
+
+
+def test_charter_diff_inserts_the_devices_sentence_and_touches_nothing_else() -> None:
+    # Stage 5 (TK-339, DEC-78): POST-TK-354 baseline -> CURRENT (live) charter. The oracle
+    # enforces shape (one contiguous insert, zero deletes/replaces), not position.
+    post_tk354_sentences = _sentences(_POST_TK354_CHARTER)
     live_sentences = _sentences(CAPABILITY_CHARTER)
     _assert_single_contiguous_insert(
-        post_tk312_sentences, live_sentences, _INSERTED_SENTENCE_SCREENPIPE
+        post_tk354_sentences, live_sentences, _INSERTED_SENTENCE_DEVICES
     )
 
 
@@ -231,3 +335,39 @@ def test_screenpipe_content_sentence_is_conditionally_phrased_true_in_both_toggl
     assert "cannot" not in _INSERTED_SENTENCE_SCREENPIPE.lower()
     assert "never" not in _INSERTED_SENTENCE_SCREENPIPE.lower()
     assert _INSERTED_SENTENCE_SCREENPIPE in CAPABILITY_CHARTER
+
+
+def test_calendar_email_sentence_is_conditionally_phrased_true_regardless_of_data_presence() -> (
+    None
+):
+    # DEC-81(a): phrased "when they appear in what you are given" — never an unconditional claim
+    # that calendar or email data is present, so it stays TRUE on a Google-less boot, an empty
+    # calendar day, and the CON-3 degrade where build_voice_context returns an empty dict. Carries
+    # the DEC-81(d) bound inline (subjects and senders, not message bodies) since the projection
+    # genuinely carries no body text.
+    assert _INSERTED_SENTENCE_CALENDAR_EMAIL == (
+        "You can tell the user what is on their calendar today and which emails they have "
+        "recently received - subjects and senders, not message bodies - when they appear in "
+        "what you are given."
+    )
+    assert "when they appear in what you are given" in _INSERTED_SENTENCE_CALENDAR_EMAIL
+    assert "subjects and senders, not message bodies" in _INSERTED_SENTENCE_CALENDAR_EMAIL
+    assert "cannot" not in _INSERTED_SENTENCE_CALENDAR_EMAIL.lower()
+    assert "never" not in _INSERTED_SENTENCE_CALENDAR_EMAIL.lower()
+    assert _INSERTED_SENTENCE_CALENDAR_EMAIL in CAPABILITY_CHARTER
+
+
+def test_devices_sentence_is_conditionally_phrased_true_regardless_of_pairing_state() -> None:
+    # DEC-78: phrased "when the user has enabled that and it appears in what you are given" —
+    # never an unconditional claim that a device is paired or that either consent toggle is on,
+    # so it stays TRUE with both toggles off and with a toggle on but no device ever paired.
+    assert _INSERTED_SENTENCE_DEVICES == (
+        "You can also receive spoken messages and passive body-activity data from the user's "
+        "own paired phone or watch when the user has enabled that and it appears in what you "
+        "are given."
+    )
+    assert "when the user has enabled that" in _INSERTED_SENTENCE_DEVICES
+    assert "and it appears in what you are given" in _INSERTED_SENTENCE_DEVICES
+    assert "cannot" not in _INSERTED_SENTENCE_DEVICES.lower()
+    assert "never" not in _INSERTED_SENTENCE_DEVICES.lower()
+    assert _INSERTED_SENTENCE_DEVICES in CAPABILITY_CHARTER

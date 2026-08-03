@@ -206,6 +206,8 @@ from .chat_turns import ChatTurnStore
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
+from .devices.credentials import DeviceCredentialStore, KeyringDeviceVault
+from .devices.surface import DeviceSurface
 from .domain.brief_schedule import BriefRunLedger
 from .domain.daily_ledger import DailyLedger, wombat_today
 from .domain.item_identity import idempotency_key
@@ -826,6 +828,12 @@ class RuntimeBundle:
     # CurrentActivity single-slot snapshot, DEC-68(a) — either toggle alone is enough to
     # construct them; observations.CurrentActivity.in_call ships from birth for exactly this).
     mic_probe: MicInCallProbe | None = None
+    # TK-339 (DEC-78): wombat's first inbound LAN listener — constructed ONLY when EITHER
+    # companion-device consent toggle (config.wombat_remote_voice / wombat_observe_biometrics)
+    # is true; the DeviceCredentialStore backing it is likewise never even constructed on a
+    # both-off boot (structural inertness, the DEC-68(b) pattern verbatim). runtime.serve()
+    # starts/stops this GUARDED (CON-3) exactly like chat_surface above.
+    device_surface: DeviceSurface | None = None
 
 
 def assemble_runtime(
@@ -1444,6 +1452,21 @@ def assemble_runtime(
             clock=_utc_now,
         )
 
+    # TK-339 (DEC-78): wombat's first inbound LAN listener — constructed ONLY when EITHER
+    # companion-device consent toggle is true (structural inertness, the DEC-68(b) pattern
+    # verbatim): both off means DeviceSurface AND its DeviceCredentialStore are never even
+    # constructed, so no socket is bound and the OS keyring is never touched.
+    device_surface: DeviceSurface | None = None
+    if config.wombat_remote_voice or config.wombat_observe_biometrics:
+        device_credential_store = DeviceCredentialStore(vault=KeyringDeviceVault())
+        device_surface = DeviceSurface(
+            credential_store=device_credential_store,
+            host=config.wombat_device_bind_host,
+            port=config.wombat_device_port,
+            remote_voice_enabled=config.wombat_remote_voice,
+            biometrics_enabled=config.wombat_observe_biometrics,
+        )
+
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both
     # DreamOutcomeStage's entity-KG reads and DreamConsolidationStage's sweepers are as harmless
     # on a Google-less/sink-less boot as the terminal scaffold was (no external deps beyond the
@@ -1784,4 +1807,5 @@ def assemble_runtime(
         current_activity=current_activity,
         screen_collector=screen_collector,
         mic_probe=mic_probe,
+        device_surface=device_surface,
     )
