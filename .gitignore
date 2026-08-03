@@ -17,6 +17,7 @@ wheels/
 
 # App-editable settings file (TK-196) — non-secret, machine-local, never committed.
 wombat.settings.json
+wombat.settings.json.migrated
 
 # Tooling caches
 .mypy_cache/
