@@ -38,6 +38,14 @@ one exception is the body-read cap: ``_handle_connection`` reads a HANDLER-decla
 a legitimate larger body is never truncated before the handler ever sees it — this is the SAME
 "never buffer an over-cap body in full" posture ``_MAX_BODY_BYTES`` already gives every route,
 just resolved per-route rather than as one flat constant.
+
+TK-341 (R1): ``POST /v1/biometrics`` (planning/design/wire-contract.md §3) adds this module's
+THIRD route via the SAME ruled seam — an OPTIONAL handler object
+(``devices.biometric_ingest.BiometricIngestHandler``) injected as a keyword arg on ``__init__``
+and constructed at the composition root. ``_dispatch`` gains exactly ONE more ``(method, path)``
+branch, which falls through to the SAME 401 when the handler is ``None``. No batch-validation
+logic lives in this module: the branch only resolves the route and forwards to the handler's own
+``handle()`` plus this module's existing ``_respond``.
 """
 
 from __future__ import annotations
@@ -63,6 +71,7 @@ UTTERANCE_TTL_SECONDS = 120
 _AUTH_HEADER = "x-wombat-device-token"
 _HEALTH_PATH = "/v1/health"
 _VOICE_PATH = "/v1/voice"  # TK-340
+_BIOMETRICS_PATH = "/v1/biometrics"  # TK-341
 
 # Defensive bound on the hand-rolled HTTP parse below — this is wombat's first LAN-reachable
 # listener (DEC-78), so a malformed/adversarial connection must never hang or exhaust memory even
@@ -87,6 +96,19 @@ class _VoiceIngestRoute(Protocol):
     not an import of ``devices.voice_ingest.VoiceIngestHandler``, so this module never depends on
     that one (``voice_ingest.py`` already imports ``STALE_AUDIO_WINDOW_SECONDS`` from here; a
     concrete-type import back would be circular)."""
+
+    max_body_bytes: int
+
+    async def handle(
+        self, *, device_id: str, headers: dict[str, str], body: bytes
+    ) -> tuple[int, dict[str, object]]: ...
+
+
+class _BiometricIngestRoute(Protocol):
+    """The structural shape ``POST /v1/biometrics`` (TK-341, R1) needs from its handler — a
+    Protocol, not an import of ``devices.biometric_ingest.BiometricIngestHandler``, mirroring
+    ``_VoiceIngestRoute`` above for the SAME reason (``biometric_ingest.py`` never needs to
+    import a concrete type back from here)."""
 
     max_body_bytes: int
 
@@ -127,6 +149,7 @@ class DeviceSurface:
         remote_voice_enabled: bool,
         biometrics_enabled: bool,
         voice_ingest_handler: _VoiceIngestRoute | None = None,
+        biometric_ingest_handler: _BiometricIngestRoute | None = None,
     ) -> None:
         self._credential_store = credential_store
         self._host = host
@@ -136,6 +159,9 @@ class DeviceSurface:
         # TK-340 (R1): the OPTIONAL POST /v1/voice handler, constructed at the composition root.
         # None (the default) leaves this route indistinguishable from an unknown path (DEC-78(b)).
         self._voice_ingest_handler = voice_ingest_handler
+        # TK-341 (R1): the OPTIONAL POST /v1/biometrics handler — the SAME None-means-unknown-path
+        # contract as voice_ingest_handler above.
+        self._biometric_ingest_handler = biometric_ingest_handler
         self._server: asyncio.Server | None = None
 
     @property
@@ -221,6 +247,12 @@ class DeviceSurface:
             and self._voice_ingest_handler is not None
         ):
             return self._voice_ingest_handler.max_body_bytes
+        if (
+            method == "POST"
+            and path == _BIOMETRICS_PATH
+            and self._biometric_ingest_handler is not None
+        ):
+            return self._biometric_ingest_handler.max_body_bytes
         return _MAX_BODY_BYTES
 
     async def _dispatch(
@@ -233,10 +265,11 @@ class DeviceSurface:
     ) -> None:
         """DEC-78(b) anti-enumeration, STRONGER than ``ChatSurface``: the token is checked FIRST,
         before any routing decision, and an unrecognized method/path answers the SAME 401 as a
-        missing/wrong token — never a 404, even with a token that verifies. ``(GET, /v1/health)``
-        and ``(POST, /v1/voice)`` are the two (method, path) pairs that can proceed past this
-        gate; TK-340's branch falls through to the SAME 401 when its handler is ``None`` (R1) —
-        a route whose handler is absent stays indistinguishable from an unknown path."""
+        missing/wrong token — never a 404, even with a token that verifies. ``(GET, /v1/health)``,
+        ``(POST, /v1/voice)`` and ``(POST, /v1/biometrics)`` are the three (method, path) pairs
+        that can proceed past this gate; TK-340/TK-341's branches each fall through to the SAME
+        401 when their handler is ``None`` (R1) — a route whose handler is absent stays
+        indistinguishable from an unknown path."""
         device_id = self._credential_store.verify(headers.get(_AUTH_HEADER, ""))
         if device_id is None:
             await self._respond(writer, 401, _UNAUTHORIZED_BODY)
@@ -246,6 +279,16 @@ class DeviceSurface:
             return
         if method == "POST" and path == _VOICE_PATH and self._voice_ingest_handler is not None:
             status, payload = await self._voice_ingest_handler.handle(
+                device_id=device_id, headers=headers, body=body
+            )
+            await self._respond(writer, status, payload)
+            return
+        if (
+            method == "POST"
+            and path == _BIOMETRICS_PATH
+            and self._biometric_ingest_handler is not None
+        ):
+            status, payload = await self._biometric_ingest_handler.handle(
                 device_id=device_id, headers=headers, body=body
             )
             await self._respond(writer, status, payload)

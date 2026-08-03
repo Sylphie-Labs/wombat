@@ -468,3 +468,62 @@ async def test_post_voice_falls_to_401_when_no_handler_is_wired() -> None:
         assert body == _UNAUTHORIZED_BODY
     finally:
         await surface.stop()
+
+
+# --- TK-341 (R1): POST /v1/biometrics falls to the SAME 401 as an unknown path when its handler
+# --- is absent — DEC-78(b) anti-enumeration parity, proven at the surface level (no
+# --- BiometricIngestHandler import here; devices/biometric_ingest.py has its own dedicated test
+# --- module).
+
+
+async def test_post_biometrics_falls_to_401_when_no_handler_is_wired() -> None:
+    store, _device_id, token = _paired_store()
+    surface = DeviceSurface(
+        credential_store=store,
+        host="127.0.0.1",
+        port=0,
+        remote_voice_enabled=False,
+        biometrics_enabled=True,
+        # biometric_ingest_handler defaults to None — the route must be indistinguishable from
+        # an unknown path (R1).
+    )
+    try:
+        await surface.start()
+        host, port = surface.address
+
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="POST",
+            path="/v1/biometrics",
+            headers={"X-Wombat-Device-Token": token, "Content-Type": "application/json"},
+            body=b'{"v": 1, "samples": []}',
+        )
+        assert status == 401
+        assert status != 404
+        assert body == _UNAUTHORIZED_BODY
+    finally:
+        await surface.stop()
+
+
+def test_biometric_ingest_handler_wired_into_bundle_only_when_biometrics_toggle_is_on() -> None:
+    op = load_operating_params()
+
+    bundle_off = bootstrap.assemble_runtime(
+        config=_config(),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle_off.device_surface is None
+
+    bundle_on = bootstrap.assemble_runtime(
+        config=_config(wombat_observe_biometrics=True),
+        dsn="postgresql://fake-host/fake-db",
+        params=op,
+        replay_pending=False,
+        tz=ZoneInfo("UTC"),
+    )
+    assert bundle_on.device_surface is not None
+    assert bundle_on.device_surface._biometric_ingest_handler is not None

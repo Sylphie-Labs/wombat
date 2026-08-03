@@ -206,6 +206,7 @@ from .chat_turns import ChatTurnStore
 from .compose.templates import TemplateComposer
 from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
+from .devices.biometric_ingest import BiometricIngestHandler
 from .devices.credentials import DeviceCredentialStore, KeyringDeviceVault
 from .devices.surface import DeviceSurface
 from .devices.voice_ingest import VoiceIngestHandler
@@ -1469,6 +1470,16 @@ def assemble_runtime(
             "skipping the device voice-ingest route (boot continues without it)"
         )
 
+    # TK-341 (R1, DEC-68(b) structural inertness): the OPTIONAL POST /v1/biometrics route
+    # handler — constructed iff config.wombat_observe_biometrics is true, independently of the
+    # screen/mic observation_store built above (that pair is gated on ITS OWN two toggles). A
+    # dedicated ObservationStore is used rather than reusing observation_store: construction does
+    # zero I/O (Q-46 lazy-connection convention), and biometrics must remain wired even when both
+    # screen and mic are off.
+    biometric_ingest_handler: BiometricIngestHandler | None = None
+    if config.wombat_observe_biometrics:
+        biometric_ingest_handler = BiometricIngestHandler(store=ObservationStore(dsn), tz=tz)
+
     # TK-339 (DEC-78): wombat's first inbound LAN listener — constructed ONLY when EITHER
     # companion-device consent toggle is true (structural inertness, the DEC-68(b) pattern
     # verbatim): both off means DeviceSurface AND its DeviceCredentialStore are never even
@@ -1483,6 +1494,7 @@ def assemble_runtime(
             remote_voice_enabled=config.wombat_remote_voice,
             biometrics_enabled=config.wombat_observe_biometrics,
             voice_ingest_handler=voice_ingest_handler,
+            biometric_ingest_handler=biometric_ingest_handler,
         )
 
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both
