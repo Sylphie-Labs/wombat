@@ -19,12 +19,25 @@ anti-enumeration rule is stronger here than ``ChatSurface``'s: 401 on every path
 unknown one, EVEN WITH a valid token that simply isn't followed by the one known route. A 404 is
 never produced by this surface, ever.
 
-This ticket ships EXACTLY ONE route — ``GET /v1/health`` — the authenticated liveness probe that
-doubles as the DEC-83 payload-level FORMAT HANDSHAKE every device reads before anything else: the
-audio sample rate/format (read from the ONE ``voice.stream_playback.STREAM_SAMPLE_RATE`` constant,
-never re-declared), the staleness/TTL windows §2/§5 pin, and the two DEC-78(d) consent toggles AS
-ACTUALLY CONSTRUCTED. TK-340/TK-341 add the two ingest POSTs; TK-343/TK-345 add the remaining GET
-and the optional WebSocket — this module grows to hold them, per planning/design/wire-contract.md.
+This ticket (TK-339) shipped exactly one route — ``GET /v1/health`` — the authenticated liveness
+probe that doubles as the DEC-83 payload-level FORMAT HANDSHAKE every device reads before anything
+else: the audio sample rate/format (read from the ONE ``voice.stream_playback.STREAM_SAMPLE_RATE``
+constant, never re-declared), the staleness/TTL windows §2/§5 pin, and the two DEC-78(d) consent
+toggles AS ACTUALLY CONSTRUCTED. TK-343/TK-345 add the remaining GET and the optional WebSocket —
+this module grows to hold them, per planning/design/wire-contract.md.
+
+TK-340 (R1): ``POST /v1/voice`` (planning/design/wire-contract.md §2) adds this module's SECOND
+route via the ruled seam — an OPTIONAL handler object (``devices.voice_ingest.VoiceIngestHandler``)
+injected as a keyword arg on ``__init__`` and constructed at the composition root. ``_dispatch``
+gains exactly ONE ``(method, path)`` branch for it, which falls through to the SAME 401 when the
+handler is ``None`` — a route whose handler is absent stays indistinguishable from an unknown path
+(DEC-78(b)). No voice-ingest VALIDATION logic lives in this module: the branch only resolves the
+route and forwards to the handler's own ``handle()`` plus this module's existing ``_respond``. The
+one exception is the body-read cap: ``_handle_connection`` reads a HANDLER-declared
+``max_body_bytes`` (when the target route has one) instead of the generic ``_MAX_BODY_BYTES``, so
+a legitimate larger body is never truncated before the handler ever sees it — this is the SAME
+"never buffer an over-cap body in full" posture ``_MAX_BODY_BYTES`` already gives every route,
+just resolved per-route rather than as one flat constant.
 """
 
 from __future__ import annotations
@@ -34,6 +47,7 @@ import contextlib
 import json
 import logging
 from collections.abc import Sequence
+from typing import Protocol
 
 from wombat.devices.credentials import DeviceCredentialStore
 from wombat.voice.stream_playback import STREAM_SAMPLE_RATE
@@ -48,6 +62,7 @@ UTTERANCE_TTL_SECONDS = 120
 
 _AUTH_HEADER = "x-wombat-device-token"
 _HEALTH_PATH = "/v1/health"
+_VOICE_PATH = "/v1/voice"  # TK-340
 
 # Defensive bound on the hand-rolled HTTP parse below — this is wombat's first LAN-reachable
 # listener (DEC-78), so a malformed/adversarial connection must never hang or exhaust memory even
@@ -58,7 +73,26 @@ _MAX_BODY_BYTES = 1_048_576  # 1 MiB — TK-340/TK-341 pin their own larger per-
 _UNAUTHORIZED_BODY: dict[str, object] = {"error": "unauthorized"}
 _BAD_REQUEST_BODY: dict[str, object] = {"error": "bad_request"}
 
-_REASON_PHRASES: dict[int, str] = {200: "OK", 400: "Bad Request", 401: "Unauthorized"}
+_REASON_PHRASES: dict[int, str] = {
+    200: "OK",
+    202: "Accepted",
+    400: "Bad Request",
+    401: "Unauthorized",
+    409: "Conflict",
+}
+
+
+class _VoiceIngestRoute(Protocol):
+    """The structural shape ``POST /v1/voice`` (TK-340, R1) needs from its handler — a Protocol,
+    not an import of ``devices.voice_ingest.VoiceIngestHandler``, so this module never depends on
+    that one (``voice_ingest.py`` already imports ``STALE_AUDIO_WINDOW_SECONDS`` from here; a
+    concrete-type import back would be circular)."""
+
+    max_body_bytes: int
+
+    async def handle(
+        self, *, device_id: str, headers: dict[str, str], body: bytes
+    ) -> tuple[int, dict[str, object]]: ...
 
 
 async def _read_request_headers(reader: asyncio.StreamReader) -> dict[str, str] | None:
@@ -92,12 +126,16 @@ class DeviceSurface:
         port: int,
         remote_voice_enabled: bool,
         biometrics_enabled: bool,
+        voice_ingest_handler: _VoiceIngestRoute | None = None,
     ) -> None:
         self._credential_store = credential_store
         self._host = host
         self._port = port
         self._remote_voice_enabled = remote_voice_enabled
         self._biometrics_enabled = biometrics_enabled
+        # TK-340 (R1): the OPTIONAL POST /v1/voice handler, constructed at the composition root.
+        # None (the default) leaves this route indistinguishable from an unknown path (DEC-78(b)).
+        self._voice_ingest_handler = voice_ingest_handler
         self._server: asyncio.Server | None = None
 
     @property
@@ -155,7 +193,8 @@ class DeviceSurface:
                 content_length = int(headers.get("content-length", "0") or "0")
             except ValueError:
                 content_length = 0
-            content_length = max(0, min(content_length, _MAX_BODY_BYTES))
+            max_body_bytes = self._max_body_bytes_for(method, path)
+            content_length = max(0, min(content_length, max_body_bytes))
             body = await reader.readexactly(content_length) if content_length else b""
 
             await self._dispatch(method, path, headers, body, writer)
@@ -170,28 +209,48 @@ class DeviceSurface:
                 writer.close()
                 await writer.wait_closed()
 
+    def _max_body_bytes_for(self, method: str, path: str) -> int:
+        """TK-340: the body-read cap for this request, resolved BEFORE dispatch/auth (the read
+        itself has to happen before either can run). ``/v1/health`` (and every unrecognized
+        route) keeps the generic ``_MAX_BODY_BYTES``; ``POST /v1/voice`` with a constructed
+        handler reads that handler's own larger, pinned cap instead — never truncating a
+        legitimate body the handler is about to validate."""
+        if (
+            method == "POST"
+            and path == _VOICE_PATH
+            and self._voice_ingest_handler is not None
+        ):
+            return self._voice_ingest_handler.max_body_bytes
+        return _MAX_BODY_BYTES
+
     async def _dispatch(
         self,
         method: str,
         path: str,
         headers: dict[str, str],
-        body: bytes,  # this ticket's one route carries no body; kept for the TK-340/TK-341
-        # route handlers this dispatch grows to hold.
+        body: bytes,
         writer: asyncio.StreamWriter,
     ) -> None:
         """DEC-78(b) anti-enumeration, STRONGER than ``ChatSurface``: the token is checked FIRST,
         before any routing decision, and an unrecognized method/path answers the SAME 401 as a
-        missing/wrong token — never a 404, even with a token that verifies. Only exactly one
-        (method, path) pair — ``(GET, /v1/health)`` — ever proceeds past this gate in this
-        ticket."""
+        missing/wrong token — never a 404, even with a token that verifies. ``(GET, /v1/health)``
+        and ``(POST, /v1/voice)`` are the two (method, path) pairs that can proceed past this
+        gate; TK-340's branch falls through to the SAME 401 when its handler is ``None`` (R1) —
+        a route whose handler is absent stays indistinguishable from an unknown path."""
         device_id = self._credential_store.verify(headers.get(_AUTH_HEADER, ""))
         if device_id is None:
             await self._respond(writer, 401, _UNAUTHORIZED_BODY)
             return
-        if method != "GET" or path != _HEALTH_PATH:
-            await self._respond(writer, 401, _UNAUTHORIZED_BODY)
+        if method == "GET" and path == _HEALTH_PATH:
+            await self._handle_health(device_id, writer)
             return
-        await self._handle_health(device_id, writer)
+        if method == "POST" and path == _VOICE_PATH and self._voice_ingest_handler is not None:
+            status, payload = await self._voice_ingest_handler.handle(
+                device_id=device_id, headers=headers, body=body
+            )
+            await self._respond(writer, status, payload)
+            return
+        await self._respond(writer, 401, _UNAUTHORIZED_BODY)
 
     async def _handle_health(self, device_id: str, writer: asyncio.StreamWriter) -> None:
         """``GET /v1/health`` (DEC-83 §4) — authenticated liveness AND the format handshake every

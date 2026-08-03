@@ -23,6 +23,10 @@ export { AudioPanel } from "./AudioPanel";
 export { RuntimeControls } from "./RuntimeControls";
 
 export { DangerZone } from "./DangerZone";
+export type { DangerZoneProps } from "./DangerZone";
+
+export { DevicesPanel } from "./DevicesPanel";
+export type { DevicesPanelProps } from "./DevicesPanel";
 
 export { Header } from "./Header";
 

@@ -433,3 +433,38 @@ async def test_health_capabilities_block_reflects_both_toggles_as_actually_const
 
 def test_fake_device_vault_used_here_satisfies_the_protocol() -> None:
     assert isinstance(_FakeDeviceVault(), DeviceVault)
+
+
+# --- TK-340 (R1): POST /v1/voice falls to the SAME 401 as an unknown path when its handler is
+# --- absent — DEC-78(b) anti-enumeration parity, proven at the surface level (no VoiceIngest
+# --- Handler import here; devices/voice_ingest.py has its own dedicated test module).
+
+
+async def test_post_voice_falls_to_401_when_no_handler_is_wired() -> None:
+    store, _device_id, token = _paired_store()
+    surface = DeviceSurface(
+        credential_store=store,
+        host="127.0.0.1",
+        port=0,
+        remote_voice_enabled=True,
+        biometrics_enabled=False,
+        # voice_ingest_handler defaults to None — the route must be indistinguishable from an
+        # unknown path (R1).
+    )
+    try:
+        await surface.start()
+        host, port = surface.address
+
+        status, _headers, body = await _http_request(
+            host,
+            port,
+            method="POST",
+            path="/v1/voice",
+            headers={"X-Wombat-Device-Token": token, "Content-Type": "audio/wav"},
+            body=b"irrelevant",
+        )
+        assert status == 401
+        assert status != 404
+        assert body == _UNAUTHORIZED_BODY
+    finally:
+        await surface.stop()

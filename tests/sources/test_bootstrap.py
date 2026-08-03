@@ -95,6 +95,7 @@ def _make_config(
     client_id: str | None = None,
     client_secret: str | None = None,
     asr_drop_dir: str | None = None,
+    device_remote_drop_dir: str | None = None,
 ) -> WombatConfig:
     return WombatConfig(
         deepseek_api_key=SecretStr("unused-in-this-test"),
@@ -102,6 +103,7 @@ def _make_config(
         google_oauth_client_id=client_id,
         google_oauth_client_secret=SecretStr(client_secret) if client_secret is not None else None,
         wombat_asr_drop_dir=asr_drop_dir,
+        wombat_device_remote_drop_dir=device_remote_drop_dir or "",
     )
 
 
@@ -576,6 +578,107 @@ def test_asr_source_not_wired_when_faster_whisper_not_installed(
         )
 
     assert not _is_registered(registry, "asr")
+    assert "faster-whisper" in caplog.text.lower()
+    assert consent_calls == []
+
+
+# --------------------------------------------------------------- TK-340: asr_remote wiring (R2)
+
+
+def test_asr_remote_source_not_wired_when_drop_dir_unset(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R2: ``config.wombat_device_remote_drop_dir`` blank (the default) -> the SAME loud-skip
+    pattern as ``_maybe_register_asr`` — never registered, never raises, names the env var."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    config = _make_config()
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "asr_remote")
+    assert "WOMBAT_DEVICE_REMOTE_DROP_DIR" in caplog.text
+    assert consent_calls == []
+
+
+def test_asr_remote_source_wired_under_its_own_distinct_id_when_drop_dir_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2: a configured ``wombat_device_remote_drop_dir`` registers ``RemoteASRSource`` under
+    the DISTINCT id ``"asr_remote"`` — never colliding with (or replacing) the local ``"asr"``
+    channel, which stays unwired here since ``wombat_asr_drop_dir`` is unset."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
+    config = _make_config(device_remote_drop_dir=str(tmp_path))
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+
+    assert _is_registered(registry, "asr_remote")
+    assert not _is_registered(registry, "asr")
+    assert consent_calls == []
+
+
+def test_asr_local_and_asr_remote_coexist_under_distinct_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both drop-directory channels configured at once register cleanly under their own ids —
+    ``SourceRegistry.register`` would raise ``ValueError`` on an id collision, so a successful
+    ``build_source_registry`` call here is itself proof the two ids never collide."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
+    local_dir = tmp_path / "local"
+    remote_dir = tmp_path / "remote"
+    local_dir.mkdir()
+    remote_dir.mkdir()
+    config = _make_config(asr_drop_dir=str(local_dir), device_remote_drop_dir=str(remote_dir))
+
+    registry = build_source_registry(
+        config,
+        _FakeEnqueuer(),
+        tz=_TZ,
+        clock=_utc_now,
+        gcal_token_store=_FakeTokenStore(initial=None),
+        gmail_token_store=_FakeTokenStore(initial=None),
+    )
+
+    assert registry.source_ids >= {"asr", "asr_remote"}
+    assert consent_calls == []
+
+
+def test_asr_remote_source_not_wired_when_faster_whisper_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R2's second independent skip condition mirrors ``_maybe_register_asr``'s own: a
+    configured drop dir alone is not enough when no ``Transcriber`` is constructible."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    _simulate_absent(monkeypatch, "faster_whisper")
+    config = _make_config(device_remote_drop_dir=str(tmp_path))
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "asr_remote")
     assert "faster-whisper" in caplog.text.lower()
     assert consent_calls == []
 

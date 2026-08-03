@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TK-355 (DEC-83 §7 / DEC-78(a)). wombat's DeviceSurface is plaintext HTTP/1.1 with no
+  TLS, and every later draft speaks http:// and ws:// to a LAN address. ATS blocks that
+  by default on both platforms. NSAllowsLocalNetworking is the narrow key: it permits
+  cleartext to link-local, .local and private-range addresses ONLY. The broader wildcard
+  ATS key that grants cleartext to the whole internet is forbidden in this tree - it would
+  solve a LAN problem with a much bigger door than the problem needs. Declaring these keys
+  is text and costs nothing (DEC-82 tier A); whether the resulting build is actually
+  permitted the cleartext connection is a tier B question the first Mac session answers
+  (see ios/README.md).
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Wombat Companion</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+
+	<!-- iOS 14+ local network permission prompt. Required ALONGSIDE NSAppTransportSecurity
+	     below - neither key substitutes for the other (DEC-83 §7). -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Wombat Companion talks to wombat over your home network to send voice clips and receive replies.</string>
+
+	<!-- HealthKit usage descriptions. Declaring these costs nothing and needs no Apple
+	     Developer account; only USING HealthKit at runtime does (DEC-82(a) tier A vs
+	     tier C). TK-356 owns the actual HealthKit queries. -->
+	<key>NSHealthShareUsageDescription</key>
+	<string>Wombat Companion reads sleep, workout, heart rate and step data so wombat can reason about your health context.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Wombat Companion does not write to Health. This description is declared for HealthKit authorization completeness only.</string>
+
+	<!-- REQUIRED, not boilerplate (DEC-83 §7 / DEC-78(a)): wombat's surface is cleartext
+	     HTTP over the LAN and both platforms block that by default. Without this key every
+	     call in every later draft fails at its first connection. NSAllowsLocalNetworking is
+	     the narrow key, and it is the only ATS exception key admitted in this tree. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

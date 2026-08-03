@@ -119,6 +119,26 @@ describe("DangerZone (TK-336 AC1: typed confirmation)", () => {
   });
 });
 
+describe("DangerZone (TK-342 AC5: paired-device honesty line)", () => {
+  it("names the paired devices' own on-device copies in NOT_TOUCHED when a device is paired", () => {
+    render(<DangerZone devicesPaired />);
+    openModal();
+
+    expect(screen.getByText(/phone sync buffer/i)).toBeTruthy();
+    expect(screen.getByText(/per-type anchors/i)).toBeTruthy();
+    expect(screen.getByText(/untransferred watch audio/i)).toBeTruthy();
+    // The existing NOT_TOUCHED items are still present, byte-unchanged.
+    expect(screen.getByText(/^settings$/i)).toBeTruthy();
+  });
+
+  it("omits the paired-device line when no device is paired (the default)", () => {
+    render(<DangerZone />);
+    openModal();
+
+    expect(screen.queryByText(/phone sync buffer/i)).toBeNull();
+  });
+});
+
 describe("DangerZone (TK-336 AC2: single flight)", () => {
   it("confirming, then clicking again while in flight, makes exactly ONE wombat:wipe-memory IPC call", async () => {
     let resolveWipe: (value: unknown) => void = () => {};

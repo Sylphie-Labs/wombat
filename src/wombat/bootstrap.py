@@ -208,6 +208,7 @@ from .config import ConfigurationError, WombatConfig, load_config
 from .cost.daily_spend_ledger import DailySpendLedger
 from .devices.credentials import DeviceCredentialStore, KeyringDeviceVault
 from .devices.surface import DeviceSurface
+from .devices.voice_ingest import VoiceIngestHandler
 from .domain.brief_schedule import BriefRunLedger
 from .domain.daily_ledger import DailyLedger, wombat_today
 from .domain.item_identity import idempotency_key
@@ -1452,6 +1453,22 @@ def assemble_runtime(
             clock=_utc_now,
         )
 
+    # TK-340 (R1, CON-3): the optional POST /v1/voice route handler — constructed iff
+    # config.wombat_device_remote_drop_dir is non-blank, INDEPENDENTLY of the two DEC-78(d)
+    # consent toggles below (mirrors _maybe_register_asr's own independent skip check, sources/
+    # bootstrap.py). A blank dir logs ONE loud WARNING and the handler stays None; DeviceSurface
+    # then falls the route through to its own DEC-78(b) 401 fallback, exactly as if the path
+    # were unknown (R1).
+    voice_ingest_handler: VoiceIngestHandler | None = None
+    raw_remote_drop_dir = (config.wombat_device_remote_drop_dir or "").strip()
+    if raw_remote_drop_dir:
+        voice_ingest_handler = VoiceIngestHandler(drop_dir=Path(raw_remote_drop_dir))
+    else:
+        logger.warning(
+            "POST /v1/voice not wired: WOMBAT_DEVICE_REMOTE_DROP_DIR not configured — "
+            "skipping the device voice-ingest route (boot continues without it)"
+        )
+
     # TK-339 (DEC-78): wombat's first inbound LAN listener — constructed ONLY when EITHER
     # companion-device consent toggle is true (structural inertness, the DEC-68(b) pattern
     # verbatim): both off means DeviceSurface AND its DeviceCredentialStore are never even
@@ -1465,6 +1482,7 @@ def assemble_runtime(
             port=config.wombat_device_port,
             remote_voice_enabled=config.wombat_remote_voice,
             biometrics_enabled=config.wombat_observe_biometrics,
+            voice_ingest_handler=voice_ingest_handler,
         )
 
     # TK-46/TK-175/TK-47 (Q-85/Q-90): register wombat.dream UNCONDITIONALLY — both

@@ -38,6 +38,17 @@ gains a read-only ``timezone`` object (RULING v2.172 r4): it mirrors ``wombat.co
 resolve_wombat_zone``'s env/system precedence directly, WITHOUT calling it or constructing a
 ``WombatConfig`` (this process must not build a full config) — a ``PUT`` carrying a ``timezone``
 key 422s (``SettingsUpdate`` has no such field, ``extra="forbid"``).
+
+TK-342: ``GET``/``POST``/``DELETE /devices`` — the companion-device pairing UX over the existing,
+out-of-scope ``wombat.devices.credentials.DeviceCredentialStore`` (TK-338, DO NOT MODIFY). Mirrors
+the ``store``/``external_store`` degrade posture above: a ``None`` ``device_store`` (the caller has
+none to construct yet) degrades GET to an honest empty list and POST/DELETE to a 503 with a fixed,
+generic detail. The plaintext token ``mint`` returns is relayed in the POST response EXACTLY
+ONCE — never persisted by this module, never logged, and never present in any GET. ``host``/
+``port`` for the QR payload (``planning/design/wire-contract.md`` §8) are read directly from the
+process environment (``WOMBAT_DEVICE_BIND_HOST``/``WOMBAT_DEVICE_PORT``, mirroring
+``WombatConfig``'s own field defaults) — the SAME ``_timezone_view`` precedent above: this process
+must never construct a full ``WombatConfig``.
 """
 
 from __future__ import annotations
@@ -52,6 +63,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from wombat.config import APP_EDITABLE_FIELDS
+from wombat.devices.credentials import DeviceCredentialStore
 from wombat.external_store import ExternalItemStore
 from wombat.params import PARAMS_APP_EDITABLE
 from wombat.settings_app.google_connect import (
@@ -83,6 +95,24 @@ _STORAGE_UNAVAILABLE_DETAIL = "settings storage is unavailable; try again later"
 # TK-256 (DEC-50): the POST /google/{service}/connect degrade detail when create_app was built
 # with google_connections=None — mirrors the settings-store degrade posture above.
 _GOOGLE_UNAVAILABLE_DETAIL = "google connection service is unavailable; try again later"
+
+# TK-342: the POST/DELETE /devices degrade detail when create_app was built with
+# device_store=None — mirrors _STORAGE_UNAVAILABLE_DETAIL above.
+_DEVICE_STORE_UNAVAILABLE_DETAIL = "device credential store is unavailable; try again later"
+
+# TK-342: the fixed, generic 500 details for a mint/revoke that raises — NEVER derived from the
+# underlying exception (the DEC-32 secret-echo rule put_key already follows).
+_DEVICE_MINT_FAILED_DETAIL = "failed to pair the device"
+_DEVICE_REVOKE_FAILED_DETAIL = "failed to revoke the device"
+
+# TK-342 (wire-contract.md §8): the QR payload's host/port, mirroring WombatConfig.
+# wombat_device_bind_host/wombat_device_port's own field defaults (config.py, out of scope here)
+# — read directly from the process environment, the _timezone_view precedent, because this
+# process must never construct a full WombatConfig.
+_DEVICE_BIND_HOST_ENV_VAR = "WOMBAT_DEVICE_BIND_HOST"
+_DEVICE_PORT_ENV_VAR = "WOMBAT_DEVICE_PORT"
+_DEFAULT_DEVICE_BIND_HOST = "127.0.0.1"
+_DEFAULT_DEVICE_PORT = 8788
 
 _GoogleServiceLiteral = Literal["gmail", "gcal"]
 
@@ -176,6 +206,13 @@ class SettingsUpdate(BaseModel):
     # TK-309 trio above. wombat_screenpipe_url is deliberately NOT mirrored (operator .env-tier;
     # not in APP_EDITABLE_FIELDS).
     wombat_observe_screenpipe: bool | None = None
+    # TK-342 (DEC-78(d)): mirrors WombatConfig.wombat_remote_voice/wombat_observe_biometrics — the
+    # two companion-device consent toggles, genuinely SEPARATE grants (an explicit mic press
+    # versus passive body data collected without any act — DEC-68(b)'s per-channel thesis), each a
+    # plain bool defaulting False, same shape as the TK-309/TK-319 toggles above. Restart-tier (no
+    # hot-apply; assemble_runtime reads them once at boot to gate DeviceSurface construction).
+    wombat_remote_voice: bool | None = None
+    wombat_observe_biometrics: bool | None = None
 
     @field_validator("wombat_quiet_start", "wombat_quiet_end")
     @classmethod
@@ -235,6 +272,35 @@ class KeyBody(BaseModel):
         return value
 
 
+class DeviceMintRequest(BaseModel):
+    """``POST /devices`` request body — the operator-chosen device label (TK-342)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
+
+
+def _device_bind_host() -> str:
+    return os.environ.get(_DEVICE_BIND_HOST_ENV_VAR) or _DEFAULT_DEVICE_BIND_HOST
+
+
+def _device_port() -> int:
+    raw = os.environ.get(_DEVICE_PORT_ENV_VAR)
+    if not raw:
+        return _DEFAULT_DEVICE_PORT
+    try:
+        return int(raw)
+    except ValueError:
+        return _DEFAULT_DEVICE_PORT
+
+
 def _settings_view(existing: dict[str, Any]) -> dict[str, Any]:
     """The admitted-field-only view of ``existing`` — every ``ADMITTED_SETTINGS_FIELDS`` key,
     ``null`` when absent from the table."""
@@ -278,6 +344,7 @@ def create_app(
     token: str,
     external_store: ExternalItemStore | None = None,
     google_connections: GoogleConnectionManager | None = None,
+    device_store: DeviceCredentialStore | None = None,
 ) -> FastAPI:
     """Build the settings API (TK-197). ``token`` is the per-launch handshake secret every route
     requires via the ``X-Wombat-Token`` header (the ``__main__`` handshake, DEC-31).
@@ -294,7 +361,11 @@ def create_app(
     ``google_connections`` (TK-256, DEC-50) is the in-app Google OAuth connection manager behind
     ``GET /google/status``/``POST /google/{service}/connect`` — ``None`` mirrors the ``store=None``
     degrade: GET renders every service honestly ``not_configured``, POST 503s with a fixed,
-    generic detail."""
+    generic detail.
+
+    ``device_store`` (TK-342) is the paired-device credential store behind ``GET``/``POST``/
+    ``DELETE /devices`` — ``None`` mirrors the ``store=None`` degrade: GET reads as an honest empty
+    list, POST/DELETE 503 with a fixed, generic detail."""
 
     app = FastAPI(title="wombat-settings")
 
@@ -414,6 +485,51 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
+    @app.get("/devices", dependencies=[Depends(_require_token)])
+    def get_devices() -> dict[str, Any]:
+        if device_store is None:
+            return {"devices": []}
+        try:
+            devices = device_store.list()
+        except Exception:
+            devices = []
+        return {"devices": devices}
+
+    @app.post("/devices", status_code=201, dependencies=[Depends(_require_token)])
+    def post_devices(body: DeviceMintRequest) -> dict[str, Any]:
+        if device_store is None:
+            raise HTTPException(status_code=503, detail=_DEVICE_STORE_UNAVAILABLE_DETAIL)
+        try:
+            device_id, token_value = device_store.mint(body.name)
+            paired_at = next(
+                (
+                    record["paired_at"]
+                    for record in device_store.list()
+                    if record["device_id"] == device_id
+                ),
+                None,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_DEVICE_MINT_FAILED_DETAIL) from exc
+        return {
+            "device_id": device_id,
+            "name": body.name,
+            "paired_at": paired_at,
+            "token": token_value,
+            "host": _device_bind_host(),
+            "port": _device_port(),
+        }
+
+    @app.delete("/devices/{device_id}", dependencies=[Depends(_require_token)])
+    def delete_device(device_id: str) -> dict[str, bool]:
+        if device_store is None:
+            raise HTTPException(status_code=503, detail=_DEVICE_STORE_UNAVAILABLE_DETAIL)
+        try:
+            device_store.revoke(device_id)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=_DEVICE_REVOKE_FAILED_DETAIL) from exc
+        return {"ok": True}
+
     return app
 
 
@@ -423,6 +539,7 @@ __all__ = [
     "DEFAULT_CALENDAR_WINDOW_HOURS",
     "DEFAULT_GMAIL_LIMIT",
     "KEY_PROVIDERS",
+    "DeviceMintRequest",
     "KeyBody",
     "SettingsUpdate",
     "create_app",

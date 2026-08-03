@@ -87,6 +87,17 @@ function builds its OWN ``ScreenpipeClient(config.wombat_screenpipe_url)`` inter
 optional ``client`` kwarg lets tests inject a fake/degraded client instead. Registration-not-
 rewrite (DEC-5/TK-161): ``SourceRegistry``/``sources/base.py`` are untouched.
 
+TK-340 (R2, planning/design/wire-contract.md §2): ``RemoteASRSource`` is a two-line subclass of
+``ASRSource`` — ``id = "asr_remote"`` — the distinct source_id the REMOTE-origin drop directory
+(``devices.voice_ingest.VoiceIngestHandler``'s ``POST /v1/voice`` writes into) registers under,
+so a device-originated recording is never mixed into the desktop drop-directory channel's
+``"asr"`` id/event stream even though both watch a directory with the exact same poll/transcribe/
+move machinery. ``sources/asr.py`` stays byte-identical (no instance-attribute mutation — R2).
+``_maybe_register_asr_remote`` registers it following the EXACT SAME loud-skip pattern as
+``_maybe_register_asr`` above, over its OWN independently constructed ``Transcriber`` (never
+shared with the local ``"asr"`` source) — iff ``config.wombat_device_remote_drop_dir`` is
+non-blank AND a ``Transcriber`` is constructible; either gap skips loudly, never raises.
+
 TK-245 (DEC-45(c)/(d), ruling v2.68 r6): ``build_external_item_sink`` builds the ``SourceRegistry``
 ``sink`` seam — an explicit, per-source WHITELIST projection into ``wombat_external_items``. Only
 ``gcal``/``gmail`` events are ever projected; any other source id is silently ignored (no
@@ -149,6 +160,9 @@ DEFAULT_GCAL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_GMAIL_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_ASR_POLL_INTERVAL_SECONDS = 2.0
+# TK-340: RemoteASRSource's own polling cadence — same cadence as the local "asr" source by
+# default, but its own named constant/param so the two can diverge independently.
+DEFAULT_ASR_REMOTE_POLL_INTERVAL_SECONDS = 2.0
 # TK-322 (RULING r5): the screenpipe source's own polling cadence.
 DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS = 30.0
 
@@ -676,6 +690,46 @@ def _maybe_register_asr(
     )
 
 
+class RemoteASRSource(ASRSource):
+    """TK-340 (R2): the distinct source_id the REMOTE-origin drop directory (``POST /v1/voice``,
+    ``devices.voice_ingest.VoiceIngestHandler``) registers under — see the module docstring for
+    the full rationale. A two-line subclass; ``sources/asr.py`` stays byte-identical."""
+
+    id = "asr_remote"
+
+
+def _maybe_register_asr_remote(
+    registry: SourceRegistry,
+    config: WombatConfig,
+    *,
+    poll_interval_seconds: float,
+) -> None:
+    """TK-340 (R2): register ``RemoteASRSource`` under id ``"asr_remote"`` iff
+    ``config.wombat_device_remote_drop_dir`` is non-blank AND a ``Transcriber`` is constructible
+    — the EXACT SAME two-independent-skip-condition, loud-skip pattern as ``_maybe_register_asr``
+    above, over its OWN independently constructed ``Transcriber`` (never shared with the local
+    ``"asr"`` source — two enabled channels simply each load their own model). Neither missing
+    piece ever raises."""
+    raw_dir = (config.wombat_device_remote_drop_dir or "").strip()
+    if not raw_dir:
+        logger.warning(
+            "asr_remote source not wired: WOMBAT_DEVICE_REMOTE_DROP_DIR not configured — "
+            "skipping the POST /v1/voice remote drop-directory channel (boot continues without "
+            "it)"
+        )
+        return
+    transcriber = build_transcriber(config)
+    if transcriber is None:
+        return
+    registry.register(
+        RemoteASRSource(
+            drop_dir=Path(raw_dir),
+            transcriber=transcriber,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+    )
+
+
 def _maybe_register_screenpipe(
     registry: SourceRegistry,
     config: WombatConfig,
@@ -718,6 +772,7 @@ def build_source_registry(
     gmail_poll_interval_seconds: float = DEFAULT_GMAIL_POLL_INTERVAL_SECONDS,
     feedback_poll_interval_seconds: float = DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS,
     asr_poll_interval_seconds: float = DEFAULT_ASR_POLL_INTERVAL_SECONDS,
+    asr_remote_poll_interval_seconds: float = DEFAULT_ASR_REMOTE_POLL_INTERVAL_SECONDS,
     screenpipe_poll_interval_seconds: float = DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS,
     gcal_token_store: GcalTokenStore | None = None,
     gmail_token_store: GmailTokenStore | None = None,
@@ -739,8 +794,9 @@ def build_source_registry(
 
     ``tz``/``clock`` are injected (no config field is read internally here beyond the Google
     OAuth client id/secret, ``wombat_feedback_file``, ``wombat_asr_drop_dir``/
-    ``wombat_asr_model``, and ``wombat_observe_screenpipe``/``wombat_screenpipe_url``) —
-    callers supply the wombat civil-local tz (DEC-21) and, in tests, a fake clock.
+    ``wombat_asr_model``, ``wombat_device_remote_drop_dir``, and ``wombat_observe_screenpipe``/
+    ``wombat_screenpipe_url``) — callers supply the wombat civil-local tz (DEC-21) and, in
+    tests, a fake clock.
     ``gcal_token_store``/``gmail_token_store`` default to the real OS-keyring ``TokenStore``
     adapters; tests inject in-memory fakes so this function never touches the real vault
     outside the live smokes.
@@ -773,6 +829,10 @@ def build_source_registry(
     ``screenpipe_client`` (TK-322) is test-only injection for ``_maybe_register_screenpipe``;
     defaults ``None``, which constructs a real ``ScreenpipeClient`` over
     ``config.wombat_screenpipe_url`` when ``config.wombat_observe_screenpipe`` is true.
+
+    ``asr_remote_poll_interval_seconds`` (TK-340) is ``_maybe_register_asr_remote``'s own cadence
+    — a separate parameter from ``asr_poll_interval_seconds`` so the desktop and remote-device
+    channels can be tuned independently even though they share the same default value.
     """
     # Built BEFORE the registry itself so the sink (which needs the SAME TriageRules instance,
     # loaded at most once) can be threaded into the SourceRegistry constructor (TK-245).
@@ -818,6 +878,11 @@ def build_source_registry(
         persona_feedback_recorder=persona_feedback_recorder,
         turn_hook=turn_hook,
         context_hook=context_hook,
+    )
+    _maybe_register_asr_remote(
+        registry,
+        config,
+        poll_interval_seconds=asr_remote_poll_interval_seconds,
     )
     _maybe_register_screenpipe(
         registry,
@@ -918,12 +983,14 @@ def build_brief_fetches(
 
 __all__ = [
     "DEFAULT_ASR_POLL_INTERVAL_SECONDS",
+    "DEFAULT_ASR_REMOTE_POLL_INTERVAL_SECONDS",
     "DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS",
     "DEFAULT_GCAL_POLL_INTERVAL_SECONDS",
     "DEFAULT_GMAIL_POLL_INTERVAL_SECONDS",
     "DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS",
     "BriefFetches",
     "GmailWithReplyIntents",
+    "RemoteASRSource",
     "build_brief_fetches",
     "build_external_item_sink",
     "build_source_registry",

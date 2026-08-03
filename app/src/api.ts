@@ -93,6 +93,11 @@ export interface SettingsFields {
   // same shape as the TK-309 trio above. wombat_screenpipe_url is deliberately NOT exposed here
   // (operator .env-tier, not app-editable).
   wombat_observe_screenpipe: boolean | null;
+  // TK-342 (DEC-78(d)): the two companion-device consent toggles - genuinely SEPARATE grants (an
+  // explicit mic press versus passive body data collected without any act), each defaulting
+  // False server-side, restart-tier (no hot-apply).
+  wombat_remote_voice: boolean | null;
+  wombat_observe_biometrics: boolean | null;
 }
 
 // TK-306 (RULING v2.172 r4, `wombat.settings_app.api._timezone_view`, verbatim): the read-only
@@ -275,5 +280,58 @@ export async function connectGoogleService(service: GoogleServiceName): Promise<
   const response = await tokenedFetch(`/google/${service}/connect`, { method: "POST" });
   if (!response.ok) {
     throw new Error(`POST /google/${service}/connect failed: ${response.status}`);
+  }
+}
+
+/**
+ * TK-342 (verified against `wombat.settings_app.api`'s `GET`/`POST`/`DELETE /devices`): the
+ * paired-device pairing shapes. A `PairedDevice` never carries a token - `GET /devices` never
+ * returns one (DEC-32). `MintedDevice` is the ONE-TIME POST response - `host`/`port` are the
+ * DEC-78(a) fixed configured values the QR payload (wire-contract.md §8) needs alongside the
+ * plaintext token, which this client never persists.
+ */
+export interface PairedDevice {
+  device_id: string;
+  name: string;
+  paired_at: string;
+}
+
+export interface MintedDevice extends PairedDevice {
+  token: string;
+  host: string;
+  port: number;
+}
+
+export interface DevicesResponse {
+  devices: PairedDevice[];
+}
+
+/** `GET /devices`. Load-on-view only - no polling/refresh machinery. */
+export async function getDevices(): Promise<DevicesResponse> {
+  const response = await tokenedFetch("/devices");
+  if (!response.ok) {
+    throw new Error(`GET /devices failed: ${response.status}`);
+  }
+  return (await response.json()) as DevicesResponse;
+}
+
+/** `POST /devices` - mints a new paired device. The returned plaintext token is shown to the
+ * operator exactly once by the caller; this client never stores it. */
+export async function mintDevice(name: string): Promise<MintedDevice> {
+  const response = await tokenedFetch("/devices", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    throw new Error(`POST /devices failed: ${response.status}`);
+  }
+  return (await response.json()) as MintedDevice;
+}
+
+/** `DELETE /devices/{deviceId}` - revokes a paired device's token. */
+export async function revokeDevice(deviceId: string): Promise<void> {
+  const response = await tokenedFetch(`/devices/${deviceId}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`DELETE /devices/${deviceId} failed: ${response.status}`);
   }
 }

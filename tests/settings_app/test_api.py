@@ -35,6 +35,18 @@ TK-246 (DEC-45(e)): GET /external/calendar + GET /external/gmail — AC1
     ``test_get_external_gmail_store_raises_degrades_to_empty_items_with_flag``; AC3
     ``test_no_non_get_method_is_routable_under_external``.
 
+TK-342: GET/POST/DELETE /devices — ``test_get_devices_no_store_returns_empty_list``,
+    ``test_post_devices_no_store_is_503``, ``test_delete_device_no_store_is_503``,
+    ``test_post_devices_mints_returns_the_token_once_and_get_never_echoes_it``,
+    ``test_post_devices_default_host_and_port_are_loopback_and_the_pinned_default``,
+    ``test_post_devices_honors_env_host_and_port_override``,
+    ``test_get_devices_lists_multiple_by_name_and_paired_at``,
+    ``test_delete_device_revokes_and_leaves_the_other_untouched``,
+    ``test_post_devices_blank_name_is_422``, ``test_post_devices_unknown_key_is_422``,
+    ``test_post_devices_mint_failure_is_5xx_without_the_token``,
+    ``test_get_devices_store_raises_degrades_to_empty_list``,
+    ``test_delete_device_store_raises_is_5xx``.
+
 TK-256 (DEC-50): GET /google/status + POST /google/{service}/connect — AC1
     ``test_get_google_status_no_connections_returns_not_configured_for_both``,
     ``test_get_google_status_reads_per_service_status_from_the_manager``; AC2
@@ -64,10 +76,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wombat.config import APP_EDITABLE_FIELDS, WombatConfig
+from wombat.devices.credentials import DeviceCredentialStore
 from wombat.external_store import ExternalItem, ExternalItemStore
 from wombat.external_store import ensure_schema as ensure_external_items_schema
 from wombat.params import PARAMS_APP_EDITABLE
 from wombat.settings_app.api import (
+    _DEVICE_STORE_UNAVAILABLE_DETAIL,
     _STORAGE_UNAVAILABLE_DETAIL,
     ADMITTED_SETTINGS_FIELDS,
     BIND_HOST,
@@ -157,12 +171,58 @@ class _RaisingExternalItemStore:
         raise RuntimeError("simulated pg unreachable")
 
 
+class _FakeDeviceVault:
+    """The in-memory fake ``DeviceVault`` — the ``tests/unit/test_device_credentials.py``
+    precedent — unit tests never touch the real keyring vault."""
+
+    def __init__(self, *, initial: str | None = None) -> None:
+        self._blob = initial
+
+    def load(self) -> str | None:
+        return self._blob
+
+    def save(self, blob: str) -> None:
+        self._blob = blob
+
+    def clear(self) -> None:
+        self._blob = None
+
+
+class _RaisingSaveDeviceVault:
+    """A fake whose ``save`` always raises — proves POST /devices' mint-failure 500 never echoes
+    the freshly-minted token (AC6)."""
+
+    def load(self) -> str | None:
+        return None
+
+    def save(self, blob: str) -> None:
+        raise RuntimeError("simulated keyring write failure")
+
+    def clear(self) -> None:
+        raise AssertionError("not exercised")
+
+
+class _RaisingLoadDeviceVault:
+    """A fake whose ``load`` always raises — proves GET /devices degrades to an empty list and
+    DELETE /devices/{id} 500s rather than ever bubbling a bare 500 body."""
+
+    def load(self) -> str | None:
+        raise RuntimeError("simulated keyring read failure")
+
+    def save(self, blob: str) -> None:
+        raise AssertionError("not exercised")
+
+    def clear(self) -> None:
+        raise AssertionError("not exercised")
+
+
 def _client(
     *,
     key_store: object | None = None,
     store: object | None = None,
     external_store: object | None = None,
     google_connections: object | None = None,
+    device_store: object | None = None,
 ) -> TestClient:
     voice_store = key_store if key_store is not None else _FakeVoiceKeyStore()
     settings_store = store if store is not None else _FakeSettingsStore()
@@ -172,6 +232,7 @@ def _client(
         TOKEN,
         external_store,  # type: ignore[arg-type]
         google_connections,  # type: ignore[arg-type]
+        device_store,  # type: ignore[arg-type]
     )
     return TestClient(app)
 
@@ -189,6 +250,9 @@ def _client(
         ("GET", "/external/gmail", None),
         ("GET", "/google/status", None),
         ("POST", "/google/gmail/connect", None),
+        ("GET", "/devices", None),
+        ("POST", "/devices", {"name": "iphone"}),
+        ("DELETE", "/devices/some-id", None),
     ],
 )
 def test_missing_token_is_401(
@@ -209,6 +273,9 @@ def test_missing_token_is_401(
         ("GET", "/external/gmail", None),
         ("GET", "/google/status", None),
         ("POST", "/google/gmail/connect", None),
+        ("GET", "/devices", None),
+        ("POST", "/devices", {"name": "iphone"}),
+        ("DELETE", "/devices/some-id", None),
     ],
 )
 def test_wrong_token_is_401(method: str, path: str, json_body: dict[str, object] | None) -> None:
@@ -583,6 +650,35 @@ def test_put_settings_wombat_observe_screenpipe_non_bool_is_422() -> None:
         "/settings",
         json={"wombat_observe_screenpipe": ["not", "a", "bool"]},
         headers={"X-Wombat-Token": TOKEN},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["wombat_remote_voice", "wombat_observe_biometrics"])
+def test_put_settings_device_consent_fields_round_trip_independently(field: str) -> None:
+    """TK-342 (DEC-78d): each consent toggle writes true, writes false, and reads back — a PUT
+    touching ONE never sets the other (independently settable, AC4)."""
+    client = _client()
+    response = client.put("/settings", json={field: True}, headers={"X-Wombat-Token": TOKEN})
+    assert response.status_code == 200
+    body = response.json()["settings"]
+    assert body[field] is True
+    other = "wombat_observe_biometrics" if field == "wombat_remote_voice" else "wombat_remote_voice"
+    assert body[other] is None
+
+    response = client.put("/settings", json={field: False}, headers={"X-Wombat-Token": TOKEN})
+    assert response.status_code == 200
+    assert response.json()["settings"][field] is False
+
+    get_response = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.json()["settings"][field] is False
+
+
+@pytest.mark.parametrize("field", ["wombat_remote_voice", "wombat_observe_biometrics"])
+def test_put_settings_device_consent_fields_non_bool_is_422(field: str) -> None:
+    client = _client()
+    response = client.put(
+        "/settings", json={field: ["not", "a", "bool"]}, headers={"X-Wombat-Token": TOKEN}
     )
     assert response.status_code == 422
 
@@ -1337,6 +1433,185 @@ def test_post_google_connect_raising_runner_surfaces_error_and_process_stays_up(
     # the process stays up — a plain, unrelated request still works.
     still_up = client.get("/settings", headers={"X-Wombat-Token": TOKEN})
     assert still_up.status_code == 200
+
+
+# --- TK-342: GET/POST/DELETE /devices -----------------------------------------------------------
+
+
+def test_get_devices_no_store_returns_empty_list() -> None:
+    """No ``device_store`` (the caller has none to construct yet) degrades GET to an honest empty
+    list, never a crash."""
+    client = _client(device_store=None)
+
+    response = client.get("/devices", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    assert response.json() == {"devices": []}
+
+
+def test_post_devices_no_store_is_503() -> None:
+    client = _client(device_store=None)
+
+    response = client.post(
+        "/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN}
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == _DEVICE_STORE_UNAVAILABLE_DETAIL
+
+
+def test_delete_device_no_store_is_503() -> None:
+    client = _client(device_store=None)
+
+    response = client.delete("/devices/some-id", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == _DEVICE_STORE_UNAVAILABLE_DETAIL
+
+
+def test_post_devices_mints_returns_the_token_once_and_get_never_echoes_it() -> None:
+    """AC2/AC6: the plaintext token is in the POST response exactly once and never appears in a
+    subsequent GET /devices."""
+    device_store = DeviceCredentialStore(vault=_FakeDeviceVault())
+    client = _client(device_store=device_store)
+
+    post_response = client.post(
+        "/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN}
+    )
+    assert post_response.status_code == 201
+    body = post_response.json()
+    assert body["name"] == "iphone"
+    assert isinstance(body["device_id"], str) and body["device_id"]
+    assert isinstance(body["paired_at"], str) and body["paired_at"]
+    assert isinstance(body["token"], str) and body["token"]
+    token = body["token"]
+
+    get_response = client.get("/devices", headers={"X-Wombat-Token": TOKEN})
+    assert get_response.status_code == 200
+    get_body = get_response.json()
+    assert token not in get_response.text
+    assert get_body["devices"] == [
+        {"device_id": body["device_id"], "name": "iphone", "paired_at": body["paired_at"]}
+    ]
+    assert "token" not in get_body["devices"][0]
+
+
+def test_post_devices_default_host_and_port_are_loopback_and_the_pinned_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WOMBAT_DEVICE_BIND_HOST", raising=False)
+    monkeypatch.delenv("WOMBAT_DEVICE_PORT", raising=False)
+    client = _client(device_store=DeviceCredentialStore(vault=_FakeDeviceVault()))
+
+    response = client.post(
+        "/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["host"] == "127.0.0.1"
+    assert response.json()["port"] == 8788
+
+
+def test_post_devices_honors_env_host_and_port_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WOMBAT_DEVICE_BIND_HOST", "192.168.1.42")
+    monkeypatch.setenv("WOMBAT_DEVICE_PORT", "9001")
+    client = _client(device_store=DeviceCredentialStore(vault=_FakeDeviceVault()))
+
+    response = client.post(
+        "/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["host"] == "192.168.1.42"
+    assert response.json()["port"] == 9001
+
+
+def test_get_devices_lists_multiple_by_name_and_paired_at() -> None:
+    device_store = DeviceCredentialStore(vault=_FakeDeviceVault())
+    client = _client(device_store=device_store)
+    client.post("/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN})
+    client.post("/devices", json={"name": "watch"}, headers={"X-Wombat-Token": TOKEN})
+
+    response = client.get("/devices", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    names = {device["name"] for device in response.json()["devices"]}
+    assert names == {"iphone", "watch"}
+
+
+def test_delete_device_revokes_and_leaves_the_other_untouched() -> None:
+    device_store = DeviceCredentialStore(vault=_FakeDeviceVault())
+    client = _client(device_store=device_store)
+    iphone = client.post(
+        "/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN}
+    ).json()
+    watch = client.post(
+        "/devices", json={"name": "watch"}, headers={"X-Wombat-Token": TOKEN}
+    ).json()
+
+    delete_response = client.delete(
+        f"/devices/{watch['device_id']}", headers={"X-Wombat-Token": TOKEN}
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"ok": True}
+
+    get_response = client.get("/devices", headers={"X-Wombat-Token": TOKEN})
+    devices = get_response.json()["devices"]
+    assert [d["device_id"] for d in devices] == [iphone["device_id"]]
+
+
+def test_post_devices_blank_name_is_422() -> None:
+    client = _client(device_store=DeviceCredentialStore(vault=_FakeDeviceVault()))
+
+    response = client.post(
+        "/devices", json={"name": "   "}, headers={"X-Wombat-Token": TOKEN}
+    )
+
+    assert response.status_code == 422
+
+
+def test_post_devices_unknown_key_is_422() -> None:
+    client = _client(device_store=DeviceCredentialStore(vault=_FakeDeviceVault()))
+
+    response = client.post(
+        "/devices",
+        json={"name": "iphone", "not_admitted": "x"},
+        headers={"X-Wombat-Token": TOKEN},
+    )
+
+    assert response.status_code == 422
+
+
+def test_post_devices_mint_failure_is_5xx_without_the_token() -> None:
+    device_store = DeviceCredentialStore(vault=_RaisingSaveDeviceVault())
+    client = _client(device_store=device_store)
+
+    response = client.post(
+        "/devices", json={"name": "iphone"}, headers={"X-Wombat-Token": TOKEN}
+    )
+
+    assert 500 <= response.status_code < 600
+    assert "simulated keyring write failure" not in response.text
+
+
+def test_get_devices_store_raises_degrades_to_empty_list() -> None:
+    device_store = DeviceCredentialStore(vault=_RaisingLoadDeviceVault())
+    client = _client(device_store=device_store)
+
+    response = client.get("/devices", headers={"X-Wombat-Token": TOKEN})
+
+    assert response.status_code == 200
+    assert response.json() == {"devices": []}
+
+
+def test_delete_device_store_raises_is_5xx() -> None:
+    device_store = DeviceCredentialStore(vault=_RaisingLoadDeviceVault())
+    client = _client(device_store=device_store)
+
+    response = client.delete("/devices/some-id", headers={"X-Wombat-Token": TOKEN})
+
+    assert 500 <= response.status_code < 600
+    assert "simulated keyring read failure" not in response.text
 
 
 # --- AC3: structural ---------------------------------------------------------------------------

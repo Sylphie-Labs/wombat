@@ -21,6 +21,12 @@ import { RuntimeControls } from "./RuntimeControls";
  * stopped, DEC-75f) - it renders the EXISTING `RuntimeControls` restart
  * control persistently rather than a second restart implementation. No
  * usage tracking of any kind (DEC-29).
+ *
+ * TK-342 (DEC-78(d) honesty repair): the wipe's blast radius has never reached a paired device's
+ * OWN on-device copies (a phone sync buffer, per-type anchors, any untransferred watch audio) -
+ * schema-driven wipe.py sweeps wombat's own tables only. `devicesPaired` (the parent's live
+ * `GET /devices` count, TK-342) gates ONE additional NOT_TOUCHED line naming that honestly; the
+ * wipe's actual BEHAVIOR is byte-unchanged.
  */
 
 export interface WipeMemoryResult {
@@ -62,18 +68,31 @@ const NOT_TOUCHED: readonly string[] = [
   "wombat's tables themselves",
 ];
 
+// TK-342 (DEC-78(d) honesty repair): shown ONLY when at least one device is paired - a wipe on a
+// wombat with no paired devices has nothing of this kind to caveat about.
+const PAIRED_DEVICE_NOT_TOUCHED =
+  "paired devices' own on-device copies (phone sync buffer, per-type anchors, any untransferred watch audio)";
+
 type WipeState =
   | { readonly kind: "idle" }
   | { readonly kind: "pending" }
   | { readonly kind: "wiped"; readonly archivePath: string }
   | { readonly kind: "failed"; readonly detail: string };
 
-export function DangerZone() {
+export interface DangerZoneProps {
+  /** TK-342: true when at least one device is currently paired (the parent's live `GET /devices`
+   * count) - adds ONE honest NOT_TOUCHED line naming what the wipe cannot reach. Defaults false
+   * (byte-identical to pre-TK-342 rendering) so every existing caller/test is unaffected. */
+  devicesPaired?: boolean;
+}
+
+export function DangerZone({ devicesPaired = false }: DangerZoneProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [state, setState] = useState<WipeState>({ kind: "idle" });
 
   const canArm = confirmText.trim() === CONFIRM_WORD;
+  const notTouched = devicesPaired ? [...NOT_TOUCHED, PAIRED_DEVICE_NOT_TOUCHED] : NOT_TOUCHED;
 
   function openModal(): void {
     setConfirmText("");
@@ -188,7 +207,7 @@ export function DangerZone() {
             <div className="flex flex-col gap-1">
               <p className={ink.primary}>This will NOT touch:</p>
               <ul className={cn(ink.muted, "list-disc pl-5 text-sm")}>
-                {NOT_TOUCHED.map((item) => (
+                {notTouched.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>

@@ -5,6 +5,7 @@ import {
   Button,
   ChatDock,
   DangerZone,
+  DevicesPanel,
   Field,
   GoogleConnections,
   Header,
@@ -475,6 +476,10 @@ export function App() {
   // Split per DEC-37 - a save shows the restart notice, the persona
   // hot-apply hint, both, or neither, depending on what THAT save touched.
   const [notice, setNotice] = useState<{ restart: boolean; hotApply: boolean } | null>(null);
+  // TK-342 (DEC-78(d) honesty repair): kept live by DevicesPanel's onDeviceCountChange (its own
+  // GET /devices load plus every mint/revoke) - drives the DangerZone wipe-dialog's honest
+  // paired-device NOT_TOUCHED line without a second independent device fetch here.
+  const [devicesPaired, setDevicesPaired] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -794,7 +799,8 @@ export function App() {
             {view === "system" && (
               <>
                 <RuntimeControls />
-                <DangerZone />
+                <DevicesPanel onDeviceCountChange={(count) => setDevicesPaired(count > 0)} />
+                <DangerZone devicesPaired={devicesPaired} />
                 {formState && (
                   <>
                     <Panel className="flex flex-col gap-4">

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TK-355 (DEC-83 §7 / DEC-78(a)). Same ATS requirement as the iOS target's Info.plist,
+  and required on BOTH targets independently - each target ships its own bundle and its
+  own ATS policy. See ios/WombatCompanion/Info.plist for the full rationale.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Wombat</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>WKApplication</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+
+	<!-- iOS/watchOS 14+ local network permission prompt. Required ALONGSIDE
+	     NSAppTransportSecurity below - neither key substitutes for the other (DEC-83 §7). -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Wombat talks to wombat over your home network directly from your wrist to send voice clips and receive replies.</string>
+
+	<!-- HealthKit usage descriptions, declared on this target too per DEC-83 §7 / TK-355
+	     acceptance criteria, even though TK-359/TK-360 (the watch drafts) do not query
+	     HealthKit from the watch. Declaring costs nothing; TK-356 owns the phone-side
+	     HealthKit queries and no ticket in this tree uses HealthKit on-watch at runtime. -->
+	<key>NSHealthShareUsageDescription</key>
+	<string>Wombat reads sleep, workout, heart rate and step data so wombat can reason about your health context.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Wombat does not write to Health. This description is declared for HealthKit authorization completeness only.</string>
+
+	<!-- REQUIRED, not boilerplate (DEC-83 §7 / DEC-78(a)): wombat's surface is cleartext
+	     HTTP over the LAN and both platforms block that by default. Without this key every
+	     call in every later draft fails at its first connection. NSAllowsLocalNetworking is
+	     the narrow key, and it is the only ATS exception key admitted in this tree. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

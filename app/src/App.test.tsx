@@ -53,6 +53,10 @@ function baseSettings(): SettingsShape {
     wombat_observe_webcam: null,
     wombat_observe_mic: null,
     wombat_observe_screenpipe: null,
+    // TK-342 (DEC-78(d)): read by DevicesPanel's own independent GET /settings, not by this
+    // form's FormState - included here purely so the fake GET /settings response is complete.
+    wombat_remote_voice: null,
+    wombat_observe_biometrics: null,
   };
 }
 
@@ -90,6 +94,9 @@ function installFakeApi(
   const calls: FetchCall[] = [];
   const currentSettings = { ...settings };
   const currentKeys = { ...keys };
+  // TK-342: an in-memory device list GET/POST /devices reads and writes - stays empty across
+  // every pre-existing test, which never pairs a device.
+  const devicesStore: { device_id: string; name: string; paired_at: string }[] = [];
 
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -129,6 +136,25 @@ function installFakeApi(
     if (method === "PUT" && keyMatch) {
       currentKeys[keyMatch[1]] = true;
       return Response.json({ ok: true });
+    }
+    // TK-342: DevicesPanel (mounted on the System view) makes its own independent GET /devices
+    // load - these TK-200/249-era tests never pair a device, so an empty list every time. The
+    // TK-342 AC5 test below is the one exception that also POSTs to mint.
+    if (method === "GET" && url.endsWith("/devices")) {
+      return Response.json({ devices: devicesStore.map((d) => ({ ...d })) });
+    }
+    if (method === "POST" && url.endsWith("/devices")) {
+      const name = (body as { name: string }).name;
+      const record = {
+        device_id: `device-${devicesStore.length + 1}`,
+        name,
+        paired_at: "2026-08-03T12:00:00+00:00",
+      };
+      devicesStore.push(record);
+      return Response.json(
+        { ...record, token: `token-${devicesStore.length}`, host: "127.0.0.1", port: 8788 },
+        { status: 201 },
+      );
     }
     throw new Error(`unhandled fetch: ${method} ${url}`);
   });
@@ -699,6 +725,8 @@ describe("App (TK-306 AC4: storage-unavailable GET degrade)", () => {
       wombat_observe_webcam: null,
       wombat_observe_mic: null,
       wombat_observe_screenpipe: null,
+      wombat_remote_voice: null,
+      wombat_observe_biometrics: null,
     };
     installFakeApi(nullSettings, { elevenlabs: false, deepgram: false, fish: false });
     render(<App />);
@@ -772,6 +800,26 @@ describe("App (TK-309 AC4: system view gains the Observation panel)", () => {
     });
 
     expect(await screen.findByText("Restart Wombat to apply these changes.")).toBeTruthy();
+  });
+});
+
+describe("App (TK-342 AC5: DangerZone reflects live paired-device count)", () => {
+  it("pairing a device via DevicesPanel adds the honest NOT_TOUCHED line to the wipe dialog", async () => {
+    installFakeApi();
+    render(<App />);
+    gotoSystem();
+
+    await screen.findByText("No devices paired yet.");
+    fireEvent.click(screen.getByRole("button", { name: /wipe memory/i }));
+    expect(screen.queryByText(/phone sync buffer/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    fireEvent.change(screen.getByLabelText("Device name"), { target: { value: "iphone" } });
+    fireEvent.click(screen.getByRole("button", { name: /pair a device/i }));
+    await screen.findByText("iphone");
+
+    fireEvent.click(screen.getByRole("button", { name: /wipe memory/i }));
+    expect(screen.getByText(/phone sync buffer/i)).toBeTruthy();
   });
 });
 

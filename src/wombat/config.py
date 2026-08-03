@@ -400,6 +400,15 @@ class WombatConfig(BaseSettings):
     wombat_device_bind_host: str = "127.0.0.1"
     wombat_device_port: int = 8788
 
+    # OPTIONAL (TK-340): the REMOTE-origin drop directory POST /v1/voice writes accepted audio
+    # into — watched by a SECOND ASRSource (sources.bootstrap.RemoteASRSource, source_id
+    # "asr_remote"), distinct from the desktop's own wombat_asr_drop_dir. An operator .env-tier
+    # field, deliberately NOT in APP_EDITABLE_FIELDS (the wombat_asr_drop_dir precedent — a
+    # settings UI toggle has no business relocating where a watcher points) and deliberately NOT
+    # in REQUIRED_ENV: blank means POST /v1/voice's handler is not constructed (a loud WARNING at
+    # boot, the CON-3 shape mirroring _maybe_register_asr's own skip).
+    wombat_device_remote_drop_dir: str = ""
+
     @classmethod
     def settings_customise_sources(
         cls,
