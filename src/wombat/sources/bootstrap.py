@@ -131,6 +131,7 @@ from zoneinfo import ZoneInfo
 from wombat.calendar.models import CalendarEvent
 from wombat.chat_turns import ChatTurnStore
 from wombat.config import ConfigurationError, WombatConfig
+from wombat.devices.biometric_events import BiometricEventSource
 from wombat.external_store import ExternalItem, ExternalItemStore
 from wombat.integrations.gcal.poller import CalendarPoller
 from wombat.integrations.gcal.session import make_calendar_session
@@ -145,6 +146,7 @@ from wombat.integrations.gmail.token_store import KeyringTokenStore as GmailKeyr
 from wombat.integrations.gmail.token_store import TokenStore as GmailTokenStore
 from wombat.integrations.gmail.triage import TriageRules, load_triage_rules, triage_message
 from wombat.integrations.screenpipe.client import ScreenpipeClient
+from wombat.observations import ObservationStore
 from wombat.persona.commands import apply, parse_persona_command
 from wombat.persona.feedback import FeedbackToken, detect_feedback_token
 from wombat.persona.live import LivePersona
@@ -168,6 +170,8 @@ DEFAULT_ASR_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_ASR_REMOTE_POLL_INTERVAL_SECONDS = 2.0
 # TK-322 (RULING r5): the screenpipe source's own polling cadence.
 DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS = 30.0
+# TK-348 (RULING B): the biometric-events source's own polling cadence.
+DEFAULT_BIOMETRIC_EVENTS_POLL_INTERVAL_SECONDS = 300.0
 
 
 def _utc_now() -> datetime:
@@ -786,6 +790,34 @@ def _maybe_register_screenpipe(
     )
 
 
+def _maybe_register_biometric_events(
+    registry: SourceRegistry,
+    config: WombatConfig,
+    *,
+    observations: ObservationStore | None,
+    poll_interval_seconds: float,
+    clock: Callable[[], datetime],
+) -> None:
+    """TK-348 (DEC-80(d), RULING B): register ``BiometricEventSource`` under id
+    ``"biometric_events"`` iff ``config.wombat_observe_biometrics`` is true AND ``observations``
+    is not ``None`` — the SAME loud-skip pattern as ``_maybe_register_screenpipe`` above. Either
+    gap skips loudly and the source is never constructed — structurally inert boot."""
+    if not config.wombat_observe_biometrics or observations is None:
+        logger.warning(
+            "biometric_events source not wired: WOMBAT_OBSERVE_BIOMETRICS is false or no "
+            "ObservationStore was constructed — skipping the biometric-events channel (boot "
+            "continues without it)"
+        )
+        return
+    registry.register(
+        BiometricEventSource(
+            observations=observations,
+            poll_interval_seconds=poll_interval_seconds,
+            clock=clock,
+        )
+    )
+
+
 def build_source_registry(
     config: WombatConfig,
     queue: Enqueuer,
@@ -798,6 +830,9 @@ def build_source_registry(
     asr_poll_interval_seconds: float = DEFAULT_ASR_POLL_INTERVAL_SECONDS,
     asr_remote_poll_interval_seconds: float = DEFAULT_ASR_REMOTE_POLL_INTERVAL_SECONDS,
     screenpipe_poll_interval_seconds: float = DEFAULT_SCREENPIPE_POLL_INTERVAL_SECONDS,
+    biometric_events_poll_interval_seconds: float = (
+        DEFAULT_BIOMETRIC_EVENTS_POLL_INTERVAL_SECONDS
+    ),
     gcal_token_store: GcalTokenStore | None = None,
     gmail_token_store: GmailTokenStore | None = None,
     live_persona: LivePersona | None = None,
@@ -808,6 +843,7 @@ def build_source_registry(
     turn_hook: Callable[[str, str, str], None] | None = None,
     context_hook: Callable[[], Mapping[str, str]] | None = None,
     screenpipe_client: ScreenpipeClient | None = None,
+    biometric_observation_store: ObservationStore | None = None,
 ) -> SourceRegistry:
     """Assemble a ``SourceRegistry`` over ``queue`` (ASMP-2: enqueue-only) and register EACH
     of the gcal/gmail/feedback/asr sources INDEPENDENTLY when its own configuration is present
@@ -857,6 +893,11 @@ def build_source_registry(
     ``asr_remote_poll_interval_seconds`` (TK-340) is ``_maybe_register_asr_remote``'s own cadence
     — a separate parameter from ``asr_poll_interval_seconds`` so the desktop and remote-device
     channels can be tuned independently even though they share the same default value.
+
+    ``biometric_observation_store`` (TK-348, DEC-80(d)) threads into
+    ``_maybe_register_biometric_events`` ONLY, iff ``config.wombat_observe_biometrics`` is true
+    AND this is non-``None``; defaults ``None``, which skips the biometric-events source loudly
+    (structurally inert boot).
     """
     # Built BEFORE the registry itself so the sink (which needs the SAME TriageRules instance,
     # loaded at most once) can be threaded into the SourceRegistry constructor (TK-245).
@@ -916,6 +957,13 @@ def build_source_registry(
         poll_interval_seconds=screenpipe_poll_interval_seconds,
         clock=clock,
         client=screenpipe_client,
+    )
+    _maybe_register_biometric_events(
+        registry,
+        config,
+        observations=biometric_observation_store,
+        poll_interval_seconds=biometric_events_poll_interval_seconds,
+        clock=clock,
     )
     return registry
 
@@ -1010,6 +1058,7 @@ def build_brief_fetches(
 __all__ = [
     "DEFAULT_ASR_POLL_INTERVAL_SECONDS",
     "DEFAULT_ASR_REMOTE_POLL_INTERVAL_SECONDS",
+    "DEFAULT_BIOMETRIC_EVENTS_POLL_INTERVAL_SECONDS",
     "DEFAULT_FEEDBACK_POLL_INTERVAL_SECONDS",
     "DEFAULT_GCAL_POLL_INTERVAL_SECONDS",
     "DEFAULT_GMAIL_POLL_INTERVAL_SECONDS",

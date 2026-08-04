@@ -1835,6 +1835,7 @@ def assemble_runtime(
         chat_turn_store=chat_turn_store,
         turn_hook=asr_turn_hook,
         context_hook=asr_context_hook,
+        biometric_observation_store=biometric_observation_store,
     )
     if chat_source is not None:
         # TK-222 (Q-110(d) ruling 1): registered exactly like every other source — the registry

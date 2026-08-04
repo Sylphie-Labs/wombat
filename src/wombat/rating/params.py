@@ -37,6 +37,11 @@ class EventClass(Enum):
     # items) get their own vocabulary slot. Deliberately NO seeded entry in ``_DEFAULTS`` below —
     # it reads the neutral baseline via ``default_params_for`` (default-hold, no version bump).
     SCREEN_ACTIVITY = "screen_activity"
+    # TK-348 (DEC-80(d)): the closed three-kind biometric event vocabulary gets its own slot,
+    # mirroring SCREEN_ACTIVITY exactly. Deliberately NO seeded entry in ``_DEFAULTS`` below — it
+    # reads the neutral baseline via ``default_params_for`` (default-hold posture, no version
+    # bump; TK-321 set this precedent for SCREEN_ACTIVITY).
+    BIOMETRIC = "biometric"
 
 
 @dataclass(frozen=True, slots=True)
