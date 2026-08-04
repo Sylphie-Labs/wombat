@@ -12,7 +12,8 @@
 //  request-body shape or a second POST implementation — it drives BiometricsUploadClient.
 //  upload(samples:), the EXACT call site BiometricSyncEngine already uses, just handed a
 //  background-configured URLSession instead of `.shared`. There is one call site family
-//  for POST /v1/biometrics in this tree (TK-357 AC1), not two.
+//  for the biometrics ingest endpoint in this tree (TK-357 AC1), not two — see
+//  WireContract.swift for the route itself.
 //
 //  THE PLATFORM CEILING IS HOURLY-ISH. HKObserverQuery plus enableBackgroundDelivery(
 //  frequency: .hourly) is the most frequent background wake HealthKit offers for these

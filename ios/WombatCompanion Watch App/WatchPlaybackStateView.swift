@@ -5,7 +5,7 @@
 //  TK-360 — DRAFT SOURCE (DEC-82 tier A).
 //
 //  Renders WatchUtterancePlaybackController.state directly — every case below is a REAL,
-//  worded UI state, not a TODO and not a comment. The charging dead-state in particular is
+//  worded UI state, fully implemented, never a stub. The charging dead-state in particular is
 //  the whole reason this ticket exists: PTT works, wombat replies, and this is the screen
 //  that has to say nothing is coming out of the speaker right now, rather than staying
 //  silent about it.

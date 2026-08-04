@@ -239,6 +239,14 @@ class DeviceSurface:
                 await self._respond(writer, 400, _BAD_REQUEST_BODY)
                 return
 
+            # DEC-78(b): the token is checked here, BEFORE the per-route body cap is even
+            # resolved, so an unauthenticated caller always drains the SAME generic
+            # _MAX_BODY_BYTES regardless of path — otherwise the number of bytes read before the
+            # 401 would leak whether a larger-cap route (e.g. POST /v1/voice) is configured.
+            if self._credential_store.verify(headers.get(_AUTH_HEADER, "")) is None:
+                await self._respond(writer, 401, _UNAUTHORIZED_BODY)
+                return
+
             try:
                 content_length = int(headers.get("content-length", "0") or "0")
             except ValueError:
@@ -260,11 +268,13 @@ class DeviceSurface:
                 await writer.wait_closed()
 
     def _max_body_bytes_for(self, method: str, path: str) -> int:
-        """TK-340: the body-read cap for this request, resolved BEFORE dispatch/auth (the read
-        itself has to happen before either can run). ``/v1/health`` (and every unrecognized
-        route) keeps the generic ``_MAX_BODY_BYTES``; ``POST /v1/voice`` with a constructed
-        handler reads that handler's own larger, pinned cap instead — never truncating a
-        legitimate body the handler is about to validate."""
+        """TK-340: the body-read cap for this request, resolved AFTER the DEC-78(b) token check
+        and BEFORE dispatch — the body still has to be read before a handler can run, but an
+        unauthenticated caller never reaches this method at all, so the per-route cap cannot leak
+        which routes are configured. ``/v1/health`` (and every unrecognized route) keeps the
+        generic ``_MAX_BODY_BYTES``; ``POST /v1/voice`` with a constructed handler reads that
+        handler's own larger, pinned cap instead — never truncating a legitimate body the handler
+        is about to validate."""
         if (
             method == "POST"
             and path == _VOICE_PATH
@@ -386,7 +396,9 @@ class DeviceSurface:
         header_lines = [f"HTTP/1.1 {status} {reason}"]
         for name, value in extra_headers.items():
             header_lines.append(f"{name}: {value}")
-        header_lines.append(f"Content-Length: {len(body)}")
+        if status != 204:
+            # RFC 9110 §15.3.5 / RFC 7230 §3.3.2: a 204 response MUST NOT carry Content-Length.
+            header_lines.append(f"Content-Length: {len(body)}")
         header_lines.append("Connection: close")
         header_lines.append("")
         header_lines.append("")

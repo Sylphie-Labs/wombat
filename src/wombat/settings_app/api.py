@@ -59,6 +59,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import tzlocal
+from dotenv import dotenv_values
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -107,8 +108,12 @@ _DEVICE_REVOKE_FAILED_DETAIL = "failed to revoke the device"
 
 # TK-342 (wire-contract.md §8): the QR payload's host/port, mirroring WombatConfig.
 # wombat_device_bind_host/wombat_device_port's own field defaults (config.py, out of scope here)
-# — read directly from the process environment, the _timezone_view precedent, because this
-# process must never construct a full WombatConfig.
+# — read directly from the process environment falling back to a cwd-relative .env (mirroring
+# __main__._resolve_pg_dsn/_env_or_dotenv: env-presence, not truthiness, outranks dotenv), the
+# _timezone_view precedent, because this process must never construct a full WombatConfig. Both
+# are operator .env-tier fields (NOT in APP_EDITABLE_FIELDS), so .env is often the only channel a
+# non-default value ever arrives through — a QR that skipped the dotenv fallback would encode the
+# loopback default while the runtime actually bound elsewhere.
 _DEVICE_BIND_HOST_ENV_VAR = "WOMBAT_DEVICE_BIND_HOST"
 _DEVICE_PORT_ENV_VAR = "WOMBAT_DEVICE_PORT"
 _DEFAULT_DEVICE_BIND_HOST = "127.0.0.1"
@@ -287,12 +292,21 @@ class DeviceMintRequest(BaseModel):
         return value
 
 
+def _device_env(var: str) -> str:
+    """``var`` from the process environment if present at all, else the same var read from a
+    cwd-relative ``.env`` — mirrors ``__main__._env_or_dotenv`` so a bind host/port an operator
+    only set in ``.env`` (these two fields are not app-editable) still reaches the QR payload."""
+    if var in os.environ:
+        return os.environ[var].strip()
+    return (dotenv_values(".env").get(var) or "").strip()
+
+
 def _device_bind_host() -> str:
-    return os.environ.get(_DEVICE_BIND_HOST_ENV_VAR) or _DEFAULT_DEVICE_BIND_HOST
+    return _device_env(_DEVICE_BIND_HOST_ENV_VAR) or _DEFAULT_DEVICE_BIND_HOST
 
 
 def _device_port() -> int:
-    raw = os.environ.get(_DEVICE_PORT_ENV_VAR)
+    raw = _device_env(_DEVICE_PORT_ENV_VAR)
     if not raw:
         return _DEFAULT_DEVICE_PORT
     try:

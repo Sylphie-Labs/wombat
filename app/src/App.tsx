@@ -478,8 +478,11 @@ export function App() {
   const [notice, setNotice] = useState<{ restart: boolean; hotApply: boolean } | null>(null);
   // TK-342 (DEC-78(d) honesty repair): kept live by DevicesPanel's onDeviceCountChange (its own
   // GET /devices load plus every mint/revoke) - drives the DangerZone wipe-dialog's honest
-  // paired-device NOT_TOUCHED line without a second independent device fetch here.
-  const [devicesPaired, setDevicesPaired] = useState(false);
+  // paired-device NOT_TOUCHED line without a second independent device fetch here. Starts `true`
+  // (not `false`) so the dialog defaults to the MORE honest line - showing the paired-device
+  // caveat while DevicesPanel's own GET /devices is still in flight - rather than silently
+  // omitting it if the wipe dialog is opened before that first load resolves.
+  const [devicesPaired, setDevicesPaired] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
