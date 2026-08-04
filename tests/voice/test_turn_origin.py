@@ -143,6 +143,63 @@ def test_default_construction_stays_byte_identical_to_the_120s_constant() -> Non
     assert register.take() is None
 
 
+# --- TK-343 critical repair: claims_suppressed() ----------------------------------------------
+
+
+def test_take_inside_claims_suppressed_returns_none_and_leaves_a_fresh_origin_untouched() -> None:
+    clock = _FakeClock(now=0.0)
+    register = LastTurnOriginRegister(clock=clock)
+    register.note_origin("watch-1", "utt-1")
+
+    with register.claims_suppressed():
+        assert register.take() is None
+
+    # the suppressed take() never consumed the slot -- it's still claimable afterward.
+    assert register.take() == TurnOrigin(device_id="watch-1", utterance_id="utt-1")
+
+
+def test_take_before_claims_suppressed_is_unaffected() -> None:
+    clock = _FakeClock(now=0.0)
+    register = LastTurnOriginRegister(clock=clock)
+    register.note_origin("watch-1", "utt-1")
+
+    assert register.take() == TurnOrigin(device_id="watch-1", utterance_id="utt-1")
+
+    with register.claims_suppressed():
+        assert register.take() is None
+
+
+def test_claims_suppressed_restores_permission_even_if_the_block_raises() -> None:
+    clock = _FakeClock(now=0.0)
+    register = LastTurnOriginRegister(clock=clock)
+    register.note_origin("watch-1", "utt-1")
+
+    class _Boom(Exception):
+        pass
+
+    try:
+        with register.claims_suppressed():
+            raise _Boom
+    except _Boom:
+        pass
+
+    assert register.take() == TurnOrigin(device_id="watch-1", utterance_id="utt-1")
+
+
+def test_nested_claims_suppressed_restores_the_prior_state_not_unconditionally_true() -> None:
+    clock = _FakeClock(now=0.0)
+    register = LastTurnOriginRegister(clock=clock)
+    register.note_origin("watch-1", "utt-1")
+
+    with register.claims_suppressed():
+        with register.claims_suppressed():
+            assert register.take() is None
+        # still inside the outer suppression -- must remain suppressed, not reset to permitted.
+        assert register.take() is None
+
+    assert register.take() == TurnOrigin(device_id="watch-1", utterance_id="utt-1")
+
+
 def test_custom_ttl_seconds_is_fresh_at_250s_and_stale_at_301s() -> None:
     clock = _FakeClock(now=0.0)
     register = LastTurnOriginRegister(clock=clock, ttl_seconds=300.0)

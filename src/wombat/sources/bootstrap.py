@@ -95,8 +95,11 @@ so a device-originated recording is never mixed into the desktop drop-directory 
 move machinery. ``sources/asr.py`` stays byte-identical (no instance-attribute mutation — R2).
 ``_maybe_register_asr_remote`` registers it following the EXACT SAME loud-skip pattern as
 ``_maybe_register_asr`` above, over its OWN independently constructed ``Transcriber`` (never
-shared with the local ``"asr"`` source) — iff ``config.wombat_device_remote_drop_dir`` is
-non-blank AND a ``Transcriber`` is constructible; either gap skips loudly, never raises.
+shared with the local ``"asr"`` source) — iff ``config.wombat_remote_voice`` is true AND
+``config.wombat_device_remote_drop_dir`` is non-blank AND a ``Transcriber`` is constructible; any
+one gap skips loudly, never raises. (Repaired: gating on the drop dir alone let this channel
+transcribe watch audio with the consent toggle off — the other half of the ``GET /v1/health``
+consent-gate bypass whose route half was already closed.)
 
 TK-245 (DEC-45(c)/(d), ruling v2.68 r6): ``build_external_item_sink`` builds the ``SourceRegistry``
 ``sink`` seam — an explicit, per-source WHITELIST projection into ``wombat_external_items``. Only
@@ -706,16 +709,29 @@ def _maybe_register_asr_remote(
     turn_hook: Callable[[str, str, str], None] | None = None,
     context_hook: Callable[[], Mapping[str, str]] | None = None,
 ) -> None:
-    """TK-340 (R2): register ``RemoteASRSource`` under id ``"asr_remote"`` iff
-    ``config.wombat_device_remote_drop_dir`` is non-blank AND a ``Transcriber`` is constructible
-    — the EXACT SAME two-independent-skip-condition, loud-skip pattern as ``_maybe_register_asr``
-    above, over its OWN independently constructed ``Transcriber`` (never shared with the local
-    ``"asr"`` source — two enabled channels simply each load their own model). Neither missing
-    piece ever raises.
+    """TK-340 (R2, repaired): register ``RemoteASRSource`` under id ``"asr_remote"`` iff
+    ``config.wombat_remote_voice`` is true AND ``config.wombat_device_remote_drop_dir`` is
+    non-blank AND a ``Transcriber`` is constructible — three independent skip-conditions, each a
+    loud-skip, over its OWN independently constructed ``Transcriber`` (never shared with the local
+    ``"asr"`` source — two enabled channels simply each load their own model). None of the three
+    ever raises.
+
+    The ``wombat_remote_voice`` gate is checked FIRST, mirroring ``assemble_runtime``'s own
+    ``voice_ingest_handler`` construction (``bootstrap.py``, TK-340 R1 repair): gating on the drop
+    dir alone let this source bind and transcribe watch audio even with the consent toggle off,
+    while ``GET /v1/health`` reported ``remote_voice=false`` — the other half of that same
+    consent-gate bypass, now closed on both the route AND the transcription channel that reads the
+    same directory.
 
     ``turn_hook``/``context_hook`` pass straight through to ``RemoteASRSource`` — the SAME
     pass-through shape ``_maybe_register_asr`` uses for the local ``"asr"`` source, so remote
     voice turns get the same reply-threading/grounding-context wiring as local ones."""
+    if not config.wombat_remote_voice:
+        logger.warning(
+            "asr_remote source not wired: WOMBAT_REMOTE_VOICE is false — skipping the POST "
+            "/v1/voice remote drop-directory transcription channel (boot continues without it)"
+        )
+        return
     raw_dir = (config.wombat_device_remote_drop_dir or "").strip()
     if not raw_dir:
         logger.warning(

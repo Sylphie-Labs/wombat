@@ -31,7 +31,7 @@ from importlib.abc import MetaPathFinder
 from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, TypedDict
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -96,6 +96,7 @@ def _make_config(
     client_secret: str | None = None,
     asr_drop_dir: str | None = None,
     device_remote_drop_dir: str | None = None,
+    remote_voice: bool = False,
 ) -> WombatConfig:
     return WombatConfig(
         deepseek_api_key=SecretStr("unused-in-this-test"),
@@ -104,6 +105,7 @@ def _make_config(
         google_oauth_client_secret=SecretStr(client_secret) if client_secret is not None else None,
         wombat_asr_drop_dir=asr_drop_dir,
         wombat_device_remote_drop_dir=device_remote_drop_dir or "",
+        wombat_remote_voice=remote_voice,
     )
 
 
@@ -118,7 +120,20 @@ def _make_screenpipe_config(*, observe_screenpipe: bool) -> WombatConfig:
     )
 
 
-_CONFIGURED = {"client_id": "test-client-id", "client_secret": "test-client-secret"}
+class _ConfiguredKwargs(TypedDict):
+    """A precise structural type for ``**_CONFIGURED`` unpacking below — pins it to EXACTLY
+    these two ``str`` keys so mypy checks the unpack against only ``_make_config``'s matching
+    ``str | None`` params, unaffected by any other (e.g. ``bool``) keyword ``_make_config``
+    gains."""
+
+    client_id: str
+    client_secret: str
+
+
+_CONFIGURED: _ConfiguredKwargs = {
+    "client_id": "test-client-id",
+    "client_secret": "test-client-secret",
+}
 
 
 # ------------------------------------------------------------------------------------- fakes
@@ -589,9 +604,11 @@ def test_asr_remote_source_not_wired_when_drop_dir_unset(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """R2: ``config.wombat_device_remote_drop_dir`` blank (the default) -> the SAME loud-skip
-    pattern as ``_maybe_register_asr`` — never registered, never raises, names the env var."""
+    pattern as ``_maybe_register_asr`` — never registered, never raises, names the env var.
+    ``remote_voice=True`` isolates this gap from the (independent, checked-first) consent gate
+    covered by ``test_asr_remote_source_not_wired_when_drop_dir_set_but_remote_voice_off``."""
     consent_calls = _assert_never_triggers_consent(monkeypatch)
-    config = _make_config()
+    config = _make_config(remote_voice=True)
 
     with caplog.at_level(logging.WARNING):
         registry = build_source_registry(
@@ -616,7 +633,7 @@ def test_asr_remote_source_wired_under_its_own_distinct_id_when_drop_dir_set(
     channel, which stays unwired here since ``wombat_asr_drop_dir`` is unset."""
     consent_calls = _assert_never_triggers_consent(monkeypatch)
     monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
-    config = _make_config(device_remote_drop_dir=str(tmp_path))
+    config = _make_config(device_remote_drop_dir=str(tmp_path), remote_voice=True)
 
     registry = build_source_registry(
         config,
@@ -632,6 +649,33 @@ def test_asr_remote_source_wired_under_its_own_distinct_id_when_drop_dir_set(
     assert consent_calls == []
 
 
+def test_asr_remote_source_not_wired_when_drop_dir_set_but_remote_voice_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Repair (the other half of the f2319e6 consent-gate bypass): a configured drop dir is NOT
+    enough on its own — ``config.wombat_remote_voice`` false must skip this channel loudly too,
+    the SAME gate the ``POST /v1/voice`` route itself already honors, so a second Whisper model is
+    never loaded and nothing in the drop dir is transcribed while ``GET /v1/health`` still reports
+    ``remote_voice=false``."""
+    consent_calls = _assert_never_triggers_consent(monkeypatch)
+    monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
+    config = _make_config(device_remote_drop_dir=str(tmp_path), remote_voice=False)
+
+    with caplog.at_level(logging.WARNING):
+        registry = build_source_registry(
+            config,
+            _FakeEnqueuer(),
+            tz=_TZ,
+            clock=_utc_now,
+            gcal_token_store=_FakeTokenStore(initial=None),
+            gmail_token_store=_FakeTokenStore(initial=None),
+        )
+
+    assert not _is_registered(registry, "asr_remote")
+    assert "WOMBAT_REMOTE_VOICE" in caplog.text
+    assert consent_calls == []
+
+
 def test_asr_local_and_asr_remote_coexist_under_distinct_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -644,7 +688,9 @@ def test_asr_local_and_asr_remote_coexist_under_distinct_ids(
     remote_dir = tmp_path / "remote"
     local_dir.mkdir()
     remote_dir.mkdir()
-    config = _make_config(asr_drop_dir=str(local_dir), device_remote_drop_dir=str(remote_dir))
+    config = _make_config(
+        asr_drop_dir=str(local_dir), device_remote_drop_dir=str(remote_dir), remote_voice=True
+    )
 
     registry = build_source_registry(
         config,
@@ -667,7 +713,7 @@ def test_asr_remote_source_threads_turn_hook_and_context_hook_straight_through(
     current_body_state key) — the remote voice channel is not a second-class citizen."""
     consent_calls = _assert_never_triggers_consent(monkeypatch)
     monkeypatch.setattr(sources_bootstrap_module, "build_transcriber", lambda config: object())
-    config = _make_config(device_remote_drop_dir=str(tmp_path))
+    config = _make_config(device_remote_drop_dir=str(tmp_path), remote_voice=True)
 
     def turn_hook(event_key: str, transcript: str, captured_at: str) -> None:
         raise AssertionError("never called by this test -- identity-through-wiring only")
@@ -699,7 +745,7 @@ def test_asr_remote_source_not_wired_when_faster_whisper_not_installed(
     configured drop dir alone is not enough when no ``Transcriber`` is constructible."""
     consent_calls = _assert_never_triggers_consent(monkeypatch)
     _simulate_absent(monkeypatch, "faster_whisper")
-    config = _make_config(device_remote_drop_dir=str(tmp_path))
+    config = _make_config(device_remote_drop_dir=str(tmp_path), remote_voice=True)
 
     with caplog.at_level(logging.WARNING):
         registry = build_source_registry(

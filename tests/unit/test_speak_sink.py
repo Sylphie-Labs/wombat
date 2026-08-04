@@ -30,6 +30,7 @@ from wombat.stages.artifacts import (
     spoken_output_from_artifact_data,
     spoken_output_to_artifact_data,
 )
+from wombat.voice.turn_origin import LastTurnOriginRegister
 
 _FIXED_NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=UTC)
 
@@ -482,6 +483,65 @@ async def test_on_spoken_none_default_is_a_silent_no_op() -> None:
 
 
 # --- wire round-trip: json.dumps + inverse must be lossless (Q-49 regression) -------------------
+
+
+# --- TK-343 critical repair: a proactive (non voice-turn) item must never claim the shared
+# turn_origin_register, even though it speaks through this SAME SpeakSink -----------------------
+
+
+class _RegisterClaimingAdapter:
+    """Stands in for the real cloud primary's writer_factory closure: every ``speak()`` call
+    itself calls ``register.take()``, exactly like ``voice.select``'s closure does deep inside
+    the real adapter chain -- proving SpeakSink's suppression window actually reaches it."""
+
+    def __init__(self, register: LastTurnOriginRegister) -> None:
+        self._register = register
+        self.claimed: list[object] = []
+
+    def speak(self, text: str) -> None:
+        self.claimed.append(self._register.take())
+
+
+def _fake_clock() -> float:
+    return 1000.0
+
+
+async def test_proactive_item_speak_never_claims_the_turn_origin_register() -> None:
+    register = LastTurnOriginRegister(clock=_fake_clock)
+    register.note_origin("watch-1", "utt-1")
+    adapter = _RegisterClaimingAdapter(register)
+    stage = SpeakSink(voice_enabled=True, adapter=adapter, turn_origin_register=register)
+    ctx = _ctx(compose_output=_composed_output_artifact(voice_turn=False))
+
+    await stage.run(ctx)
+
+    assert adapter.claimed == [None]  # suppressed -- never saw the fresh origin
+    # the origin is still there for the turn's own reply, spoken right after.
+    assert register.take() is not None
+
+
+async def test_voice_turn_item_speak_still_claims_the_turn_origin_register() -> None:
+    register = LastTurnOriginRegister(clock=_fake_clock)
+    register.note_origin("watch-1", "utt-1")
+    adapter = _RegisterClaimingAdapter(register)
+    stage = SpeakSink(voice_enabled=True, adapter=adapter, turn_origin_register=register)
+    ctx = _ctx(compose_output=_composed_output_artifact(voice_turn=True))
+
+    await stage.run(ctx)
+
+    assert len(adapter.claimed) == 1
+    assert adapter.claimed[0] is not None
+
+
+async def test_no_register_wired_is_unaffected_byte_identical() -> None:
+    adapter = _RecordingAdapter()
+    stage = SpeakSink(voice_enabled=True, adapter=adapter)  # turn_origin_register defaults None
+    ctx = _ctx(compose_output=_composed_output_artifact())
+
+    result = await stage.run(ctx)
+
+    assert adapter.calls == [_TEXT]
+    assert isinstance(result, Done)
 
 
 def test_spoken_output_artifact_data_is_json_native_and_round_trips() -> None:

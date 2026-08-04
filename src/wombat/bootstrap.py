@@ -1287,6 +1287,10 @@ def assemble_runtime(
         voice_enabled=config.wombat_voice_enabled,
         adapter=tts_adapter,
         on_spoken=note_spoken,
+        # TK-343 critical repair: the SAME register threaded into build_tts_adapter_with_info
+        # above -- lets SpeakSink suppress a PROACTIVE item's claim on it (see sinks.speak's
+        # docstring); harmless when nothing was ever noted (e.g. remote voice never configured).
+        turn_origin_register=last_turn_origin_register,
     )
     speech_shape_stage = build_speech_shape_stage(
         config=config,

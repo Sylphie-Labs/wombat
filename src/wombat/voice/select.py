@@ -55,6 +55,19 @@ remote failure, ever": a remote-origin turn's total Fish failure must re-raise r
 rescue-speak into an empty room while logging success. Either arg omitted (``None``, the default)
 preserves EVERY existing call site byte-identically — the bare class, no flag, today's exact
 fallback-on-any-failure posture.
+
+TK-343 major repair: the ``PartialSpeechError`` ``played_any=True`` arm in ``FallbackTTSAdapter.
+speak`` below now ALSO consumes ``_RemoteRouteAttempted`` before its unconditional re-raise (it
+previously only checked/consumed the flag in the ``played_any=False`` and bare-``Exception`` arms)
+— left unconsumed, a mark from a watch turn whose Fish stream died mid-stream leaked into the
+NEXT ``speak()`` call, wrongly forcing that unrelated (often local) turn's own Fish failure to
+re-raise instead of falling back to local TTS.
+
+TK-343 critical repair: proactive (non voice-turn) surfacings must never claim the shared
+``turn_origin_register`` even though they speak through the SAME drain-graph ``SpeakSink``/adapter/
+closure a voice turn's own reply does — ``sinks.speak.SpeakSink`` now wraps its ``adapter.speak()``
+call in ``turn_origin_register.claims_suppressed()`` for exactly that case (see that module's
+docstring); this closure and ``LastTurnOriginRegister.take()`` are otherwise unchanged.
 """
 
 from __future__ import annotations
@@ -162,7 +175,12 @@ class FallbackTTSAdapter:
             # TK-332 AC5 (ruling v2.195): ordered ahead of the bare Exception arm below.
             if exc.played_any:
                 # Partial playback already reached the user -- re-raise unchanged, no fallback
-                # attempt.
+                # attempt. TK-343 major repair: still CONSUME any remote_attempt mark before
+                # re-raising -- this arm never checked it (a watch turn's own reply is exactly
+                # the case most likely to mark it), so leaving it set here leaked the mark into
+                # the NEXT speak() call and wrongly forced re-raise-no-fallback on an unrelated
+                # laptop turn's Fish failure.
+                self._remote_route_was_attempted()
                 raise
             if self._remote_route_was_attempted():
                 # TK-343 (DEC-79): a remote-origin turn's total Fish failure -- no chunk ever

@@ -74,6 +74,19 @@ namespace — a value-bound import here would freeze the pre-reload class, and t
 arm would silently stop matching post-reload instances (falling through to the broad ``except
 Exception`` instead). A module-attribute lookup always resolves the CURRENT class, regardless of
 reload order.
+
+TK-343 critical repair (AC5, wire-contract §5): an OPTIONAL keyword-only ``turn_origin_register``
+(``voice.turn_origin.LastTurnOriginRegister``, default ``None``) — this is the SAME shared
+register ``assemble_runtime`` also threads into ``voice.select``'s remote-aware ``writer_factory``
+closure. This ONE ``SpeakSink`` instance is the drain-graph's shared terminal for BOTH a voice
+turn's own reply AND every gate-surfaced PROACTIVE item, so a proactive item's ``adapter.speak()``
+call reaches the exact same closure a turn's reply does, with no item context of its own. Iff a
+register was given AND this item is NOT itself a voice-turn reply (``voice_turn`` is ``False``),
+the ``adapter.speak()`` call below runs inside ``turn_origin_register.claims_suppressed()`` — the
+closure's ``take()`` then returns ``None`` for THIS call without consuming a fresh origin, leaving
+it intact for the turn's own (later, ``voice_turn=True``) reply. A ``voice_turn=True`` item, or a
+``None`` register (every pre-repair call site, and the brief pathway's separate adapter, which
+never receives one), speaks exactly as before this repair — claims stay permitted.
 """
 
 from __future__ import annotations
@@ -81,6 +94,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.result import Degraded, Done, StageResult
@@ -96,6 +110,7 @@ from wombat.stages.artifacts import (
     spoken_output_to_artifact_data,
 )
 from wombat.voice import tts as voice_tts
+from wombat.voice.turn_origin import LastTurnOriginRegister
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +128,23 @@ class SpeakSink:
         voice_enabled: bool,
         adapter: TTSAdapter | None,
         on_spoken: Callable[[str, str], None] | None = None,
+        turn_origin_register: LastTurnOriginRegister | None = None,
     ) -> None:
         self._voice_enabled = voice_enabled
         self._adapter = adapter
         self._on_spoken = on_spoken
+        # TK-343 critical repair: None (the default) preserves every existing call site's
+        # behavior byte-identically -- see the module docstring for the full rationale.
+        self._turn_origin_register = turn_origin_register
+
+    def _claim_context(self, *, voice_turn: bool) -> AbstractContextManager[None]:
+        """TK-343 critical repair: the ONE context manager wrapping ``adapter.speak()`` below. A
+        PROACTIVE item (``voice_turn`` False) with a register wired suppresses claims for the
+        duration of the call, so it can never steal a fresh origin meant for the turn's own reply.
+        Any other case (``voice_turn`` True, or no register wired at all) is a pure no-op."""
+        if self._turn_origin_register is not None and not voice_turn:
+            return self._turn_origin_register.claims_suppressed()
+        return nullcontext()
 
     async def run(self, ctx: StageContext) -> StageResult:
         art = await ctx.last_output("compose")
@@ -173,7 +201,8 @@ class SpeakSink:
             )
 
         try:
-            self._adapter.speak(speech_text)
+            with self._claim_context(voice_turn=voice_turn):
+                self._adapter.speak(speech_text)
         except asyncio.CancelledError:
             # Never swallow cancellation — only the adapter's own failures degrade.
             raise

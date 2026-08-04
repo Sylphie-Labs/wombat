@@ -1146,6 +1146,30 @@ def test_build_tts_adapter_with_info_register_only_wires_the_bare_class(
 # ----------------------------------------------------------- FallbackTTSAdapter remote_attempt
 
 
+def test_fallback_tts_adapter_remote_attempt_marked_played_any_true_consumes_mark() -> None:
+    """TK-343 major repair: the played_any=True arm re-raises UNCHANGED (AC5), but must ALSO
+    consume the mark -- a watch turn whose Fish stream dies mid-stream leaves remote_attempt
+    marked; left uncleared here, the NEXT (unrelated, local) turn's own Fish failure would wrongly
+    re-raise instead of falling back to local TTS."""
+    tracker = select_module._RemoteRouteAttempted()
+    tracker.mark()
+    spy = _RecordingTTS()
+    adapter = FallbackTTSAdapter(
+        _PartialSpeechRaisingTTS(played_any=True), fallback=spy, remote_attempt=tracker
+    )
+
+    with pytest.raises(voice_tts.PartialSpeechError):
+        adapter.speak("first (watch turn, dies mid-stream, played_any=True)")
+
+    # the mark is gone -- proven by wiring a SECOND, unrelated, unmarked-by-this-call speak.
+    assert tracker.take() is False
+
+    adapter2 = FallbackTTSAdapter(_RaisingTTS(), fallback=spy, remote_attempt=tracker)
+    adapter2.speak("second (local turn, unrelated Fish failure)")
+
+    assert spy.spoken == ["second (local turn, unrelated Fish failure)"]
+
+
 def test_fallback_tts_adapter_remote_attempt_marked_reraises_on_played_any_false() -> None:
     """AC7: a remote-origin turn's total Fish failure (played_any=False) must NEVER rescue-speak
     on the laptop -- the marked flag suppresses the fallback attempt entirely."""

@@ -17,11 +17,22 @@ second turn from the laptop, TK-343 AC2) provably route differently from the SAM
 either caller ever comparing item identities (which the frozen ``voice.tts``/``sinks.speak`` call
 shapes have no room to carry). Once claimed — or once aged past ``ttl_seconds`` — the slot is empty
 until the next ``note_origin``.
+
+TK-343 critical repair: ``claims_suppressed()`` is a context manager ``sinks.speak.SpeakSink``
+uses to protect a claimed-but-unrelated origin from a PROACTIVE (gate-surfaced) item speaking
+through the SAME shared adapter/writer_factory chain as a genuine voice-turn reply. Without it, a
+proactive surfacing that happens to speak between a ``POST /v1/voice`` accept and that turn's own
+reply would call ``take()`` first and steal the fresh origin — sealing UNSOLICITED audio for the
+watch (wire-contract §5 / AC5 violation) while the real reply, finding the slot empty, plays
+locally. ``take()`` itself (and every existing caller/test of it) is UNCHANGED — the suppression
+default (``True``, i.e. claims permitted) preserves ``take()``'s exact prior behavior for any
+caller that never enters ``claims_suppressed()``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import NamedTuple
 
 # Pinned default (mirrors reply_context.LAST_SPOKEN_TTL_SECONDS): "near the DEC-64 reply window".
@@ -54,6 +65,23 @@ class LastTurnOriginRegister:
         self._device_id: str | None = None
         self._utterance_id: str | None = None
         self._noted_at: float | None = None
+        # TK-343 critical repair: True (claims permitted) is the byte-identical default every
+        # existing/direct take() caller sees -- only claims_suppressed() below ever flips it.
+        self._claim_permitted = True
+
+    @contextmanager
+    def claims_suppressed(self) -> Iterator[None]:
+        """TK-343 critical repair: within this ``with`` block, ``take()`` returns ``None``
+        WITHOUT touching whatever the slot currently holds — a call made here can never steal a
+        fresh origin meant for a later, eligible caller. Restores the PRIOR permitted-ness
+        afterward (not unconditionally ``True``) even if the wrapped code raises, so nesting is
+        harmless."""
+        previous = self._claim_permitted
+        self._claim_permitted = False
+        try:
+            yield
+        finally:
+            self._claim_permitted = previous
 
     def note_origin(self, device_id: str, utterance_id: str) -> None:
         """Record ``device_id``/``utterance_id`` as the newest claimable origin — newest wins,
@@ -67,7 +95,13 @@ class LastTurnOriginRegister:
         ``ttl_seconds``; ``None`` when nothing has been noted, the slot was already claimed, or it
         has aged out — and in every one of those cases the slot is left (or confirmed) empty, so a
         second call in a row always returns ``None`` regardless of which branch the first call
-        took."""
+        took.
+
+        TK-343 critical repair: inside a ``claims_suppressed()`` block, returns ``None``
+        immediately WITHOUT touching the slot at all — a suppressed call leaves a genuinely fresh
+        origin untouched for whichever LATER, non-suppressed call claims it."""
+        if not self._claim_permitted:
+            return None
         if self._device_id is None or self._utterance_id is None or self._noted_at is None:
             return None
         device_id, utterance_id, noted_at = self._device_id, self._utterance_id, self._noted_at
