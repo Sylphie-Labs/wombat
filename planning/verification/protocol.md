@@ -174,8 +174,12 @@ The core runtime refuses to boot without Postgres.
    `runtime-<yyyyMMdd-HHmmss>.log`, and the hosted console stays open (it is
    a long-lived process).
 3. Open that newest log and check:
-   - **PASS:** no line containing `source not wired`, and no
-     `invalid_grant` / `RefreshError`.
+   - **PASS:** no line containing `gmail source not wired` or `gcal source
+     not wired`, and no `invalid_grant` / `RefreshError`. (Other sources —
+     `feedback`, `asr`, `asr_remote`, `screenpipe`, `biometric_events` — log
+     their own `source not wired` loud-skip line whenever they're
+     intentionally left unconfigured; that is expected and healthy, not a
+     failure signal.)
    - **FAIL:** a line reading `gmail source not wired: stored credential
      failed to refresh` (or the `gcal` equivalent) means the Google token is
      revoked. Wombat keeps running but pulls zero email/calendar. Go do the
@@ -260,7 +264,10 @@ resumed.
 ### Confirm email sync actually resumed
 
 1. Open the newest `logs/runtime-*.log` from the post-reconnect boot.
-2. **PASS:** no `source not wired` lines; no `invalid_grant`.
+2. **PASS:** no `gmail source not wired` or `gcal source not wired` lines;
+   no `invalid_grant`. (Other sources logging their own `source not wired`
+   loud-skip line, if intentionally unconfigured, is expected and not a
+   failure.)
 3. Wombat polls Gmail on an interval over a rolling 24-hour inbox window, so
    anything that arrived in the last day gets picked up shortly after boot.
    Send a test email and watch for it to be processed (or check the
