@@ -23,8 +23,9 @@ intentionally short. The rich detail lives in `planning/contract.yaml`.
 
 ## Doing the work
 
-- Work one ticket at a time. Pull the **lean briefing** for it (the `briefing-builder`
-  skill) — don't load the whole contract into the build.
+- Work ready, independent tickets **in parallel via workflows** (see "How we
+  work" in CLAUDE.md). Each ticket still gets its own **lean briefing** (the
+  `briefing-builder` skill) — don't load the whole contract into a build.
 - A ticket is done only when every acceptance criterion passes a **runnable check**.
   "Looks done" is not done.
 - If a ticket isn't atomic/ready (`atomicity-gate` skill), split it (`story-splitter`)
