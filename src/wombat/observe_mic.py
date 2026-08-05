@@ -47,10 +47,84 @@ _POLL_INTERVAL_S = 10.0
 _CHANNEL = "mic"
 _KIND = "in_call"
 
+# TK-378 (DEC-88, ISS-55): capture-session owners that NEVER mean "on a call". Matched on the
+# executable basename, lowercased. These are always-on peripheral/vendor helpers that hold an
+# ACTIVE session on the capture endpoint for their own reasons (hardware monitoring, sidetone,
+# game audio) — before this list, one of them holding the microphone read as an in-call hold and
+# suppressed EVERY surfacing arm indefinitely, so wombat went silent while a service it has
+# nothing to do with happened to be running. Pinned (DEC-63 no-knob precedent), NOT operator-
+# tunable: an ignored owner is skipped exactly the way an Inactive session already is, and an
+# ACTIVE session owned by anything NOT listed here still reads as in-call — this narrows the
+# probe, it never weakens it. When a new offender turns up, the in-call log line below names the
+# owning process precisely so it can be added here without a debugger.
+_IGNORED_CAPTURE_OWNERS: frozenset[str] = frozenset(
+    {
+        "steelseriescvgamesense.exe",
+        "steelseriesengine.exe",
+        "steelseriesgg.exe",
+        "steelseriesggclient.exe",
+    }
+)
+
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+# TK-378 (ISS-56): the owner behind the CURRENT in-call reading, so the log line below fires once
+# per transition (and once more if the owner changes) rather than on every 10s poll. Diagnostic
+# state only — nothing reads it for a decision.
+_last_in_call_owner: str | None = None
+
+
+def _note_in_call_owner(owner: str | None) -> None:
+    """Log ONE line naming the process behind a new in-call reading (ISS-56 — before this, an
+    operator could see wombat go quiet with no way to tell WHICH process pinned the probe true,
+    which is exactly how ISS-55 stayed invisible). Fires on a transition into in-call and on an
+    owner change; silent while the same owner keeps holding the endpoint."""
+    global _last_in_call_owner
+    if owner == _last_in_call_owner:
+        return
+    if owner is not None:
+        logger.info(
+            "observe_mic: in-call reading TRUE — active capture session owned by %r "
+            "(add it to _IGNORED_CAPTURE_OWNERS if it is a background service, never a call)",
+            owner,
+        )
+    _last_in_call_owner = owner
+
+
+def _capture_owner_name(pid: int) -> str | None:
+    """The executable basename owning ``pid``, lowercased — or ``None`` if it can't be read.
+
+    Uses the SAME ctypes pair ``observe_screen.read_foreground_window`` already relies on
+    (``OpenProcess`` + ``QueryFullProcessImageNameW``, the ``sources.presence.read_idle_ms``
+    precedent) — ZERO new dependencies. Never raises: an unreadable owner returns ``None``, and
+    the caller then treats the session as NOT ignorable, which is the safe direction (an
+    unidentifiable Active session still counts as in-call).
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            name_buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            ok = kernel32.QueryFullProcessImageNameW(handle, 0, name_buf, ctypes.byref(size))
+            if not ok or not name_buf.value:
+                return None
+            return name_buf.value.rsplit("\\", 1)[-1].lower()
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError, ValueError):  # pragma: no cover - syscall/platform degrade
+        return None
+
 
 def probe_in_call() -> bool:
     """IMPURE: query the default capture endpoint's audio-session manager for an ACTIVE session
-    owned by a process other than this one.
+    owned by a process other than this one, EXCLUDING the ``_IGNORED_CAPTURE_OWNERS`` always-on
+    background helpers (TK-378, ISS-55).
 
     Returns ``False`` (NEVER raises) on any failure — pycaw missing/non-Windows, no capture
     device, or any COM error along the way — logging exactly ONE WARNING per failure.
@@ -81,8 +155,18 @@ def probe_in_call() -> bool:
                 continue
             if int(ctl2.GetState()) != AudioSessionState.Active.value:
                 continue
-            if ctl2.GetProcessId() != own_pid:
-                return True
+            pid = ctl2.GetProcessId()
+            if pid == own_pid:
+                continue
+            # TK-378 (ISS-55): an always-on background helper holding the capture endpoint is not
+            # a call. An owner we cannot identify is deliberately NOT ignored — an unreadable
+            # Active session still counts, which is the conservative direction.
+            owner = _capture_owner_name(pid)
+            if owner is not None and owner in _IGNORED_CAPTURE_OWNERS:
+                continue
+            _note_in_call_owner(owner or "<unreadable>")
+            return True
+        _note_in_call_owner(None)
         return False
     except Exception:  # pragma: no cover - COM/platform degrade
         logger.warning(

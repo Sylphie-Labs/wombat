@@ -1112,10 +1112,18 @@ def assemble_runtime(
         otherwise ``gate_stage.evaluate`` is ``_quiet_hours_gate_evaluate`` itself (AC6:
         byte-identical to the pre-arc wiring)."""
         now_in_call = current_activity is not None and current_activity.in_call
+        # TK-378 (ISS-56): say what this actually does. Forcing presence=None below makes
+        # gate_stage compute surfacing_permitted=False, which Gate.pipeline documents as
+        # suppressing BOTH arms — the accumulated-load flush is held too, not just the
+        # immediate-voice one. The old wording named the narrower thing, on precisely the path
+        # that explains a quiet product (ISS-55 stayed invisible partly because of it).
         if now_in_call and not _mic_in_call_state["active"]:
-            logger.info("gate: in-call detected — holding the immediate-voice arm")
+            logger.info(
+                "gate: in-call detected — holding ALL surfacing (immediate and flush) while a "
+                "capture session is active; see the observe_mic log line for the owning process"
+            )
         elif not now_in_call and _mic_in_call_state["active"]:
-            logger.info("gate: call ended — immediate-voice arm resumed")
+            logger.info("gate: call ended — all surfacing arms resumed")
         _mic_in_call_state["active"] = now_in_call
         if now_in_call:
             return await _quiet_hours_gate_evaluate(items, None)
@@ -1346,6 +1354,7 @@ def assemble_runtime(
     # alongside scratchpad_store further down) so TK-290's asr_context_hook closure below has it
     # in scope.
     external_item_store = ExternalItemStore(dsn)
+
     # TK-289 (DEC-64 gap A, half 2): the ASR context_hook seam — reads the SAME shared
     # last_spoken_register above (unconditional; not gated on chat, unlike asr_turn_hook). Fresh
     # (within-TTL) spoken text stamps {"replying_to": text}; stale/None yields no key (key ABSENT,
@@ -1391,9 +1400,7 @@ def assemble_runtime(
         extra.update(build_voice_context(external_item_store, tz=tz, clock=_utc_now))
         extra.update(build_user_facts_context(user_facts_store))
         extra.update(
-            build_current_activity_screen_hint(
-                current_activity, screenpipe_client, clock=_utc_now
-            )
+            build_current_activity_screen_hint(current_activity, screenpipe_client, clock=_utc_now)
         )
         body_state = project_current_body_state(biometric_observation_store, clock=_utc_now)
         if body_state is not None:
@@ -1550,9 +1557,7 @@ def assemble_runtime(
     biometric_ingest_handler: BiometricIngestHandler | None = None
     if config.wombat_observe_biometrics:
         biometric_observation_store = ObservationStore(dsn)
-        biometric_ingest_handler = BiometricIngestHandler(
-            store=biometric_observation_store, tz=tz
-        )
+        biometric_ingest_handler = BiometricIngestHandler(store=biometric_observation_store, tz=tz)
 
     # TK-343 (R1): the OPTIONAL GET /v1/utterance route handler — constructed iff sealed_
     # utterance_store was built above (itself gated on config.wombat_remote_voice), the SAME
@@ -1665,9 +1670,7 @@ def assemble_runtime(
     # asr_context_hook above reads this SAME instance via build_current_activity_screen_hint,
     # constructing nothing of its own (RULING R-A).
     screenpipe_client: ScreenpipeClient | None = (
-        ScreenpipeClient(config.wombat_screenpipe_url)
-        if config.wombat_observe_screenpipe
-        else None
+        ScreenpipeClient(config.wombat_screenpipe_url) if config.wombat_observe_screenpipe else None
     )
     # TK-324 (EP-37, DEC-70h): DreamScreenpipeStage over the SAME budget-guarded
     # dream_substrate.model every other dream-consolidation call site uses (never a second
@@ -1691,9 +1694,7 @@ def assemble_runtime(
         user_facts=user_facts_store,
     )
 
-    def _record_persona_feedback(
-        token: FeedbackToken, event_key: str, timestamp: datetime
-    ) -> None:
+    def _record_persona_feedback(token: FeedbackToken, event_key: str, timestamp: datetime) -> None:
         """TK-213 (Q-112(a)): the bootstrap-owned SECOND sanctioned writer into
         ``wombat_behavior_events`` — writes through the SAME ``behavior_event_log`` instance
         above, never a second connection. See the module docstring for the full row-encoding
@@ -1706,6 +1707,7 @@ def assemble_runtime(
             outcome_label=token.phrase,
             duration_seconds=None,
         )
+
     # TK-112 (Q-99e): WriteWindowSummariesStage over the SAME shared behavior_event_log/
     # observation_writer instances built above (never a second instance of either) and the SAME
     # configured tz. UNCONDITIONAL (mirrors dream_behavior_log_stage's own posture) — no external

@@ -531,6 +531,128 @@ def test_probe_in_call_com_raise_degrades_to_false_with_one_warning(
     assert len(caplog.records) == 1
 
 
+@dataclass
+class _FakeSessionControl:
+    """One fake WASAPI capture session: the two members ``probe_in_call`` reads."""
+
+    state: int
+    pid: int
+
+    def QueryInterface(self, _interface: Any) -> _FakeSessionControl:
+        return self
+
+    def GetState(self) -> int:
+        return self.state
+
+    def GetProcessId(self) -> int:
+        return self.pid
+
+
+def _install_fake_capture_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+    sessions: list[_FakeSessionControl],
+    owners: dict[int, str | None],
+) -> None:
+    """Point ``probe_in_call`` at a fake capture endpoint exposing ``sessions``, and resolve
+    each pid to ``owners`` — no real COM, no real process lookup, no device of any kind."""
+    import pycaw.utils
+
+    class _FakeEnumerator:
+        def GetCount(self) -> int:
+            return len(sessions)
+
+        def GetSession(self, index: int) -> _FakeSessionControl:
+            return sessions[index]
+
+    class _FakeManager:
+        def GetSessionEnumerator(self) -> _FakeEnumerator:
+            return _FakeEnumerator()
+
+    class _FakeDevice:
+        AudioSessionManager = _FakeManager()
+
+    monkeypatch.setattr(pycaw.utils.AudioUtilities, "GetMicrophone", staticmethod(lambda: object()))
+    monkeypatch.setattr(
+        pycaw.utils.AudioUtilities, "CreateDevice", staticmethod(lambda _device: _FakeDevice())
+    )
+    monkeypatch.setattr(observe_mic, "_capture_owner_name", lambda pid: owners.get(pid))
+    # The diagnostic latch is module state — reset it so each test sees a clean transition.
+    monkeypatch.setattr(observe_mic, "_last_in_call_owner", None)
+
+
+def test_probe_in_call_ignores_an_always_on_background_capture_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-378 AC1 (ISS-55): an ACTIVE capture session owned by a listed always-on background
+    helper is NOT a call — the exact live repro, where a peripheral vendor's service held the
+    only active session and pinned the probe true indefinitely."""
+    from pycaw.constants import AudioSessionState
+
+    ignored = next(iter(observe_mic._IGNORED_CAPTURE_OWNERS))
+    _install_fake_capture_sessions(
+        monkeypatch,
+        [_FakeSessionControl(state=AudioSessionState.Active.value, pid=4242)],
+        {4242: ignored},
+    )
+
+    assert observe_mic.probe_in_call() is False
+
+
+def test_probe_in_call_still_true_for_a_non_ignored_active_owner(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TK-378 AC1/AC2: the ignore is BY OWNER — an otherwise-identical session owned by anything
+    not on the list still reads as in-call, and the owning process is named exactly once so the
+    next false positive is diagnosable from the log alone (ISS-56)."""
+    from pycaw.constants import AudioSessionState
+
+    _install_fake_capture_sessions(
+        monkeypatch,
+        [_FakeSessionControl(state=AudioSessionState.Active.value, pid=99)],
+        {99: "somecallapp.exe"},
+    )
+
+    with caplog.at_level(logging.INFO, logger="wombat.observe_mic"):
+        assert observe_mic.probe_in_call() is True
+        # A second poll with the SAME owner stays silent — one line per transition, not per beat.
+        assert observe_mic.probe_in_call() is True
+
+    owner_lines = [r for r in caplog.records if "somecallapp.exe" in r.getMessage()]
+    assert len(owner_lines) == 1
+
+
+def test_probe_in_call_does_not_ignore_an_unreadable_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-378 AC1: an owner that can't be identified is deliberately NOT ignored — an
+    unidentifiable ACTIVE session still counts as in-call, the conservative direction."""
+    from pycaw.constants import AudioSessionState
+
+    _install_fake_capture_sessions(
+        monkeypatch,
+        [_FakeSessionControl(state=AudioSessionState.Active.value, pid=7)],
+        {7: None},
+    )
+
+    assert observe_mic.probe_in_call() is True
+
+
+def test_probe_in_call_ignores_inactive_sessions_regardless_of_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TK-378: the pre-existing Inactive skip is untouched — a non-ignored owner whose session is
+    merely Inactive still reads as not-in-call."""
+    from pycaw.constants import AudioSessionState
+
+    _install_fake_capture_sessions(
+        monkeypatch,
+        [_FakeSessionControl(state=AudioSessionState.Inactive.value, pid=99)],
+        {99: "somecallapp.exe"},
+    )
+
+    assert observe_mic.probe_in_call() is False
+
+
 def test_observe_mic_source_has_no_capture_stream_api_token() -> None:
     """DEC-68a structural: no audio device is ever opened for capture. The probe reads only
     session state via the audio-session manager — never a capture-stream library or the
