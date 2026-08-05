@@ -45,6 +45,19 @@ These rules govern how work is actually executed in this repo. They complement
 the planning-worx rules above: the contract still defines *what* to build and
 *when it's done*; this section defines *how it gets built*.
 
+## DON'T INVENT PATTERNS (front and foremost — Jim, 2026-08-05)
+
+- Product requirements come from Jim. If a design premise cannot be traced to
+  Jim's actual words or vision.md, it does not exist — flag it as an open
+  question, never assume it into the plan.
+- When a decision record quotes Jim, it must be verbatim from a real message.
+  Never paraphrase an inference into a quote.
+- The incident this guards against: the contract recorded the Apple Watch as a
+  direct LAN client of wombat, attributed to a Jim directive he never gave —
+  he had in fact said the opposite (watch relays through the phone). A
+  hallucinated requirement is worse than a missing one: it compounds into
+  epics, tickets, and wire contracts before anyone questions it.
+
 ## Orchestrator, not implementer
 
 - The main session (Fable) **orchestrates and decides**. It does not implement
