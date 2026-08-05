@@ -23,7 +23,7 @@ from cogworx.capability.router import dispatch_one
 from cogworx.claims.provenance import Artifact, Provenance
 from cogworx.loop.graph import StageGraph
 from cogworx.loop.pathway import PathwayRegistry
-from cogworx.loop.result import AwaitHuman, StageResult, Transition
+from cogworx.loop.result import AwaitHuman, Degraded, StageResult, Transition
 from cogworx.loop.stage import StageContext
 from cogworx.loop.state import RunStatus
 from cogworx.model.base import ModelResponse
@@ -37,6 +37,7 @@ from wombat.gate.models import ItemKind
 from wombat.integrations.gmail.draft_composer import (
     DRAFT_CREATE_CAPABILITY,
     DRAFT_PROPOSAL,
+    DRAFT_PROPOSAL_ERROR,
     DraftComposer,
     make_drafts_create_capability,
 )
@@ -215,9 +216,7 @@ def _build_engine(graph: StageGraph, registry: Registry) -> tuple[Engine, InMemo
     models = ModelRegistry()
     models.register(
         "default",
-        ReplayModel(
-            [ModelResponse(text="phrased reply", model_id="replay", finish_reason="stop")]
-        ),
+        ReplayModel([ModelResponse(text="phrased reply", model_id="replay", finish_reason="stop")]),
     )
     engine = Engine(
         models=models,
@@ -377,9 +376,7 @@ async def test_ac2_pretainted_drive_refuses_drafts_create_and_records_one_refusa
     assert gate.taint.tainted is True
 
     reply_intent = _reply_intent()
-    model = FakeModel(
-        response=ModelResponse(text="reply body", model_id="m", finish_reason="stop")
-    )
+    model = FakeModel(response=ModelResponse(text="reply body", model_id="m", finish_reason="stop"))
     ctx = _FakeDraftContext(gate, registry, reply_intent, model)
     stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
 
@@ -479,6 +476,164 @@ async def test_ac4_cancelled_error_is_re_raised_not_swallowed() -> None:
 
     assert events == []  # never reached record_proposal or drafts.create
     assert calls == []
+
+
+# --------------------------------------------------- TK-379 (ISS-58): provider failure degrades
+#
+# The ISS-58 repro, as observed live under TK-366: gmail.drafts.create returned 403 and the
+# exception propagated out of DraftComposer.run -> ctx.dispatch -> dispatch_one -> engine._drive
+# -> runtime._run_drain_pump -> serve(), killing the whole process. Every test below fails
+# against the pre-TK-379 module (each would raise requests.HTTPError instead of returning).
+
+
+def _register_failing_draft_capability(
+    registry: Registry, events: list[str], exc: Exception
+) -> list[tuple[str, str, str]]:
+    """A fake ``gmail.drafts.create`` that RAISES — the provider-side failure ISS-58 is about.
+    Default ``exc`` at the call sites is the exact 403 shape TK-366 saw live (ISS-57)."""
+    calls: list[tuple[str, str, str]] = []
+
+    async def _drafts_create(to: str, subject: str, body: str) -> str:
+        events.append("drafts_create")
+        calls.append((to, subject, body))
+        raise exc
+
+    registry.register(
+        function_capability(_drafts_create, name=DRAFT_CREATE_CAPABILITY, tier="external")
+    )
+    return calls
+
+
+def _forbidden() -> requests.HTTPError:
+    return requests.HTTPError(
+        "403 Client Error: Forbidden for url: https://gmail.googleapis.com/gmail/v1/users/me/drafts"
+    )
+
+
+async def test_tk379_provider_403_degrades_instead_of_escaping_the_stage() -> None:
+    """AC1: the ISS-58 failure re-created — run() RETURNS rather than raising, so the drain pump
+    that awaits it keeps running instead of the process terminating."""
+    registry = Registry()
+    events: list[str] = []
+    calls = _register_failing_draft_capability(registry, events, _forbidden())
+    writer = _RecordingWriter(events)
+    gate = ToolGate(registry, policy=EXTERNAL_DISPATCH_POLICY)
+    reply_intent = _reply_intent()
+    model = FakeModel(response=ModelResponse(text="reply body", model_id="m", finish_reason="stop"))
+    ctx = _FakeDraftContext(gate, registry, reply_intent, model)
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
+
+    result = await stage.run(ctx)  # type: ignore[arg-type]  # NO pytest.raises — that is the point
+
+    assert isinstance(result, Degraded)
+    assert "403" in result.reason
+    assert len(calls) == 1  # the call was genuinely attempted, not skipped
+
+
+async def test_tk379_provider_failure_records_one_refusal_against_the_pending_proposal() -> None:
+    """AC2: the proposal row written BEFORE the dispatch is closed out as refused, never left
+    silently pending, and exactly once."""
+    registry = Registry()
+    events: list[str] = []
+    _register_failing_draft_capability(registry, events, _forbidden())
+    writer = _RecordingWriter(events)
+    gate = ToolGate(registry, policy=EXTERNAL_DISPATCH_POLICY)
+    ctx = _FakeDraftContext(
+        gate,
+        registry,
+        _reply_intent(),
+        FakeModel(response=ModelResponse(text="reply body", model_id="m", finish_reason="stop")),
+    )
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
+
+    await stage.run(ctx)  # type: ignore[arg-type]
+
+    assert len(writer.proposals) == 1
+    assert len(writer.refusals) == 1
+    assert writer.refusals[0]["action_id"] == writer.proposals[0]["action_id"]
+    assert writer.refusals[0]["target"] == DRAFT_CREATE_CAPABILITY
+    # ORDERING: proposal journalled, call attempted, THEN refused — the taint-order property of
+    # TK-78 is untouched by this repair.
+    assert events == ["record_proposal", "drafts_create", "record_refusal"]
+
+
+async def test_tk379_degraded_carries_the_error_kind_and_never_parks_for_approval() -> None:
+    """AC4: to=None terminates the drive; the artifact kind is DISTINCT from DRAFT_PROPOSAL so a
+    failed attempt can never be read as a draft awaiting Jim's approval."""
+    registry = Registry()
+    events: list[str] = []
+    _register_failing_draft_capability(registry, events, _forbidden())
+    writer = _RecordingWriter(events)
+    gate = ToolGate(registry, policy=EXTERNAL_DISPATCH_POLICY)
+    ctx = _FakeDraftContext(
+        gate,
+        registry,
+        _reply_intent(),
+        FakeModel(response=ModelResponse(text="reply body", model_id="m", finish_reason="stop")),
+    )
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
+
+    result = await stage.run(ctx)  # type: ignore[arg-type]
+
+    assert isinstance(result, Degraded)
+    assert result.to is None  # terminates; never advances to draft_dispatch
+    assert result.output.kind == DRAFT_PROPOSAL_ERROR
+    assert result.output.kind != DRAFT_PROPOSAL
+    assert result.output.data["recipient"] == "jane@example.com"
+    assert "403" in str(result.output.data["error"])
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        requests.ConnectionError("connection reset"),
+        requests.HTTPError("500 Server Error"),
+        requests.HTTPError("429 Too Many Requests"),
+        RuntimeError("anything else at all"),
+    ],
+)
+async def test_tk379_any_provider_side_failure_degrades_not_only_the_403(exc: Exception) -> None:
+    """ISS-58's severity claim: the blast radius was never limited to ISS-57's 403 — a blip, a
+    5xx, a rate limit or a revoked token took the runtime down just the same."""
+    registry = Registry()
+    events: list[str] = []
+    _register_failing_draft_capability(registry, events, exc)
+    writer = _RecordingWriter(events)
+    gate = ToolGate(registry, policy=EXTERNAL_DISPATCH_POLICY)
+    ctx = _FakeDraftContext(
+        gate,
+        registry,
+        _reply_intent(),
+        FakeModel(response=ModelResponse(text="reply body", model_id="m", finish_reason="stop")),
+    )
+    stage = DraftComposer(writer=writer, clock=lambda: _FIXED_NOW)
+
+    result = await stage.run(ctx)  # type: ignore[arg-type]
+
+    assert isinstance(result, Degraded)
+    assert len(writer.refusals) == 1
+
+
+async def test_tk379_engine_level_drive_ends_degraded_instead_of_propagating_out() -> None:
+    """AC1's real bar, at the level the crash actually happened: a REAL cog-worx Engine drives the
+    failing dispatch and RETURNS a terminal state. Pre-fix, engine.run raised and that exception is
+    precisely what reached serve() and killed the process."""
+    registry = Registry()
+    events: list[str] = []
+    calls = _register_failing_draft_capability(registry, events, _forbidden())
+    send_calls = _register_send_spy(registry)
+    writer = _RecordingWriter(events)
+    engine, _journal = _build_engine(_stub_graph(writer, _reply_intent()), registry)
+
+    finished = await engine.run(
+        run_id="tk379", session_id="tk379", pathway_id=_PATHWAY_ID, initial=_trigger()
+    )
+
+    assert finished.status is RunStatus.DEGRADED
+    assert finished.status is not RunStatus.AWAITING_HUMAN  # nothing parked for approval
+    assert len(calls) == 1
+    assert send_calls == []  # still never a send, on the failure path too
+    # The raising draft_dispatch stub never executed — to=None terminated the drive.
 
 
 # ---------------------------------------------------------------- make_drafts_create_capability

@@ -39,6 +39,16 @@ TK-177's operator smoke; every test in this module dispatches a fake capability 
 ``gmail.messages.send`` is NEVER registered anywhere in this codebase — a structural never-send
 guarantee (CON-5/DEC-19/NG-5): there is no send capability for any drive to ever reach for.
 
+FAILURE POSTURE (TK-379, ISS-58): the ``drafts.create`` dispatch distinguishes TWO failure kinds.
+A ``TierViolation`` is a POLICY breach — one refusal row, then re-raise, byte-unchanged from TK-78.
+Any OTHER exception is a PROVIDER failure (403, 5xx, rate limit, revoked token, connection error):
+it records the refusal against the proposal row already written above, logs loudly exactly once,
+and returns ``Degraded`` with ``to=None`` — terminating the drive rather than advancing to
+``draft_dispatch`` (no draft exists to dispatch) and never parking an ``AwaitHuman`` for a draft
+that was never created. Before this, such a failure escaped the stage and killed the whole runtime
+process, chat and drain pump included (CON-3: a failing external dependency must not stop the
+product). This does NOT make the draft path work — see ISS-57.
+
 TK-209 (EP-33): an OPTIONAL ``live_persona`` (``wombat.persona.live.LivePersona``) — ``None``
 (the default) keeps the frozen-at-``__init__`` instruction below, byte-identical to every existing
 caller/test; when wired, ``run()`` reads ``live_persona.instruction(Mouth.DRAFT)`` fresh EVERY
@@ -60,7 +70,7 @@ from cogworx.capability.base import Capability
 from cogworx.capability.policy import StageToolPolicy, TierViolation
 from cogworx.capability.registry import function_capability
 from cogworx.claims.provenance import Artifact, Provenance
-from cogworx.loop.result import AwaitHuman, StageResult
+from cogworx.loop.result import AwaitHuman, Degraded, StageResult
 from cogworx.loop.stage import StageContext
 from cogworx.model.base import ChatMessage
 
@@ -78,11 +88,17 @@ logger = logging.getLogger(__name__)
 # Artifact so TK-79's real draft_dispatch stage can pull them back via ctx.last_output(self.name).
 DRAFT_PROPOSAL = "wombat.draft_proposal"
 
+# TK-379 (ISS-58): the kind carried on the Degraded returned when the drafts.create dispatch fails
+# provider-side. Mirrors browse_and_read.py's WEB_PAGE_READ_ERROR — a DISTINCT kind, never
+# DRAFT_PROPOSAL, so no reader can mistake a failed attempt for a draft awaiting approval.
+DRAFT_PROPOSAL_ERROR = "wombat.draft_proposal_error"
+
 # The ONE capability this stage ever dispatches (Q-91/Q-92) — never gmail.messages.send.
 DRAFT_CREATE_CAPABILITY = "gmail.drafts.create"
 
 # AC-fixed (mirrors compose.py's Q-50 fixed default) — not a TK-13 tunable.
 _DEFAULT_TIMEOUT_SECONDS = 2.0
+
 
 # A fixed, terse steward instruction (mirrors compose.py's _system_instruction) — no prompt
 # iteration (v1, no ticket asked for one). The prompt is built ONLY from ReplyIntent fields
@@ -94,6 +110,7 @@ def _system_instruction(name: str = "Steward") -> str:
         f"You are {name}, a quiet steward drafting a reply on the user's behalf. Phrase one "
         "terse, calm reply body responding to the quoted excerpt. No preamble, no signature."
     )
+
 
 _DRAFTS_CREATE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
 # A conservative fixed request timeout (mirrors poller.py's _REQUEST_TIMEOUT_S) — not a TK-13
@@ -280,6 +297,9 @@ class DraftComposer:
                 {"to": recipient, "subject": subject, "body": body},
             )
         except TierViolation:
+            # A POLICY breach, not a provider failure — byte-unchanged (TK-78/AC2). This one stays
+            # loud: the drive reached for an external call it was not entitled to make, and that is
+            # a defect in the wiring, never a degradable condition.
             self._writer.record_refusal(
                 action_id=action_id,
                 human_summary=human_summary,
@@ -287,6 +307,47 @@ class DraftComposer:
                 proposed_at=now,
             )
             raise
+        except Exception as exc:
+            # TK-379 (ISS-58): a PROVIDER failure on this one call used to escape the stage and
+            # terminate the WHOLE runtime — out through ctx.dispatch, dispatch_one, engine._drive
+            # and _run_drain_pump into serve() — taking chat, the LAN listener, the settings API
+            # and the drain pump with it, because they all share the process. The mouth call
+            # directly above has always degraded on failure (S8); this dispatch now does too, the
+            # same shape browse_and_read.py already uses on its own single dispatch. CON-3: a
+            # failing external dependency must never be able to stop the product.
+            #
+            # asyncio.CancelledError is NOT caught here — it derives from BaseException, so
+            # cancellation still propagates exactly as it does through the mouth guard above.
+            self._writer.record_refusal(
+                action_id=action_id,
+                human_summary=human_summary,
+                target=DRAFT_CREATE_CAPABILITY,
+                proposed_at=now,
+            )
+            logger.error(
+                "draft_composer: %s failed — NO draft was created; the proposal row is refused "
+                "rather than parked for approval, and the drive terminates here",
+                DRAFT_CREATE_CAPABILITY,
+                exc_info=True,
+            )
+            # to=None (omitted) TERMINATES the drive DEGRADED rather than advancing to
+            # draft_dispatch — there is no draft for that stage to act on, and parking AwaitHuman
+            # would present Jim an approval for something that was never drafted.
+            return Degraded(
+                reason=str(exc),
+                output=Artifact(
+                    kind=DRAFT_PROPOSAL_ERROR,
+                    produced_by=self.name,
+                    provenance=Provenance(source="system", confidence=1.0, recorded_at=now),
+                    data={
+                        "action_id": action_id,
+                        "recipient": recipient,
+                        "message_id": reply_intent.message_id,
+                        "subject": subject,
+                        "error": str(exc),
+                    },
+                ),
+            )
 
         return AwaitHuman(
             question=human_summary,
@@ -310,6 +371,7 @@ class DraftComposer:
 __all__ = [
     "DRAFT_CREATE_CAPABILITY",
     "DRAFT_PROPOSAL",
+    "DRAFT_PROPOSAL_ERROR",
     "DraftComposer",
     "DraftTrailWriter",
     "make_drafts_create_capability",
