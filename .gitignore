@@ -50,3 +50,8 @@ app/out/
 # TK-201: Playwright-for-Electron smoke run artifacts (failure traces/report) - never committed.
 app/test-results/
 app/playwright-report/
+
+# Verification-sweep screenshot evidence: live captures of the operator's real
+# desktop/inbox and (in the TK-373 set) a rendered device-pairing token. Records
+# in planning/verification/*.md may NAME these artifacts; the pixels stay local.
+planning/verification/evidence/
