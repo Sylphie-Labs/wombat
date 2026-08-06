@@ -1,5 +1,32 @@
 # iOS + watchOS companion app — watch PTT, return audio, and biometrics
 
+> ## ⚠ SUPERSEDED IN PART BY **DEC-90** (contract v2.262, 2026-08-05) — READ THIS FIRST
+>
+> **This document's watch-transport analysis is WRONG and must not be built from.** Every claim
+> that the watch reaches wombat over its own Wi-Fi — §0 "conclusion 4: *the watch does not need
+> the phone*", the §0 platform-facts table, the §2 Path A diagram, the §4.3 decision tree, §4.4,
+> the §4.7 transport table and the §6 Phase 4 plan — is **struck**.
+>
+> **The ruling:** the iPhone is the **only** Apple device that pairs with wombat's DeviceSurface.
+> Watch mic and speaker I/O relays through the phone over **WatchConnectivity**. The watch holds
+> **no token** and makes **no network call** to wombat. wombat never knows a watch exists.
+>
+> **Why this document went wrong — the provenance error, named because it matters more than the
+> design.** Jim's verbatim **Q-m** answer at line 20 below (*"Phone is often elsewhere — watch
+> needs its own playback"*) is about **audio playback** — the watch needs its own **speaker**.
+> A research agent extrapolated it into a **transport** claim, and DEC-79/DEC-82/EP-43 then built
+> watch-direct networking on a requirement **Jim never gave**. DEC-79's title called it a "JIM
+> DIRECTIVE"; it was not. This is the incident behind the **DON'T INVENT PATTERNS** rule in
+> `CLAUDE.md`.
+>
+> **What survives:** everything phone-side and biometric — the HealthKit path (§3, Path C) was
+> always phone-mediated and is untouched. **§7's Q-k (is WatchConnectivity fast enough?), which
+> this document dismissed as "largely dissolved", is now the single most important open
+> performance question in FEAT-15** — it sits on the critical path in both directions.
+>
+> The body below is **kept unrewritten as the historical record of how the error was made.**
+> The live specs are `planning/design/wire-contract.md` and DEC-90 in `planning/contract.yaml`.
+
 **Status: RESEARCH + PLAN, REVISION 4 — FINAL. Ready for architect hand-off.**
 **Nothing is decided here. No code, no contract edit.**
 Author: research agent. Rev 1 2026-08-01 · Rev 2 (Q-a/b/d/f) · Rev 3 (Q-j) · **Rev 4 (Q-m) — final.**

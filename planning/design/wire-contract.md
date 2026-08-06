@@ -214,11 +214,21 @@ X-Wombat-Channels: 1
 **Single-fetch-then-discard** (TK-343): a successful `200` discards the slot; an immediate
 repeat gets `204`. An unfetched utterance expires at `utterance_ttl_seconds`.
 
-**`X-Wombat-Origin-Device-Id` is load-bearing.** DEC-79(c)'s routing tree permits a
-phone-originated turn to fall through to the watch buffer when no phone session is open. The
-fetching device therefore cannot assume the reply is its own. It MUST compare
-`X-Wombat-Origin-Device-Id` to its own `device_id` (from §4) and, when they differ, present
-the reply as a cross-device fallback rather than as an answer to something it said.
+**`X-Wombat-Origin-Device-Id` — RETAINED, with its case corrected by DEC-90.** This header was
+introduced to disambiguate DEC-79(c)'s cross-device fall-through, where a phone-originated turn
+falls through to the watch buffer when no phone session is open. **Under DEC-90 exactly one
+device holds a token and exactly one device ever fetches, so that mismatch is currently
+unreachable** — there is no second fetching device to confuse.
+
+The header **stays on the wire** and is not struck. Three reasons, ruled at DEC-90(f): it is
+already emitted by shipped, done Python (TK-343/TK-339) and removing it would be a wire change
+to working code for no gain; it remains the correlation handle pairing a fetched utterance to
+the turn that produced it; and the phone still needs it to **name a relayed reply correctly on
+the wrist** when it forwards bytes over WatchConnectivity.
+
+The fetching device SHOULD still compare `X-Wombat-Origin-Device-Id` to its own `device_id`
+(from §4) and present a mismatch as a cross-device reply rather than as an answer to something
+it said. That branch is defensive, not live.
 
 **The privacy property, stated as what is actually enforceable:** wombat has **no push path**
 to any device — every byte a device plays was pulled by that device. And wombat only ever
@@ -249,11 +259,17 @@ nothing else changes.
 
 ---
 
-## 7. iOS / watchOS App Transport Security — **required**
+## 7. iOS App Transport Security — **required (iOS target only)**
 
-wombat's DeviceSurface is **plaintext HTTP/1.1 with no TLS** (DEC-78(a)), and the drafts speak
-`http://` and `ws://` to a LAN address. **ATS blocks that by default.** Both the iOS target and
-the watchOS target MUST declare, in `Info.plist`:
+> **AMENDED BY DEC-90.** This section previously required the ATS exception on **both** the iOS
+> and watchOS targets. The watchOS half is now **MOOT**: the watch makes no network call to
+> wombat at all — it reaches wombat only by relaying through the phone over WatchConnectivity,
+> which needs no ATS exception and no `Info.plist` networking keys. Declaring it on the watch
+> target is not harmful, merely meaningless; the requirement is **iOS-target-only**.
+
+wombat's DeviceSurface is **plaintext HTTP/1.1 with no TLS** (DEC-78(a)), and the phone speaks
+`http://` and `ws://` to a LAN address. **ATS blocks that by default.** The iOS target MUST
+declare, in `Info.plist`:
 
 ```xml
 <key>NSAppTransportSecurity</key>
@@ -271,6 +287,8 @@ the watchOS target MUST declare, in `Info.plist`:
 - Declaring these is text and costs nothing (DEC-82(a) tier A). Whether the resulting build is
   actually permitted the cleartext connection is a **tier B** observation — the first Mac
   session confirms it, and `ios/README.md` says so.
+- **The watchOS target needs neither key.** WatchConnectivity is not a network transport in the
+  ATS sense, and after DEC-90 the watch has no URL to reach.
 
 ---
 
@@ -289,6 +307,13 @@ The QR encodes **exactly** this UTF-8 JSON, one line, no whitespace:
   on any request.
 - A QR whose `v` is not `1` is rejected with a plain "this pairing code is from a different
   version of wombat" — not a crash, not a silent partial parse.
+
+> **AMENDED BY DEC-90 — the one-shot token handoff to the watch is DELETED, not deferred.**
+> Exactly **one** QR is ever scanned and exactly **one** device token ever exists: the phone's.
+> The watch is never a caller, so it is never a token holder — a credential it could never
+> present would be a live secret copied to a second Keychain, outside the DEC-75 wipe's reach,
+> with a second revocation path and a standing invitation to drift back into watch-direct.
+> `WCSession` carries **audio and state**, never a credential.
 
 ---
 

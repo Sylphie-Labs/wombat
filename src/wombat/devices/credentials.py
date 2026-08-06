@@ -2,7 +2,9 @@
 keyring tier), the seam TK-339's DeviceSurface (auth) and TK-342's pairing UX (mint/list/revoke)
 both read.
 
-A paired device (iPhone, Watch) gets its own high-entropy bearer token at pairing time. The
+A paired device (in practice the iPhone, the only Apple device that pairs with wombat -- a watch
+relays through the phone and never holds a token, DEC-90) gets its own high-entropy bearer token
+at pairing time. The
 runtime process (which must verify tokens on every inbound request) and the settings-app process
 (which must list/revoke devices) are separate processes with no shared in-process object, so the
 record has to live somewhere both can reach it — the OS credential vault, DEC-32's existing
